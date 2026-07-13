@@ -345,7 +345,7 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         dictationEnabled = defaults.object(forKey: "dictationEnabled") as? Bool ?? true
         dictationCleanup = defaults.object(forKey: "dictationCleanup") as? Bool ?? true
         dictationTargetLanguage = defaults.string(forKey: "dictationTargetLanguage") ?? "English"
-        dictationChunked = defaults.object(forKey: "dictationChunked") as? Bool ?? false
+        dictationChunked = defaults.object(forKey: "dictationChunked") as? Bool ?? true
         customPresets = defaults.dictionary(forKey: "customPresets") as? [String: String] ?? [:]
         activePresetName = defaults.string(forKey: "activePresetName") ?? Self.builtInPresets[0].name
         systemPrompt = defaults.string(forKey: "systemPrompt") ?? Self.builtInPresets[0].text

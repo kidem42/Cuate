@@ -109,15 +109,21 @@ func render(scale: Int, to path: String) {
 
     // Hint text
     "Drag AISpotlight to the Applications folder".draw(
-        in: NSRect(x: 0, y: 78, width: W, height: 22), withAttributes: [
+        in: NSRect(x: 0, y: 82, width: W, height: 22), withAttributes: [
         .font: NSFont.systemFont(ofSize: 15, weight: .medium),
         .foregroundColor: NSColor(calibratedWhite: 0.30, alpha: 1),
         .paragraphStyle: pc
     ])
-    "First launch: System Settings → Privacy & Security → Open Anyway".draw(
-        in: NSRect(x: 0, y: 56, width: W, height: 16), withAttributes: [
+    "Before first launch, remove quarantine in Terminal:".draw(
+        in: NSRect(x: 0, y: 58, width: W, height: 16), withAttributes: [
         .font: NSFont.systemFont(ofSize: 11, weight: .regular),
         .foregroundColor: NSColor(calibratedWhite: 0.52, alpha: 1),
+        .paragraphStyle: pc
+    ])
+    "xattr -dr com.apple.quarantine /Applications/AISpotlight.app".draw(
+        in: NSRect(x: 0, y: 42, width: W, height: 15), withAttributes: [
+        .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
+        .foregroundColor: NSColor(calibratedWhite: 0.42, alpha: 1),
         .paragraphStyle: pc
     ])
 
@@ -191,5 +197,5 @@ echo ""
 echo "✅ Done: $DMG_PATH"
 echo "   Size: $(du -h "$DMG_PATH" | cut -f1)"
 echo ""
-echo "First launch on another Mac (unsigned build): right-click the app →"
-echo "Open, then confirm; or System Settings → Privacy & Security → Open Anyway."
+echo "First launch on another Mac (unsigned build):"
+echo "  xattr -dr com.apple.quarantine /Applications/AISpotlight.app"
