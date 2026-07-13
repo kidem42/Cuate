@@ -32,6 +32,8 @@ All hotkeys are configurable in Settings → General.
 
 ## Installation
 
+Requires **macOS 14 (Sonoma) or newer**. On macOS 26+ the panel renders with Liquid Glass; on older systems it falls back to the standard translucent material.
+
 1. Download `AISpotlight-<version>.dmg` from [Releases](https://github.com/kidem42/AISpotlight/releases)
 2. Drag **AISpotlight** to the **Applications** folder
 3. The build is ad-hoc signed (not notarized), so before the first launch remove the quarantine flag:
@@ -52,7 +54,7 @@ On first run the onboarding walks you through the essentials:
 
 ## Building from source
 
-Requirements: Xcode 26+, macOS 26+.
+Requirements: Xcode 26+ (for the macOS 26 SDK); the app itself runs on macOS 14+.
 
 ```bash
 git clone https://github.com/kidem42/AISpotlight.git

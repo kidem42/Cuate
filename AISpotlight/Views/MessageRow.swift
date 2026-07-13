@@ -223,26 +223,29 @@ struct CopyableBubble: ViewModifier {
                 }
                 return .systemAction
             })
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.12)) {
-                    isHovering = hovering
-                }
-            }
+            // The button stays in the hierarchy and is hidden via opacity —
+            // inserting/removing it on hover rebuilt the tracking areas and
+            // made the icon flicker (and vanish when the cursor reached it).
             .overlay(alignment: .topTrailing) {
-                if isHovering || justCopied {
-                    Button(action: copy) {
-                        Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(justCopied ? .green : .secondary)
-                            .frame(width: 20, height: 20)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .help(L("tooltip.copy"))
-                    .padding(4)
-                    .transition(.opacity)
+                Button(action: copy) {
+                    Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(justCopied ? .green : .secondary)
+                        .frame(width: 20, height: 20)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
                 }
+                .buttonStyle(PlainButtonStyle())
+                .help(L("tooltip.copy"))
+                .padding(4)
+                .opacity(isHovering || justCopied ? 1 : 0)
+                .allowsHitTesting(isHovering || justCopied)
+                .animation(.easeInOut(duration: 0.12), value: isHovering || justCopied)
+            }
+            // After the overlay, so hovering the button itself counts as
+            // hovering the bubble and doesn't dismiss it.
+            .onHover { hovering in
+                isHovering = hovering
             }
             .contextMenu {
                 Button {

@@ -41,9 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AppSettings.shared.autoLoadModelsIfNeeded(for: AppSettings.shared.chatProvider)
 
         // Setup chat window
-        if #available(macOS 15.0, *) {
-            setupChatWindow()
-        }
+        setupChatWindow()
 
         // Setup hotkey manager
         setupHotkeys()
@@ -296,18 +294,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Settings
 
     @objc private func openSettings(_ sender: Any?) {
+        // Show a Dock icon + app-switcher entry while Settings is open, so the
+        // window can be raised again in one click (Dock or ⌘-Tab) even after
+        // switching to another app. Reverted to menu-bar-only on close.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
         if settingsWindow == nil {
             let hosting = NSHostingController(rootView: SettingsView())
             let window = NSWindow(contentViewController: hosting)
             window.title = "AISpotlight Settings"
-            window.styleMask = [.titled, .closable]
+            window.styleMask = [.titled, .closable, .miniaturizable]
             window.isReleasedWhenClosed = false
-            window.center()
+            window.delegate = self
+            // Remember size/position across opens and launches.
+            if !window.setFrameUsingName(Self.settingsFrameName) {
+                window.center()
+            }
+            window.setFrameAutosaveName(Self.settingsFrameName)
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private static let settingsFrameName = "AISpotlightSettingsWindow"
+
+    /// Clicking the Dock icon while Settings is open brings it back to front.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        // Once Settings is gone, drop back to a menu-bar-only agent (no Dock icon).
+        // Deferred so the window has actually closed before we re-check visibility.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let stillOpen = (self.settingsWindow?.isVisible ?? false)
+                || (self.onboardingWindow?.isVisible ?? false)
+            if !stillOpen {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
     }
 
     private func showAlert(title: String, message: String) {
@@ -345,7 +374,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private static let panelFrameName = "AISpotlightChatPanel"
 
-    @available(macOS 15.0, *)
     private func setupChatWindow() {
         let contentView = ChatWindow()
             .environmentObject(appState)
@@ -503,10 +531,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
 
         // Notify ChatWindow to focus the input field
-        if #available(macOS 15.0, *) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                NotificationCenter.default.post(name: .chatWindowDidBecomeVisible, object: nil)
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NotificationCenter.default.post(name: .chatWindowDidBecomeVisible, object: nil)
         }
     }
 

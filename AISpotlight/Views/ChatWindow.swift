@@ -7,7 +7,6 @@ extension Notification.Name {
     static let chatWindowDidBecomeVisible = Notification.Name("chatWindowDidBecomeVisible")
 }
 
-@available(macOS 15.0, *)
 struct ChatWindow: View {
     @ObservedObject private var chatStore = ChatStore()
     @ObservedObject private var settings = AppSettings.shared
@@ -41,8 +40,9 @@ struct ChatWindow: View {
         // Liquid Glass: the panel itself is a transient overlay (functional
         // layer), so a single glassEffect wraps everything. Content inside
         // (message bubbles, input field) stays on opaque backings — no
-        // glass-on-glass stacking.
-        GlassEffectContainer(spacing: 24) {
+        // glass-on-glass stacking. Pre-macOS 26 the same surface renders as
+        // a translucent material (see AdaptiveGlass.swift).
+        AdaptiveGlassContainer(spacing: 24) {
             VStack(spacing: 0) {
                 // Window drag handle (transparent area at the top)
                 ZStack(alignment: .trailing) {
@@ -160,10 +160,7 @@ struct ChatWindow: View {
                         .padding(.vertical, 8)
                     }
                     .background(.clear)
-                    .onScrollGeometryChange(for: Bool.self) { geometry in
-                        geometry.contentOffset.y + geometry.containerSize.height
-                            >= geometry.contentSize.height - 80
-                    } action: { _, nearBottom in
+                    .trackNearBottom { nearBottom in
                         if nearBottom {
                             isNearBottom = true
                         } else if Date().timeIntervalSince(lastAutoScroll) > 0.5 {
@@ -346,7 +343,7 @@ struct ChatWindow: View {
             // Untinted regular glass: heavy tints flatten the material by
             // muting its refraction and specular edge highlights — the depth
             // IS the glass. Legibility comes from the bubbles' materials.
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+            .adaptiveGlass(cornerRadius: 18)
         }
         .defaultFocus($isInputFocused, true)
         .onAppear {
@@ -742,6 +739,28 @@ private struct PendingAttachmentPreview: View {
                 .buttonStyle(.link)
                 .help(L("tooltip.removeAttachment"))
             }
+        }
+    }
+}
+
+/// Scroll-position tracking with a macOS 14 fallback.
+private extension View {
+    /// Reports whether the scroll position is near the bottom (within ~80pt).
+    /// Uses `onScrollGeometryChange` on macOS 15+; on macOS 14 the callback
+    /// never fires, so `isNearBottom` keeps its default `true` — the view
+    /// simply always auto-follows new messages (and the "jump to latest"
+    /// button never shows).
+    @ViewBuilder
+    func trackNearBottom(_ onChange: @escaping (Bool) -> Void) -> some View {
+        if #available(macOS 15.0, *) {
+            self.onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height
+                    >= geometry.contentSize.height - 80
+            } action: { _, nearBottom in
+                onChange(nearBottom)
+            }
+        } else {
+            self
         }
     }
 }

@@ -61,6 +61,28 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .deepseek: return URL(string: "https://platform.deepseek.com/api_keys")!
         }
     }
+
+    /// Preferred default chat models per provider, best first. When a key is
+    /// saved we fetch the live model list and auto-select the first of these
+    /// the provider actually serves — matched exactly, or as the prefix of a
+    /// dated snapshot id (e.g. "claude-sonnet-5" matches
+    /// "claude-sonnet-5-20250929"). The lists favor rolling "-latest" aliases
+    /// and long-lived model families so they keep resolving as providers ship
+    /// new versions; if none match, the first model in the list is used.
+    var preferredDefaultModels: [String] {
+        switch self {
+        case .openai:
+            return ["chat-latest"]
+        case .anthropic:
+            return ["claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5"]
+        case .gemini:
+            return ["gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+        case .mistral:
+            return ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"]
+        case .deepseek:
+            return ["deepseek-chat", "deepseek-reasoner"]
+        }
+    }
 }
 
 /// Providers that can transcribe audio.

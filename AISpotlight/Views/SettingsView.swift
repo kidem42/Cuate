@@ -305,10 +305,29 @@ struct SettingsView: View {
             refreshMasks()
             statusMessage = "Key for \(provider.displayName) saved to Keychain."
             statusIsError = false
-            validateKey(for: provider) // check the freshly saved key
+            // If the active chat provider has no usable key, switch to the one
+            // just configured so chat works without hunting through the tabs.
+            if !APIKeyStore.hasKey(for: settings.chatProvider) {
+                settings.chatProvider = provider
+            }
+            loadModelsAfterKeySave(for: provider) // fetch models, auto-select a default, and validate
         } else {
             statusMessage = "Failed to save the key for \(provider.displayName)."
             statusIsError = true
+        }
+    }
+
+    /// After a key is saved, fetch the provider's models and auto-select a
+    /// sensible default (so chat is usable immediately). Doubles as a key check.
+    private func loadModelsAfterKeySave(for provider: ProviderID) {
+        keyTests[provider.rawValue] = .testing
+        Task {
+            do {
+                try await settings.refreshModels(for: provider)
+                keyTests[provider.rawValue] = .ok
+            } catch {
+                keyTests[provider.rawValue] = .failed(error.localizedDescription)
+            }
         }
     }
 

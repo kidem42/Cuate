@@ -459,13 +459,29 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         }
         let models = try await ProviderRegistry.provider(for: provider).fetchModels(apiKey: apiKey)
         cachedModels[provider.rawValue] = models
-        // Auto-select the first model if none is selected or the selection disappeared.
+        // Auto-select a sensible default if none is selected or the selection
+        // disappeared, so chat works right after a key is added.
         if let current = selectedModels[provider.rawValue], models.contains(current) {
             return
         }
-        if let first = models.first {
-            selectedModels[provider.rawValue] = first
+        if let choice = Self.preferredDefault(for: provider, from: models) {
+            selectedModels[provider.rawValue] = choice
         }
+    }
+
+    /// Picks a default model from a provider's fetched list: the first of the
+    /// provider's `preferredDefaultModels` that appears — by exact match, or as
+    /// the prefix of a dated snapshot id — falling back to the first model.
+    static func preferredDefault(for provider: ProviderID, from models: [String]) -> String? {
+        for preferred in provider.preferredDefaultModels {
+            if let exact = models.first(where: { $0 == preferred }) {
+                return exact
+            }
+            if let prefixed = models.first(where: { $0.hasPrefix(preferred) }) {
+                return prefixed
+            }
+        }
+        return models.first
     }
 
     /// Refreshes the model list for the active provider in the background when

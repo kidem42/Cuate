@@ -412,7 +412,7 @@ private struct DictationWidgetView: View {
     @ObservedObject var service: DictationService
 
     var body: some View {
-        GlassEffectContainer {
+        AdaptiveGlassContainer {
             HStack(spacing: 8) {
                 if service.phase == .processing {
                     ProgressView()
@@ -428,7 +428,7 @@ private struct DictationWidgetView: View {
                     Task { await service.stopAndProcess() }
                 }
             }
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .adaptiveGlassCapsule()
         }
         .help("Click or press the dictation hotkey to stop")
     }
