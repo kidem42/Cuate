@@ -15,6 +15,24 @@ SCHEME="AISpotlight"
 PROJECT="AISpotlight.xcodeproj"
 VOL_NAME="$APP_NAME"
 
+# Code-signing identity. A stable certificate keeps the app's TCC identity
+# constant across releases, so users don't lose Microphone / Screen Recording
+# / Accessibility grants on every update (ad-hoc "-" re-keys the identity to
+# each binary's hash, which is why permissions used to reset).
+#
+# One-time setup (free, no Apple Developer account):
+#   Keychain Access → Certificate Assistant → Create a Certificate…
+#   Name: "AISpotlight Signing", Identity Type: Self-Signed Root,
+#   Certificate Type: Code Signing → Create.
+# All future releases must be signed with this same certificate.
+# Override with SIGN_ID env var; falls back to ad-hoc if the cert is absent.
+SIGN_ID="${SIGN_ID:-AISpotlight Signing}"
+if ! security find-identity -p codesigning -v 2>/dev/null | grep -q "$SIGN_ID"; then
+    echo "!! Signing identity '$SIGN_ID' not found in Keychain — falling back to ad-hoc."
+    echo "   (Ad-hoc builds lose TCC permissions on every update; see comment above.)"
+    SIGN_ID="-"
+fi
+
 cd "$(dirname "$0")/.."          # project root (folder with the .xcodeproj)
 
 BUILD_DIR="build"
@@ -40,10 +58,12 @@ fi
 
 [ -d "$RELEASE_APP" ] || { echo "Build failed: $RELEASE_APP not found"; exit 1; }
 
-echo "==> Ad-hoc signing (required on Apple Silicon)…"
-# Sign inside-out; ad-hoc ("-") needs no certificate. Prevents the "app is
-# damaged" error and lets the app run after the user approves it once.
-codesign --force --deep --sign - "$RELEASE_APP"
+if [ "$SIGN_ID" = "-" ]; then
+    echo "==> Ad-hoc signing (required on Apple Silicon)…"
+else
+    echo "==> Signing with '$SIGN_ID' (stable TCC identity across updates)…"
+fi
+codesign --force --deep --sign "$SIGN_ID" "$RELEASE_APP"
 codesign --verify --deep --strict "$RELEASE_APP" && echo "    signature OK"
 
 # --- Stage DMG contents ---------------------------------------------------
