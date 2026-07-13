@@ -1,0 +1,206 @@
+import Foundation
+
+/// Interface languages. English is the default and the fallback for any
+/// missing translation.
+enum AppLanguage: String, CaseIterable, Codable, Identifiable {
+    case english = "en"
+    case spanish = "es"
+    case russian = "ru"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .english: return "English"
+        case .spanish: return "Español"
+        case .russian: return "Русский"
+        }
+    }
+}
+
+extension Notification.Name {
+    static let appLanguageDidChange = Notification.Name("appLanguageDidChange")
+}
+
+/// Lightweight in-app localization independent of the system language.
+/// `L("key")` returns the string for the current language, falling back to
+/// English. Views re-render because they read `AppSettings.language`
+/// (a @Published property) in their body.
+func L(_ key: String) -> String {
+    let lang = Localization.currentLanguage
+    if let table = Localization.strings[key] {
+        return table[lang] ?? table[.english] ?? key
+    }
+    return key
+}
+
+enum Localization {
+    /// Cached so `L()` (called from many non-@MainActor spots) stays cheap and
+    /// synchronous; updated whenever the language changes.
+    static var currentLanguage: AppLanguage = .english
+
+    static let strings: [String: [AppLanguage: String]] = [
+        // MARK: Tabs
+        "tab.chat": [.english: "Chat", .spanish: "Chat", .russian: "Чат"],
+        "tab.keys": [.english: "API Keys", .spanish: "Claves API", .russian: "Ключи API"],
+        "tab.voice": [.english: "Voice", .spanish: "Voz", .russian: "Голос"],
+        "tab.general": [.english: "General", .spanish: "General", .russian: "Общие"],
+        "tab.prompts": [.english: "Prompts", .spanish: "Prompts", .russian: "Промпты"],
+
+        // MARK: Chat tab
+        "chat.header": [.english: "Chat", .spanish: "Chat", .russian: "Чат"],
+        "chat.provider": [.english: "Provider", .spanish: "Proveedor", .russian: "Провайдер"],
+        "chat.model": [.english: "Model", .spanish: "Modelo", .russian: "Модель"],
+        "chat.loadModels": [.english: "Load Models", .spanish: "Cargar modelos", .russian: "Загрузить модели"],
+        "chat.loading": [.english: "Loading…", .spanish: "Cargando…", .russian: "Загрузка…"],
+        "chat.noModels": [.english: "No models loaded yet — add an API key below and press “Load Models”.", .spanish: "Aún no hay modelos — añade una clave API abajo y pulsa “Cargar modelos”.", .russian: "Модели не загружены — добавьте ключ API ниже и нажмите «Загрузить модели»."],
+        "chat.addKeyFirst": [.english: "Add an API key first", .spanish: "Añade una clave API primero", .russian: "Сначала добавьте ключ API"],
+
+        "params.header": [.english: "Model Parameters", .spanish: "Parámetros del modelo", .russian: "Параметры модели"],
+        "params.reasoning": [.english: "Reasoning", .spanish: "Razonamiento", .russian: "Рассуждение"],
+        "params.reasoning.na": [.english: "Not tunable for the selected model", .spanish: "No ajustable para el modelo seleccionado", .russian: "Недоступно для выбранной модели"],
+        "params.reasoning.deepseek": [.english: "Pick deepseek-reasoner for reasoning", .spanish: "Elige deepseek-reasoner para razonar", .russian: "Выберите deepseek-reasoner"],
+        "params.reasoning.mistral": [.english: "Pick a magistral-* model for reasoning", .spanish: "Elige un modelo magistral-* para razonar", .russian: "Выберите модель magistral-*"],
+        "params.maxTokens": [.english: "Max response tokens", .spanish: "Tokens máx. de respuesta", .russian: "Макс. токенов ответа"],
+        "params.footer": [.english: "Reasoning maps to each provider's native control. It is shown only for models that support it.", .spanish: "El razonamiento usa el control nativo de cada proveedor. Solo se muestra en modelos compatibles.", .russian: "Рассуждение отображается только для моделей, которые его поддерживают, и использует нативный механизм провайдера."],
+        "reasoning.auto": [.english: "Auto", .spanish: "Auto", .russian: "Авто"],
+        "reasoning.fast": [.english: "Fast", .spanish: "Rápido", .russian: "Быстро"],
+        "reasoning.deep": [.english: "Deep", .spanish: "Profundo", .russian: "Глубоко"],
+
+        // MARK: API Keys tab
+        "keys.header": [.english: "API Keys", .spanish: "Claves API", .russian: "Ключи API"],
+        "keys.footer": [.english: "Keys are stored in the macOS Keychain on this device only. They are never written to preferences, logs, or synced to iCloud.", .spanish: "Las claves se guardan en el Llavero de macOS solo en este dispositivo. Nunca se escriben en preferencias, registros ni se sincronizan con iCloud.", .russian: "Ключи хранятся только в Связке ключей macOS на этом устройстве. Они не попадают в настройки, логи и не синхронизируются с iCloud."],
+        "keys.paste": [.english: "Paste API key", .spanish: "Pega la clave API", .russian: "Вставьте ключ API"],
+        "keys.save": [.english: "Save", .spanish: "Guardar", .russian: "Сохранить"],
+        "keys.remove": [.english: "Remove", .spanish: "Quitar", .russian: "Удалить"],
+        "keys.recheck": [.english: "Recheck", .spanish: "Revalidar", .russian: "Проверить"],
+        "keys.get": [.english: "Get key ↗", .spanish: "Obtener clave ↗", .russian: "Получить ключ ↗"],
+        "keys.valid": [.english: "Key is valid", .spanish: "La clave es válida", .russian: "Ключ действителен"],
+        "keys.checkFailed": [.english: "Key check failed", .spanish: "Fallo al validar la clave", .russian: "Проверка ключа не удалась"],
+
+        // MARK: Web
+        "web.header": [.english: "Web Access", .spanish: "Acceso web", .russian: "Доступ в интернет"],
+        "web.allow": [.english: "Allow web search", .spanish: "Permitir búsqueda web", .russian: "Разрешить веб-поиск"],
+        "web.brave": [.english: "Brave Search", .spanish: "Brave Search", .russian: "Brave Search"],
+        "web.pasteBrave": [.english: "Paste Brave API key", .spanish: "Pega la clave de Brave", .russian: "Вставьте ключ Brave"],
+        "web.footer": [.english: "With a Brave Search API key, every chat model gains a web_search tool and can look up current information on its own. Free tier: api-dashboard.search.brave.com", .spanish: "Con una clave de Brave Search, cada modelo obtiene una herramienta web_search y puede buscar información actual por sí mismo. Plan gratuito: api-dashboard.search.brave.com", .russian: "С ключом Brave Search каждая модель получает инструмент web_search и может сама искать актуальную информацию. Бесплатный тариф: api-dashboard.search.brave.com"],
+
+        // MARK: Voice
+        "voice.header": [.english: "Voice", .spanish: "Voz", .russian: "Голос"],
+        "voice.transcription": [.english: "Transcription", .spanish: "Transcripción", .russian: "Распознавание"],
+        "voice.sttModel": [.english: "STT model", .spanish: "Modelo STT", .russian: "Модель STT"],
+        "voice.footer": [.english: "Voice messages are transcribed with this provider, then the text is sent to the chat model.", .spanish: "Los mensajes de voz se transcriben con este proveedor y el texto se envía al modelo de chat.", .russian: "Голосовые сообщения распознаются этим провайдером, затем текст отправляется в чат-модель."],
+        "ocr.header": [.english: "OCR (Text from Images)", .spanish: "OCR (texto de imágenes)", .russian: "OCR (текст с изображений)"],
+        "ocr.provider": [.english: "Provider", .spanish: "Proveedor", .russian: "Провайдер"],
+        "ocr.model": [.english: "OCR model", .spanish: "Modelo OCR", .russian: "Модель OCR"],
+        "ocr.needKey": [.english: "Add a Mistral API key (in the API Keys tab) to enable OCR.", .spanish: "Añade una clave de Mistral (pestaña Claves API) para activar OCR.", .russian: "Добавьте ключ Mistral (вкладка «Ключи API»), чтобы включить OCR."],
+        "ocr.footer": [.english: "Used by “Extract Text” on screenshots and as a fallback that lets non-vision chat models read images. Uses the Mistral key.", .spanish: "Se usa en “Extraer texto” de capturas y como respaldo para que modelos sin visión lean imágenes. Usa la clave de Mistral.", .russian: "Используется кнопкой «Извлечь текст» на скриншотах и как запасной путь, чтобы модели без зрения могли читать изображения. Использует ключ Mistral."],
+        "dictation.header": [.english: "Dictation", .spanish: "Dictado", .russian: "Диктовка"],
+        "dictation.enable": [.english: "System-wide dictation", .spanish: "Dictado en todo el sistema", .russian: "Диктовка во всей системе"],
+        "dictation.cleanup": [.english: "Clean up fillers & punctuation", .spanish: "Limpiar muletillas y puntuación", .russian: "Убирать слова-паразиты и пунктуацию"],
+        "dictation.chunked": [.english: "Insert by phrases (pause detection)", .spanish: "Insertar por frases (detección de pausas)", .russian: "Вставлять по фразам (детекция пауз)"],
+        "dictation.translateTo": [.english: "Translate to", .spanish: "Traducir a", .russian: "Переводить на"],
+        "dictation.footer": [.english: "Press the dictation hotkey anywhere to record; a small pill appears under the camera. Press it again (or click the pill) to stop — the recognized text is typed into the focused field. Requires Accessibility permission.", .spanish: "Pulsa la tecla de dictado en cualquier lugar para grabar; aparece una pastilla bajo la cámara. Púlsala de nuevo (o haz clic) para parar — el texto se escribe en el campo activo. Requiere permiso de Accesibilidad.", .russian: "Нажмите горячую клавишу диктовки где угодно, чтобы записать; под камерой появится пилюля. Нажмите снова (или кликните по ней), чтобы остановить — распознанный текст впечатается в активное поле. Нужно разрешение «Универсальный доступ»."],
+
+        // MARK: General / Hotkeys
+        "hotkeys.header": [.english: "Hotkeys", .spanish: "Atajos", .russian: "Горячие клавиши"],
+        "hotkeys.openPanel": [.english: "Open panel", .spanish: "Abrir panel", .russian: "Открыть панель"],
+        "hotkeys.fullShot": [.english: "Full screenshot + panel", .spanish: "Captura completa + panel", .russian: "Скриншот экрана + панель"],
+        "hotkeys.areaShot": [.english: "Area screenshot + panel", .spanish: "Captura de área + panel", .russian: "Скриншот области + панель"],
+        "hotkeys.dictate": [.english: "Dictate", .spanish: "Dictar", .russian: "Диктовка"],
+        "hotkeys.dictateTranslate": [.english: "Dictate + translate", .spanish: "Dictar + traducir", .russian: "Диктовка + перевод"],
+        "hotkeys.reset": [.english: "Reset to Defaults", .spanish: "Restablecer valores", .russian: "Сбросить по умолчанию"],
+        "hotkeys.footer": [.english: "Click a shortcut, then press the new combination (must include ⌘, ⌃ or ⌥). Changes apply immediately, system-wide.", .spanish: "Haz clic en un atajo y pulsa la nueva combinación (debe incluir ⌘, ⌃ u ⌥). Los cambios se aplican al instante, en todo el sistema.", .russian: "Кликните по шорткату и нажмите новую комбинацию (обязательно с ⌘, ⌃ или ⌥). Изменения применяются сразу и во всей системе."],
+
+        // MARK: General
+        "general.launchAtLogin": [.english: "Launch at login", .spanish: "Abrir al iniciar sesión", .russian: "Запускать при входе в систему"],
+
+        // MARK: Panel placement
+        "panel.header": [.english: "Panel", .spanish: "Panel", .russian: "Панель"],
+        "panel.followMouse": [.english: "Open panel on the screen with the cursor", .spanish: "Abrir el panel en la pantalla con el cursor", .russian: "Открывать панель на экране с курсором"],
+        "panel.resetPosition": [.english: "Reset Panel Position", .spanish: "Restablecer posición del panel", .russian: "Сбросить положение панели"],
+        "panel.footer": [.english: "The panel opens Spotlight-style (centered) until you drag it — then your position is remembered. With the cursor option on, the same position is reproduced on whichever screen the mouse is on.", .spanish: "El panel se abre estilo Spotlight (centrado) hasta que lo arrastres — entonces se recuerda tu posición. Con la opción del cursor activada, la misma posición se reproduce en la pantalla donde esté el ratón.", .russian: "Панель открывается по центру (как Spotlight), пока вы её не перетащите — тогда позиция запоминается. С опцией курсора та же позиция воспроизводится на экране, где сейчас мышь."],
+
+        // MARK: Appearance / Language
+        "appearance.header": [.english: "Appearance", .spanish: "Apariencia", .russian: "Оформление"],
+        "appearance.theme": [.english: "Theme", .spanish: "Tema", .russian: "Тема"],
+        "appearance.language": [.english: "Language", .spanish: "Idioma", .russian: "Язык"],
+        "theme.auto": [.english: "Auto", .spanish: "Auto", .russian: "Авто"],
+        "theme.light": [.english: "Light", .spanish: "Claro", .russian: "Светлая"],
+        "theme.dark": [.english: "Dark", .spanish: "Oscuro", .russian: "Тёмная"],
+
+        // MARK: Prompts
+        "prompts.header": [.english: "System Prompt", .spanish: "Prompt del sistema", .russian: "Системный промпт"],
+        "prompts.preset": [.english: "Preset", .spanish: "Preajuste", .russian: "Пресет"],
+        "prompts.custom": [.english: "custom", .spanish: "personalizado", .russian: "свой"],
+        "prompts.builtInNoDelete": [.english: "Built-in presets can't be deleted", .spanish: "Los preajustes integrados no se pueden borrar", .russian: "Встроенные пресеты нельзя удалить"],
+        "prompts.deleteThis": [.english: "Delete this preset", .spanish: "Borrar este preajuste", .russian: "Удалить этот пресет"],
+        "prompts.edited": [.english: "Edited — changes apply immediately", .spanish: "Editado — los cambios se aplican al instante", .russian: "Изменено — применяется сразу"],
+        "prompts.revertTo": [.english: "Revert to", .spanish: "Revertir a", .russian: "Вернуть"],
+        "prompts.savePlaceholder": [.english: "Save current text as a new preset…", .spanish: "Guardar el texto actual como nuevo preajuste…", .russian: "Сохранить текущий текст как новый пресет…"],
+        "prompts.savePreset": [.english: "Save Preset", .spanish: "Guardar preajuste", .russian: "Сохранить пресет"],
+        "prompts.footer": [.english: "Pick a preset, edit the text freely (an “Edited” marker appears), revert anytime, or save your edits under a new name.", .spanish: "Elige un preajuste, edita el texto libremente (aparece un marcador “Editado”), revierte cuando quieras o guarda con un nombre nuevo.", .russian: "Выберите пресет, свободно правьте текст (появится метка «Изменено»), в любой момент откатывайте или сохраняйте под новым именем."],
+
+        // MARK: Status menu
+        "menu.open": [.english: "Open Assistant", .spanish: "Abrir asistente", .russian: "Открыть ассистента"],
+        "menu.fullShot": [.english: "Screenshot + Panel", .spanish: "Captura + panel", .russian: "Скриншот + панель"],
+        "menu.areaShot": [.english: "Area Screenshot + Panel", .spanish: "Captura de área + panel", .russian: "Скриншот области + панель"],
+        "menu.dictate": [.english: "Dictate", .spanish: "Dictar", .russian: "Диктовка"],
+        "menu.dictateTranslate": [.english: "Dictate + Translate", .spanish: "Dictar + traducir", .russian: "Диктовка + перевод"],
+        "menu.followMouse": [.english: "Open on Screen with Cursor", .spanish: "Abrir en la pantalla con el cursor", .russian: "Открывать на экране с курсором"],
+        "menu.appearance": [.english: "Appearance", .spanish: "Apariencia", .russian: "Оформление"],
+        "menu.settings": [.english: "Settings…", .spanish: "Ajustes…", .russian: "Настройки…"],
+        "menu.quit": [.english: "Quit AI Spotlight", .spanish: "Salir de AI Spotlight", .russian: "Выйти из AI Spotlight"],
+
+        // MARK: Chat panel
+        "panel.typeMessage": [.english: "Type your message...", .spanish: "Escribe tu mensaje...", .russian: "Введите сообщение..."],
+        "panel.newChat": [.english: "New chat", .spanish: "Nuevo chat", .russian: "Новый чат"],
+        "panel.presetHelp": [.english: "System prompt preset (applies to the next message)", .spanish: "Preajuste de prompt (se aplica al próximo mensaje)", .russian: "Пресет промпта (применится к следующему сообщению)"],
+        "panel.providerHelp": [.english: "Chat provider (only providers with a key are shown)", .spanish: "Proveedor de chat (solo se muestran los que tienen clave)", .russian: "Провайдер чата (показаны только те, у кого есть ключ)"],
+        "panel.welcome": [.english: "Hi! I'm your AI assistant. How can I help you today?", .spanish: "¡Hola! Soy tu asistente de IA. ¿En qué puedo ayudarte hoy?", .russian: "Привет! Я ваш ИИ-ассистент. Чем могу помочь?"],
+        "panel.thinking": [.english: "Thinking…", .spanish: "Pensando…", .russian: "Думаю…"],
+        "panel.searching": [.english: "Searching", .spanish: "Buscando", .russian: "Поиск"],
+        "panel.retry": [.english: "Retry last message", .spanish: "Reintentar último mensaje", .russian: "Повторить сообщение"],
+        "panel.jumpLatest": [.english: "Jump to the latest message", .spanish: "Ir al mensaje más reciente", .russian: "К последнему сообщению"],
+        "panel.recordingCancelled": [.english: "Recording cancelled.", .spanish: "Grabación cancelada.", .russian: "Запись отменена."],
+        "recording.hint": [.english: "Space to send · ×2 to cancel", .spanish: "Espacio para enviar · ×2 para cancelar", .russian: "Пробел — отправить · ×2 — отмена"],
+
+        // MARK: Tooltips
+        "tooltip.input": [.english: "Enter — send, Shift+Enter — new line", .spanish: "Intro — enviar, Mayús+Intro — nueva línea", .russian: "Enter — отправить, Shift+Enter — новая строка"],
+        "tooltip.send": [.english: "Send message (Enter)", .spanish: "Enviar mensaje (Intro)", .russian: "Отправить сообщение (Enter)"],
+        "tooltip.voice.start": [.english: "Record a voice message. While recording: Space — send, double Space / Esc — cancel", .spanish: "Grabar un mensaje de voz. Durante la grabación: Espacio — enviar, doble Espacio / Esc — cancelar", .russian: "Записать голосовое. Во время записи: Пробел — отправить, двойной Пробел / Esc — отмена"],
+        "tooltip.voice.stop": [.english: "Stop and send (or press Space)", .spanish: "Detener y enviar (o pulsa Espacio)", .russian: "Остановить и отправить (или Пробел)"],
+        "tooltip.play": [.english: "Play / pause the voice message", .spanish: "Reproducir / pausar el mensaje de voz", .russian: "Воспроизвести / пауза"],
+        "tooltip.attachment": [.english: "Click to open in the default app", .spanish: "Haz clic para abrir en la app predeterminada", .russian: "Клик — открыть в приложении по умолчанию"],
+        "tooltip.extract": [.english: "Recognize the text (OCR): shown in the chat, raw Markdown goes to the clipboard", .spanish: "Reconocer el texto (OCR): se muestra en el chat y el Markdown se copia al portapapeles", .russian: "Распознать текст (OCR): результат в чате, Markdown — в буфере обмена"],
+        "tooltip.removeAttachment": [.english: "Remove the attachment", .spanish: "Quitar el adjunto", .russian: "Убрать вложение"],
+        "tooltip.copy": [.english: "Copy message", .spanish: "Copiar mensaje", .russian: "Скопировать сообщение"],
+        "copy.copied": [.english: "Copied", .spanish: "Copiado", .russian: "Скопировано"],
+        "tooltip.tapToCopy": [.english: "Click to copy", .spanish: "Haz clic para copiar", .russian: "Клик — скопировать"],
+
+        // MARK: Onboarding
+        "ob.next": [.english: "Next", .spanish: "Siguiente", .russian: "Далее"],
+        "ob.back": [.english: "Back", .spanish: "Atrás", .russian: "Назад"],
+        "ob.done": [.english: "Get Started", .spanish: "Empezar", .russian: "Начать"],
+        "ob.skip": [.english: "Skip", .spanish: "Omitir", .russian: "Пропустить"],
+        "ob.showTour": [.english: "Show Welcome Tour", .spanish: "Mostrar el tour de bienvenida", .russian: "Показать обзор функций"],
+        "ob.p1.title": [.english: "AI anywhere on your Mac", .spanish: "IA en cualquier lugar de tu Mac", .russian: "ИИ в любом месте вашего Mac"],
+        "ob.p1.body": [.english: "AISpotlight lives in the menu bar and appears over any app with one hotkey, Spotlight-style. Ask anything, then press Esc or click away to dismiss.", .spanish: "AISpotlight vive en la barra de menús y aparece sobre cualquier app con un atajo, al estilo Spotlight. Pregunta lo que sea y haz clic fuera para cerrarlo.", .russian: "AISpotlight живёт в статус-баре и появляется поверх любого приложения по хоткею, как Spotlight. Спросите что угодно; клик мимо окна скрывает панель."],
+        "ob.p2.title": [.english: "Bring your own keys", .spanish: "Usa tus propias claves", .russian: "Ваши собственные ключи"],
+        "ob.p2.body": [.english: "Works with OpenAI, Claude, Gemini, Mistral and DeepSeek — add any API keys in Settings → API Keys, load the model list and pick a model. Keys are stored only in the macOS Keychain on this device.", .spanish: "Funciona con OpenAI, Claude, Gemini, Mistral y DeepSeek: añade tus claves en Ajustes → Claves API, carga la lista de modelos y elige uno. Las claves se guardan solo en el Llavero de macOS de este equipo.", .russian: "Работает с OpenAI, Claude, Gemini, Mistral и DeepSeek: добавьте ключи в Настройки → Ключи API, загрузите список моделей и выберите модель. Ключи хранятся только в Связке ключей macOS на этом устройстве."],
+        "ob.p2.note": [.english: "For all features to work, add at least an OpenAI key (chat) and a Mistral key (voice + OCR).", .spanish: "Para que todo funcione, añade al menos una clave de OpenAI (chat) y una de Mistral (voz + OCR).", .russian: "Чтобы работали все функции, добавьте минимум ключ OpenAI (чат) и ключ Mistral (голос + OCR)."],
+        "ob.p3.title": [.english: "Screenshots & OCR", .spanish: "Capturas y OCR", .russian: "Скриншоты и OCR"],
+        "ob.p3.body": [.english: "Capture the whole screen or a selected area straight into the chat — ask questions about what's on screen, or press “Extract Text” to turn any screenshot into structured Markdown.", .spanish: "Captura toda la pantalla o un área directamente al chat: pregunta sobre lo que ves o pulsa “Extraer texto” para convertir la captura en Markdown estructurado.", .russian: "Скриншот всего экрана или выделенной области попадает прямо в чат: задавайте вопросы о том, что на экране, или нажмите «Извлечь текст», чтобы получить структурированный Markdown."],
+        "ob.p4.title": [.english: "Voice messages", .spanish: "Mensajes de voz", .russian: "Голосовые сообщения"],
+        "ob.p4.body": [.english: "Record with the mic button — speech is transcribed (Mistral Voxtral) and sent to the model. While recording: Space sends, double-Space or Esc cancels.", .spanish: "Graba con el botón del micrófono: la voz se transcribe (Mistral Voxtral) y se envía al modelo. Durante la grabación: Espacio envía, doble Espacio o Esc cancela.", .russian: "Записывайте кнопкой микрофона: речь распознаётся (Mistral Voxtral) и уходит модели. Во время записи: Пробел — отправить, двойной Пробел или Esc — отмена."],
+        "ob.p5.title": [.english: "Dictate into any app", .spanish: "Dicta en cualquier app", .russian: "Диктовка в любое приложение"],
+        "ob.p5.body": [.english: "Press the dictation hotkey in any text field — a small pill appears under the camera. Speak, press the hotkey again, and the recognized (or translated) text is typed right where your cursor is. Requires the Accessibility permission.", .spanish: "Pulsa el atajo de dictado en cualquier campo de texto: aparece una pastilla bajo la cámara. Habla, pulsa de nuevo y el texto reconocido (o traducido) se escribe justo donde está el cursor. Requiere el permiso de Accesibilidad.", .russian: "Нажмите хоткей диктовки в любом текстовом поле: под камерой появится пилюля. Говорите, нажмите хоткей снова — распознанный (или переведённый) текст впечатается туда, где курсор. Нужно разрешение «Универсальный доступ»."],
+        "ob.p6.title": [.english: "Web search & more", .spanish: "Búsqueda web y más", .russian: "Веб-поиск и другое"],
+        "ob.p6.body": [.english: "Add a Brave key and models can search the web on their own and cite their sources. Switch providers and prompt presets right from the panel header, click monospace values, quotes and code blocks to copy them instantly, and retry any failed request with one click.", .spanish: "Añade una clave de Brave y los modelos buscan en la web por sí mismos y citan sus fuentes. Cambia de proveedor y de preajuste desde la cabecera del panel, haz clic en valores monoespaciados, citas y bloques de código para copiarlos al instante, y reintenta cualquier petición fallida con un clic.", .russian: "Добавьте ключ Brave — модели смогут сами искать в интернете и указывать источники. Провайдер и пресет промпта переключаются в шапке панели, клик по моноширинным значениям, цитатам и код-блокам мгновенно копирует их, а упавший запрос повторяется одной кнопкой."],
+        "panel.extractText": [.english: "Extract Text", .spanish: "Extraer texto", .russian: "Извлечь текст"],
+        "panel.extracting": [.english: "Extracting…", .spanish: "Extrayendo…", .russian: "Извлечение…"],
+        "panel.noProviderKey": [.english: "No API key for the active provider. Open the status bar icon → Settings… to add your API key and load the model list.", .spanish: "No hay clave API para el proveedor activo. Abre el icono de la barra de estado → Ajustes… para añadir tu clave y cargar los modelos.", .russian: "Нет ключа API для активного провайдера. Откройте иконку в статус-баре → Настройки…, добавьте ключ и загрузите список моделей."],
+        "panel.noModelSelected": [.english: "No model selected for the active provider. Open Settings… and press “Load Models”.", .spanish: "No hay modelo seleccionado. Abre Ajustes… y pulsa “Cargar modelos”.", .russian: "Не выбрана модель. Откройте Настройки… и нажмите «Загрузить модели»."],
+        "panel.needTranscription": [.english: "Voice messages need a transcription provider. Open Settings… and add a Mistral (Voxtral) or OpenAI key.", .spanish: "Los mensajes de voz necesitan un proveedor de transcripción. Abre Ajustes… y añade una clave de Mistral (Voxtral) u OpenAI.", .russian: "Для голосовых нужен провайдер распознавания. Откройте Настройки… и добавьте ключ Mistral (Voxtral) или OpenAI."],
+    ]
+}

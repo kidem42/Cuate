@@ -1,0 +1,442 @@
+import SwiftUI
+import Foundation
+import AppKit
+
+struct MessageRow: View {
+    let message: ChatMessage
+    /// Bubbles scale with the panel: ~75% of the available width.
+    var maxBubbleWidth: CGFloat = 320
+
+    // Hover-to-copy (selecting across SwiftUI Text blocks is unreliable,
+    // so whole-message copy is the primary affordance, like in Telegram)
+    @State private var isHovering = false
+    @State private var justCopied = false
+    @Environment(\.colorScheme) private var colorScheme
+    
+    var body: some View {
+        HStack {
+            if message.messageType == .system {
+                Spacer()
+                systemMessageBubble
+                Spacer()
+            } else if message.isUser {
+                Spacer()
+                userMessageBubble
+            } else {
+                assistantMessageBubble
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+    
+    private var userMessageBubble: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            VStack(alignment: .trailing, spacing: 8) {
+                userAttachmentsSection()
+                
+                if message.messageType == .voice {
+                    if let audioURL = message.audioURL {
+                        VoiceMessagePlayer(audioURL: audioURL, isUserMessage: true)
+                            .frame(maxWidth: .infinity)
+                    }
+                    // Show the transcribed text below the player
+                    if !message.text.isEmpty {
+                        renderMarkdownText(message.text, linkColor: .accentColor)
+                            .foregroundColor(.primary)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.leading)
+                    }
+                } else {
+                    renderMarkdownText(message.text, linkColor: .accentColor)
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            // Material keeps text legible over any wallpaper; the accent tint
+            // behind it distinguishes the user bubble (tint is sampled through
+            // the material).
+            .background(.regularMaterial)
+            .background(Color.accentColor.opacity(0.35))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            // Subtle elevation separates content from the glass beneath
+            .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
+            .modifier(CopyableBubble(text: message.text, isHovering: $isHovering, justCopied: $justCopied))
+            
+            Text(formatTime(message.timestamp))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
+    }
+    
+    private var assistantMessageBubble: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "brain")
+                        .foregroundColor(.accentColor)
+                        .font(.caption)
+                    Spacer()
+                }
+                
+                assistantAttachmentsSection()
+
+                if message.messageType == .voice {
+                    // Voice message from assistant (rare case, but supported)
+                    if let audioURL = message.audioURL {
+                        VoiceMessagePlayer(audioURL: audioURL, isUserMessage: false)
+                            .frame(maxWidth: .infinity)
+                    }
+                    // Also show transcribed text if available
+                    if !message.text.isEmpty {
+                        renderMarkdownText(message.text, linkColor: .accentColor)
+                            .foregroundColor(.primary)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.leading)
+                    }
+                } else {
+                    renderMarkdownText(message.text, linkColor: .accentColor)
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.thinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
+            .modifier(CopyableBubble(text: message.text, isHovering: $isHovering, justCopied: $justCopied))
+            
+            Text(formatTime(message.timestamp))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: maxBubbleWidth, alignment: .leading)
+    }
+    
+    private var systemMessageBubble: some View {
+        VStack(alignment: .center, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                renderMarkdownText(message.text, linkColor: .secondary)
+                    .foregroundColor(.secondary)
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            Text(formatTime(message.timestamp))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: maxBubbleWidth, alignment: .center)
+    }
+    
+    // MARK: - Copy affordance
+
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+    
+    /// Block-level rendering: headings, lists, quotes, code blocks and tables
+    /// all display formatted (Telegram-style), not as raw markdown.
+    private func renderMarkdownText(_ text: String, linkColor: Color = .blue) -> some View {
+        MarkdownBlocksView(text: text, linkColor: linkColor)
+    }
+
+    @ViewBuilder
+    private func userAttachmentsSection() -> some View {
+        if !message.attachments.isEmpty {
+            VStack(alignment: .trailing, spacing: 8) {
+                ForEach(message.attachments) { attachment in
+                    AttachmentPreviewBubble(attachment: attachment, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func assistantAttachmentsSection() -> some View {
+        if !message.attachments.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(message.attachments) { attachment in
+                    AttachmentPreviewBubble(attachment: attachment, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
+/// Encodes/decodes tap-to-copy payloads carried in a custom URL scheme so
+/// inline-code runs inside a SwiftUI Text become clickable (Telegram-style).
+enum CopyLink {
+    static let scheme = "aispotlight-copy"
+
+    static func encode(_ text: String) -> URL? {
+        let base64 = Data(text.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return URL(string: "\(scheme):\(base64)")
+    }
+
+    static func decode(_ url: URL) -> String? {
+        guard url.scheme == scheme else { return nil }
+        var base64 = url.absoluteString
+            .replacingOccurrences(of: "\(scheme):", with: "")
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+/// Hover-to-copy affordance for chat bubbles: a small floating copy button
+/// on hover plus a right-click context menu. Copies the whole message as raw
+/// Markdown (cross-block text selection in SwiftUI is unreliable). Also
+/// intercepts taps on inline-code runs (CopyLink) — clicking `code` copies it.
+struct CopyableBubble: ViewModifier {
+    let text: String
+    @Binding var isHovering: Bool
+    @Binding var justCopied: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.openURL, OpenURLAction { url in
+                if let payload = CopyLink.decode(url) {
+                    copyPayload(payload)
+                    return .handled
+                }
+                return .systemAction
+            })
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    isHovering = hovering
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if isHovering || justCopied {
+                    Button(action: copy) {
+                        Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(justCopied ? .green : .secondary)
+                            .frame(width: 20, height: 20)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help(L("tooltip.copy"))
+                    .padding(4)
+                    .transition(.opacity)
+                }
+            }
+            .contextMenu {
+                Button {
+                    copy()
+                } label: {
+                    Label(L("tooltip.copy"), systemImage: "doc.on.doc")
+                }
+            }
+    }
+
+    private func copy() {
+        copyPayload(text)
+    }
+
+    private func copyPayload(_ payload: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payload, forType: .string)
+        withAnimation { justCopied = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            withAnimation { justCopied = false }
+        }
+    }
+}
+
+struct MarkdownText: View {
+    let text: String
+    let linkColor: Color
+    
+    init(_ text: String, linkColor: Color = .blue) {
+        self.text = text
+        self.linkColor = linkColor
+    }
+    
+    var body: some View {
+        Text(renderMarkdown())
+            .fixedSize(horizontal: false, vertical: true) // preserve line breaks/height
+    }
+    
+    private func renderMarkdown() -> AttributedString {
+        // Use inline-only parsing that preserves whitespace and newlines
+        var attributed: AttributedString
+        if let parsed = try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+        ) {
+            attributed = parsed
+        } else {
+            attributed = AttributedString(text)
+        }
+        
+        // Auto-link raw URLs
+        attributed = linkifyRawURLs(in: attributed)
+
+        // Inline monospace → Telegram-style: sits right in the text body and
+        // is barely distinguishable from it (mono font, whisper of a backing)
+        // — distinct from fenced code blocks, which render as separate cards.
+        // Clicking the span copies it (CopyLink handled by the bubble).
+        for run in attributed.runs {
+            guard let intent = run.inlinePresentationIntent, intent.contains(.code) else { continue }
+            let range = run.range
+            let codeText = String(attributed[range].characters)
+            attributed[range].font = .system(size: 12.5, design: .monospaced)
+            attributed[range].backgroundColor = Color.secondary.opacity(0.08)
+            if let url = CopyLink.encode(codeText) {
+                attributed[range].link = url
+            }
+        }
+
+        // Style links (skip copy-links — they keep the code look, no underline)
+        for run in attributed.runs {
+            guard let link = run.link, link.scheme != CopyLink.scheme else { continue }
+            let range = run.range
+            attributed[range].foregroundColor = linkColor
+            attributed[range].underlineStyle = .single
+        }
+
+        return attributed
+    }
+    
+    private func linkifyRawURLs(in attributed: AttributedString) -> AttributedString {
+        var result = attributed
+        let plain = String(result.characters)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return result
+        }
+        let ns = plain as NSString
+        let matches = detector.matches(in: plain, range: NSRange(location: 0, length: ns.length))
+        
+        for match in matches.reversed() {
+            guard let url = match.url, let rangeInString = Range(match.range, in: plain) else { continue }
+            if let lower = AttributedString.Index(rangeInString.lowerBound, within: result),
+               let upper = AttributedString.Index(rangeInString.upperBound, within: result) {
+                var sub = result[lower..<upper]
+                sub.link = url
+                result.replaceSubrange(lower..<upper, with: sub)
+            }
+        }
+        return result
+    }
+}
+
+private struct AttachmentPreviewBubble: View {
+    let attachment: ChatAttachment
+    let alignment: Alignment
+
+    var body: some View {
+        Group {
+            if attachment.mimeType.hasPrefix("image"),
+               let data = attachment.data,
+               let image = NSImage(data: data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        AttachmentOpener.open(attachment)
+                    }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.fill")
+                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(attachment.filename)
+                            .font(.callout)
+                        Text(attachment.mimeType)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(12)
+                .background(Color.secondary.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    AttachmentOpener.open(attachment)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: alignment)
+        .help(L("tooltip.attachment"))
+    }
+}
+
+private enum AttachmentOpener {
+    private static var trackedTemporaryFiles = Set<URL>()
+    private static var cleanupRegistered = false
+
+    static func open(_ attachment: ChatAttachment) {
+        guard let data = attachment.data else { return }
+
+        let sanitizedName = sanitizeFilename(attachment.filename)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AISpotlightAttachments", isDirectory: true)
+        let fileURL = directory.appendingPathComponent("\(attachment.id.uuidString)-\(sanitizedName)")
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: fileURL, options: .atomic)
+            trackForCleanup(fileURL)
+            NSWorkspace.shared.open(fileURL)
+        } catch {
+            NSLog("Failed to open attachment: \(error.localizedDescription)")
+        }
+    }
+
+    private static func sanitizeFilename(_ filename: String) -> String {
+        let illegalCharacters = CharacterSet(charactersIn: "/\\?%*|\"<>:")
+        return filename.components(separatedBy: illegalCharacters).joined(separator: "-")
+    }
+
+    private static func trackForCleanup(_ url: URL) {
+        trackedTemporaryFiles.insert(url)
+        registerCleanupObserverIfNeeded()
+    }
+
+    private static func registerCleanupObserverIfNeeded() {
+        guard !cleanupRegistered else { return }
+        cleanupRegistered = true
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            cleanupTemporaryFiles()
+        }
+    }
+
+    private static func cleanupTemporaryFiles() {
+        for url in trackedTemporaryFiles {
+            try? FileManager.default.removeItem(at: url)
+        }
+        trackedTemporaryFiles.removeAll()
+    }
+}
