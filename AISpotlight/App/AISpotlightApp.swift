@@ -564,6 +564,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if window.isVisible {
             window.orderOut(nil)
+        } else if AppSettings.shared.prefillFromSelection {
+            // Capture the selection while the other app is still frontmost —
+            // once our panel activates, a synthesized ⌘C would land on us.
+            Task { @MainActor in
+                appState.pendingInputText = await SelectionGrabber.grab()
+                showChatWindow()
+            }
         } else {
             showChatWindow()
         }

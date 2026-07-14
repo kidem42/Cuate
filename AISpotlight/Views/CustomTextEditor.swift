@@ -65,6 +65,9 @@ struct CustomTextEditor: NSViewRepresentable {
         // Update text if needed
         if textView.string != text {
             textView.string = text
+            // Programmatic fills (selection prefill) leave the caret at the
+            // end — ready to type an instruction or hit Enter right away.
+            textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             context.coordinator.remeasure()
         }
 

@@ -689,6 +689,8 @@ struct SettingsView: View {
     private var generalSection: some View {
         Section {
             Toggle(L("general.launchAtLogin"), isOn: $settings.launchAtLogin)
+            Toggle(L("general.prefillSelection"), isOn: $settings.prefillFromSelection)
+                .help(L("general.prefillSelection.help"))
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
         }
     }

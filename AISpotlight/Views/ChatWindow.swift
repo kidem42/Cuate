@@ -359,6 +359,14 @@ struct ChatWindow: View {
         .onReceive(appState.$pendingAttachment) { attachment in
             self.pendingAttachment = attachment
         }
+        .onReceive(appState.$pendingInputText) { text in
+            guard let text, !text.isEmpty else { return }
+            // Prefill only an empty composer — never clobber a draft.
+            if messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                messageText = text
+            }
+            appState.pendingInputText = nil
+        }
         .onChange(of: audioRecorder.autoStoppedDueToLimit) {
             guard audioRecorder.autoStoppedDueToLimit == true else { return }
             // When the recorder auto-stops due to limit, send the message automatically

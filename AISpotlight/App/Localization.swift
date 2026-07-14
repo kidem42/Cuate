@@ -115,6 +115,8 @@ enum Localization {
 
         // MARK: General
         "general.launchAtLogin": [.english: "Launch at login", .spanish: "Abrir al iniciar sesión", .russian: "Запускать при входе в систему"],
+        "general.prefillSelection": [.english: "Open panel with the selected text", .spanish: "Abrir el panel con el texto seleccionado", .russian: "Открывать панель с выделенным текстом"],
+        "general.prefillSelection.help": [.english: "When you summon the panel, the text selected in the current app lands in the input field — press Enter to run the active preset on it (e.g. instant translation). Requires the Accessibility permission.", .spanish: "Al invocar el panel, el texto seleccionado en la app actual aparece en el campo de entrada; pulsa Intro para aplicarle el preajuste activo (p. ej. traducción instantánea). Requiere el permiso de Accesibilidad.", .russian: "При вызове панели выделенный в текущем приложении текст подставляется в поле ввода — Enter применит к нему активный пресет (например, мгновенный перевод). Нужно разрешение «Универсальный доступ»."],
 
         // MARK: Diagnostics
         "diag.header": [.english: "Diagnostics", .spanish: "Diagnóstico", .russian: "Диагностика"],
