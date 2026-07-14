@@ -337,11 +337,14 @@ struct ChatWindow: View {
             .adaptiveGlass(cornerRadius: 18)
         }
         .defaultFocus($isInputFocused, true)
-        .onAppear {
-            // Add welcome message
-            if chatStore.messages.isEmpty {
+        .onReceive(chatStore.$isHistoryLoaded) { loaded in
+            // Welcome message — only after the async history load settled,
+            // otherwise it would race the load and end up duplicated.
+            if loaded, chatStore.messages.isEmpty {
                 chatStore.addMessage(text: welcomeText(), isUser: false)
             }
+        }
+        .onAppear {
             NotificationCenter.default.addObserver(forName: .chatWindowDidBecomeVisible, object: nil, queue: .main) { _ in
                 // Activate focus when window appears
                 DispatchQueue.main.async {
@@ -571,6 +574,26 @@ struct ChatWindow: View {
 
         Task { @MainActor in
             var assistantID: UUID?
+            // Coalesce streamed chunks before touching the store: every
+            // mutation republishes `messages`, re-diffs the whole list and
+            // re-parses the growing bubble's Markdown — per-chunk that adds
+            // up to O(answer²) of main-thread work and froze the panel on
+            // long replies. Flushing at ~8 Hz keeps streaming visually live
+            // at a constant UI cost per second regardless of answer length.
+            var pendingText = ""
+            var lastFlush = ContinuousClock.now
+            func flush() {
+                guard !pendingText.isEmpty else { return }
+                if let id = assistantID {
+                    chatStore.appendChunk(pendingText, to: id)
+                } else {
+                    let message = ChatMessage(text: pendingText, isUser: false)
+                    chatStore.appendNow(message)
+                    assistantID = message.id
+                }
+                pendingText = ""
+                lastFlush = .now
+            }
             do {
                 let stream = try await ChatService.streamReply(history: history, summary: summary)
                 for try await event in stream {
@@ -582,21 +605,23 @@ struct ChatWindow: View {
                         if chatStore.statusText != nil {
                             chatStore.statusText = nil
                         }
-                        if let id = assistantID {
-                            chatStore.appendChunk(chunk, to: id)
-                        } else {
-                            let message = ChatMessage(text: chunk, isUser: false)
-                            chatStore.appendNow(message)
-                            assistantID = message.id
+                        pendingText += chunk
+                        // The first chunk flushes immediately so the bubble
+                        // appears the moment text starts flowing.
+                        if assistantID == nil || lastFlush.duration(to: .now) > .milliseconds(120) {
+                            flush()
                         }
                     case .status(let status):
+                        flush() // keep text/status ordering intact
                         chatStore.statusText = status
                     }
                 }
+                flush()
                 if assistantID == nil {
                     chatStore.addMessage(text: "(empty reply)", isUser: false)
                 }
             } catch {
+                flush()
                 if let id = assistantID {
                     chatStore.appendChunk("\n\n⚠️ \(error.localizedDescription)", to: id)
                 } else {

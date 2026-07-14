@@ -96,6 +96,9 @@ class ChatStore: ObservableObject {
     @Published private(set) var conversationSummary: String?
     /// How many leading messages of `messages` are covered by the summary.
     @Published private(set) var summaryCoversCount: Int = 0
+    /// Set once the async history load settles (whether or not a file existed).
+    /// Gates the welcome message so it doesn't race the load and duplicate.
+    @Published private(set) var isHistoryLoaded = false
 
     private var saveWorkItem: DispatchWorkItem?
 
@@ -121,7 +124,7 @@ class ChatStore: ObservableObject {
 
     // MARK: Persistence
 
-    private struct PersistedChat: Codable {
+    nonisolated private struct PersistedChat: Codable {
         var messages: [ChatMessage]
         var conversationSummary: String?
         var summaryCoversCount: Int
@@ -134,22 +137,39 @@ class ChatStore: ObservableObject {
         return base.appendingPathComponent("chat.json")
     }
 
+    /// Loads the persisted conversation off the main thread: attachments make
+    /// the JSON multi-megabyte (images → base64), and decoding it synchronously
+    /// in init stalled the app at launch.
     private func loadFromDisk() {
-        let start = DispatchTime.now()
-        guard let data = try? Data(contentsOf: Self.storeURL),
-              let persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) else { return }
-        // Drop dangling voice-file references (recordings are session-scoped).
-        messages = persisted.messages.map { message in
-            var message = message
-            if let url = message.audioURL, !FileManager.default.fileExists(atPath: url.path) {
-                message.audioURL = nil
+        let url = Self.storeURL
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let start = DispatchTime.now()
+            var loaded: PersistedChat?
+            if let data = try? Data(contentsOf: url),
+               var persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) {
+                // Drop dangling voice-file references (recordings are session-scoped).
+                persisted.messages = persisted.messages.map { message in
+                    var message = message
+                    if let audioURL = message.audioURL, !FileManager.default.fileExists(atPath: audioURL.path) {
+                        message.audioURL = nil
+                    }
+                    return message
+                }
+                let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
+                Diagnostics.log("store", "load bytes=\(data.count) messages=\(persisted.messages.count) ms=\(ms)")
+                loaded = persisted
             }
-            return message
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let loaded {
+                    // Anything sent before the load finished stays after the history.
+                    self.messages = loaded.messages + self.messages
+                    self.conversationSummary = loaded.conversationSummary
+                    self.summaryCoversCount = min(loaded.summaryCoversCount, loaded.messages.count)
+                }
+                self.isHistoryLoaded = true
+            }
         }
-        conversationSummary = persisted.conversationSummary
-        summaryCoversCount = min(persisted.summaryCoversCount, messages.count)
-        let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
-        Diagnostics.log("store", "load bytes=\(data.count) messages=\(messages.count) ms=\(ms)")
     }
 
     /// Debounced write of the conversation to Application Support.
