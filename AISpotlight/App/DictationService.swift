@@ -315,13 +315,13 @@ final class DictationService: NSObject, ObservableObject {
         switch mode {
         case .transcribe:
             prompt = """
-Clean up this dictated text: remove filler words (um, uh, эм, эээ, ну, короче as filler), false starts and accidental repetitions; fix spelling and punctuation. Keep the original language, meaning and tone. Do not add anything. Output ONLY the cleaned text, nothing else.
+Clean up this dictated text: remove filler words (um, uh, эм, эээ, ну, короче as filler), false starts and accidental repetitions; fix spelling and punctuation. Keep the original language, meaning and tone. Do not add anything. Never use the "—" character. Output ONLY the cleaned text, nothing else.
 
 \(transcript)
 """
         case .translate:
             prompt = """
-Translate this dictated text into \(settings.dictationTargetLanguage). First mentally clean it up (drop filler words, false starts, accidental repetitions), then produce a natural, well-punctuated translation. Output ONLY the translated text, nothing else.
+Translate this dictated text into \(settings.dictationTargetLanguage). First mentally clean it up (drop filler words, false starts, accidental repetitions), then produce a natural, well-punctuated translation. Never use the "—" character. Output ONLY the translated text, nothing else.
 
 \(transcript)
 """
@@ -338,8 +338,18 @@ Translate this dictated text into \(settings.dictationTargetLanguage). First men
         for try await event in stream {
             if case .text(let chunk) = event { result += chunk }
         }
-        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.stripEmDashes(from: result.trimmingCharacters(in: .whitespacesAndNewlines))
         return trimmed.isEmpty ? transcript : trimmed
+    }
+
+    /// Models sprinkle em dashes no matter what the prompt says, and the
+    /// app-wide rule (`AppSettings.mandatoryPromptRules`) bans them — enforce
+    /// it mechanically: "app—text" / "app — text" both become "app - text".
+    private static func stripEmDashes(from text: String) -> String {
+        guard text.contains("—") else { return text }
+        return text
+            .replacingOccurrences(of: "[ \\t]*—[ \\t]*", with: " - ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Widget (Liquid Glass pill under the camera notch)
