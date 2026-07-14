@@ -564,7 +564,7 @@ struct ChatWindow: View {
     // MARK: - Voice
 
     private var transcriptionAvailable: Bool {
-        STTProviderID.allCases.contains { APIKeyStore.hasKey(for: $0.keyProvider) }
+        STTProviderID.allCases.contains { $0.hasKey }
     }
 
     private func handleVoiceRecordingStart() {

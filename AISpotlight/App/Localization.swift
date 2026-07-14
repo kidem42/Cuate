@@ -90,6 +90,7 @@ enum Localization {
         "voice.transcription": [.english: "Transcription", .spanish: "Transcripción", .russian: "Распознавание"],
         "voice.sttModel": [.english: "STT model", .spanish: "Modelo STT", .russian: "Модель STT"],
         "voice.footer": [.english: "Voice messages are transcribed with this provider, then the text is sent to the chat model.", .spanish: "Los mensajes de voz se transcriben con este proveedor y el texto se envía al modelo de chat.", .russian: "Голосовые сообщения распознаются этим провайдером, затем текст отправляется в чат-модель."],
+        "voice.needKey": [.english: "No API key for this provider — add it in the API Keys tab.", .spanish: "No hay clave API para este proveedor — añádela en la pestaña Claves API.", .russian: "Нет ключа API для этого провайдера — добавьте его во вкладке «Ключи API»."],
         "ocr.header": [.english: "OCR (Text from Images)", .spanish: "OCR (texto de imágenes)", .russian: "OCR (текст с изображений)"],
         "ocr.provider": [.english: "Provider", .spanish: "Proveedor", .russian: "Провайдер"],
         "ocr.model": [.english: "OCR model", .spanish: "Modelo OCR", .russian: "Модель OCR"],

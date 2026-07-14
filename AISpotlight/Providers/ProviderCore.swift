@@ -89,6 +89,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
 enum STTProviderID: String, CaseIterable, Codable, Identifiable {
     case mistral
     case openai
+    case deepgram
 
     var id: String { rawValue }
 
@@ -96,6 +97,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .mistral: return "Mistral (Voxtral)"
         case .openai: return "OpenAI"
+        case .deepgram: return "Deepgram"
         }
     }
 
@@ -103,14 +105,36 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .mistral: return "voxtral-mini-latest"
         case .openai: return "gpt-4o-transcribe"
+        case .deepgram: return "nova-3"
         }
     }
 
-    /// The chat provider whose API key is reused for transcription.
-    var keyProvider: ProviderID {
+    /// Whether a usable API key is configured for this STT provider.
+    /// Mistral/OpenAI reuse their chat-provider key; Deepgram is STT-only
+    /// and has its own key slot (`APIKeyStore.AuxKey.deepgram`).
+    /// Uses the cached presence check — safe to call from SwiftUI bodies.
+    var hasKey: Bool {
         switch self {
-        case .mistral: return .mistral
-        case .openai: return .openai
+        case .mistral: return APIKeyStore.hasKey(for: .mistral)
+        case .openai: return APIKeyStore.hasKey(for: .openai)
+        case .deepgram: return APIKeyStore.hasKey(aux: .deepgram)
+        }
+    }
+
+    var apiKey: String? {
+        switch self {
+        case .mistral: return APIKeyStore.key(for: .mistral)
+        case .openai: return APIKeyStore.key(for: .openai)
+        case .deepgram: return APIKeyStore.key(aux: .deepgram)
+        }
+    }
+
+    /// Page where the user can create an API key for this provider.
+    var apiKeyURL: URL {
+        switch self {
+        case .mistral: return ProviderID.mistral.apiKeyURL
+        case .openai: return ProviderID.openai.apiKeyURL
+        case .deepgram: return URL(string: "https://console.deepgram.com/")!
         }
     }
 }
@@ -270,16 +294,21 @@ enum ProviderError: LocalizedError {
         if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
             if let error = json["error"] as? [String: Any], let msg = error["message"] as? String {
                 message = msg
+            } else if let error = json["error"] as? String {
+                message = error
             } else if let msg = json["message"] as? String {
                 message = msg
             } else if let detail = json["detail"] as? String {
                 message = detail
+            } else if let msg = json["err_msg"] as? String {
+                // Deepgram's error shape: {"err_code": ..., "err_msg": ...}
+                message = msg
             }
         } else if let text = String(data: body, encoding: .utf8), !text.isEmpty {
             message = text
         }
-        if message.count > 300 {
-            message = String(message.prefix(300)) + "…"
+        if message.count > 600 {
+            message = String(message.prefix(600)) + "…"
         }
         return .http(status: status, message: message)
     }

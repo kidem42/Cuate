@@ -2,7 +2,8 @@ import Foundation
 
 /// Speech-to-text via provider APIs.
 /// Mistral (Voxtral) and OpenAI share the same OpenAI-style
-/// `POST /v1/audio/transcriptions` multipart endpoint.
+/// `POST /v1/audio/transcriptions` multipart endpoint; Deepgram uses its
+/// own `POST /v1/listen` with a raw binary body.
 enum TranscriptionService {
 
     /// Transcribes the audio file using the configured STT provider.
@@ -13,24 +14,44 @@ enum TranscriptionService {
         let preferred = settings.sttProvider
 
         let candidates: [STTProviderID] = [preferred] + STTProviderID.allCases.filter { $0 != preferred }
-        guard let provider = candidates.first(where: { APIKeyStore.hasKey(for: $0.keyProvider) }) else {
-            throw ProviderError.transcriptionUnavailable
-        }
-        guard let apiKey = APIKeyStore.key(for: provider.keyProvider) else {
+        guard let provider = candidates.first(where: { $0.hasKey }),
+              let apiKey = provider.apiKey else {
             throw ProviderError.transcriptionUnavailable
         }
 
         let model = settings.sttModel(for: provider)
+        // Off the main thread: a minutes-long recording is megabytes, and the
+        // module defaults to MainActor — an unannotated read would block UI.
+        let audioData = try await Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: audioURL)
+        }.value
+
+        switch provider {
+        case .mistral, .openai:
+            return try await transcribeOpenAIStyle(
+                provider: provider, apiKey: apiKey, model: model,
+                audioData: audioData, filename: audioURL.lastPathComponent
+            )
+        case .deepgram:
+            return try await transcribeDeepgram(apiKey: apiKey, model: model, audioData: audioData)
+        }
+    }
+
+    // MARK: - OpenAI-style multipart (Mistral, OpenAI)
+
+    /// nonisolated: multipart assembly copies the audio bytes — keep it off
+    /// the main actor (which is this module's default isolation).
+    private nonisolated static func transcribeOpenAIStyle(
+        provider: STTProviderID, apiKey: String, model: String,
+        audioData: Data, filename: String
+    ) async throws -> String {
         let endpoint: URL
         switch provider {
         case .mistral:
             endpoint = URL(string: "https://api.mistral.ai/v1/audio/transcriptions")!
-        case .openai:
+        default:
             endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
         }
-
-        let audioData = try Data(contentsOf: audioURL)
-        let filename = audioURL.lastPathComponent
 
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: endpoint)
@@ -58,5 +79,35 @@ enum TranscriptionService {
             throw ProviderError.decoding("no `text` in transcription response")
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Deepgram
+
+    /// `POST /v1/listen` with the audio file as the raw request body.
+    /// `language=multi` enables nova-3's multilingual mode (covers en, ru,
+    /// es, de, fr, hi, pt, ja, it, nl — including code-switching mid-speech).
+    private nonisolated static func transcribeDeepgram(apiKey: String, model: String, audioData: Data) async throws -> String {
+        var components = URLComponents(string: "https://api.deepgram.com/v1/listen")!
+        components.queryItems = [
+            URLQueryItem(name: "model", value: model),
+            URLQueryItem(name: "smart_format", value: "true"),
+            URLQueryItem(name: "language", value: "multi"),
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("audio/mp4", forHTTPHeaderField: "Content-Type") // recordings are AAC in an .m4a container
+        request.httpBody = audioData
+
+        let data = try await HTTPClient.json(request)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [String: Any],
+              let channels = results["channels"] as? [[String: Any]],
+              let alternatives = channels.first?["alternatives"] as? [[String: Any]],
+              let transcript = alternatives.first?["transcript"] as? String else {
+            throw ProviderError.decoding("no transcript in Deepgram response")
+        }
+        return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

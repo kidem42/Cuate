@@ -20,6 +20,8 @@ struct SettingsView: View {
     @State private var keyTests: [String: KeyTestState] = [:]
     @State private var braveKeyInput = ""
     @State private var braveMasked: String?
+    @State private var deepgramKeyInput = ""
+    @State private var deepgramMasked: String?
     @State private var isLoadingModels = false
     @State private var statusMessage: String?
     @State private var statusIsError = false
@@ -33,7 +35,7 @@ struct SettingsView: View {
                 .tabItem { Label(L("tab.chat"), systemImage: "bubble.left.and.bubble.right") }
                 .tag(SettingsTab.chat)
 
-            tab { keysSection; webSection }
+            tab { keysSection; speechKeysSection; webSection }
                 .tabItem { Label(L("tab.keys"), systemImage: "key") }
                 .tag(SettingsTab.keys)
 
@@ -297,6 +299,9 @@ struct SettingsView: View {
         if APIKeyStore.key(aux: .brave) != nil {
             validateBraveKey()
         }
+        if APIKeyStore.key(aux: .deepgram) != nil {
+            validateDeepgramKey()
+        }
     }
 
     /// Validates a chat provider key with a cheap live call (model list),
@@ -354,6 +359,7 @@ struct SettingsView: View {
             maskedKeys[provider] = APIKeyStore.maskedKey(for: provider)
         }
         braveMasked = APIKeyStore.maskedKey(aux: .brave)
+        deepgramMasked = APIKeyStore.maskedKey(aux: .deepgram)
     }
 
     // MARK: - Web access
@@ -463,6 +469,76 @@ struct SettingsView: View {
             Text(L("voice.footer"))
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Speech-to-text key (API Keys tab)
+
+    /// Deepgram is STT-only (no chat), so it isn't part of `keysSection`'s
+    /// chat-provider list — it gets its own section, like Brave for web.
+    private var speechKeysSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                HStack(spacing: 6) {
+                    STTProviderLogo(provider: .deepgram, size: 14)
+                    Text("Deepgram")
+                }
+                .frame(width: 150, alignment: .leading)
+                if let masked = deepgramMasked {
+                    HStack(spacing: 6) {
+                        Text(masked)
+                            .font(.system(.callout, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        keyTestIndicator(for: "deepgram")
+                    }
+                    Spacer()
+                    Button(L("keys.recheck")) {
+                        validateDeepgramKey()
+                    }
+                    .disabled(keyTests["deepgram"] == .testing)
+                    Button(L("keys.remove")) {
+                        APIKeyStore.remove(aux: .deepgram)
+                        keyTests["deepgram"] = nil
+                        refreshMasks()
+                    }
+                } else {
+                    SecureField(L("keys.paste"), text: $deepgramKeyInput)
+                        .textFieldStyle(.roundedBorder)
+                    Link(destination: STTProviderID.deepgram.apiKeyURL) {
+                        Text(L("keys.get"))
+                            .font(.caption)
+                    }
+                    Button(L("keys.save")) {
+                        if APIKeyStore.set(deepgramKeyInput, aux: .deepgram) {
+                            deepgramKeyInput = ""
+                            refreshMasks()
+                            validateDeepgramKey()
+                        }
+                    }
+                    .disabled(deepgramKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            keyErrorLine(for: "deepgram")
+            }
+        } header: {
+            Text(L("voice.header"))
+        }
+    }
+
+    /// Validates the Deepgram key with a cheap authenticated call.
+    private func validateDeepgramKey() {
+        guard let key = APIKeyStore.key(aux: .deepgram) else { return }
+        keyTests["deepgram"] = .testing
+        Task {
+            do {
+                var request = URLRequest(url: URL(string: "https://api.deepgram.com/v1/projects")!)
+                request.setValue("Token \(key)", forHTTPHeaderField: "Authorization")
+                _ = try await HTTPClient.json(request)
+                keyTests["deepgram"] = .ok
+            } catch {
+                keyTests["deepgram"] = .failed(error.localizedDescription)
+            }
         }
     }
 
