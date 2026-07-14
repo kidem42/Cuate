@@ -29,6 +29,7 @@ struct ChatWindow: View {
     @State private var isNearBottom = true
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
     @State private var voiceKeyMonitor: Any?
+    @State private var scrollIntentMonitor: Any?
     @State private var pendingVoiceSend: DispatchWorkItem?
     /// When we last auto-scrolled — used to tell a real user scroll-up from a
     /// transient "content grew underneath us" geometry blip during streaming.
@@ -353,6 +354,7 @@ struct ChatWindow: View {
             }
             self.pendingAttachment = appState.pendingAttachment
             installVoiceKeyMonitor()
+            installScrollIntentMonitor()
         }
         .onReceive(appState.$pendingAttachment) { attachment in
             self.pendingAttachment = attachment
@@ -716,6 +718,23 @@ struct ChatWindow: View {
 
     private func handleVoiceRecordingCancel() {
         audioRecorder.cancelRecording()
+    }
+
+    /// An upward wheel/trackpad scroll in the panel is an explicit "let me
+    /// read history" gesture — it must stop the streaming auto-follow at once.
+    /// The time-based guard in `trackNearBottom` alone can't see it: during
+    /// streaming the auto-scroll re-fires on every flush, so its 0.5s window
+    /// never opens and the user's scroll was overridden on the next chunk —
+    /// the panel felt frozen (a field `sample` showed a perpetual
+    /// NSScrollAnimationHelper animation retargeting the bottom every frame).
+    private func installScrollIntentMonitor() {
+        guard scrollIntentMonitor == nil else { return }
+        scrollIntentMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            if event.window is FloatingPanelWindow, event.scrollingDeltaY > 0 {
+                isNearBottom = false // trackNearBottom re-arms it at the bottom
+            }
+            return event
+        }
     }
 
     // MARK: - Keyboard control while recording (Space / double-Space / Esc)
