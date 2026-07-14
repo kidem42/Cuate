@@ -93,7 +93,12 @@ struct SettingsView: View {
         Section(L("chat.header")) {
             Picker(L("chat.provider"), selection: $settings.chatProvider) {
                 ForEach(ProviderID.allCases) { provider in
-                    Text(provider.displayName).tag(provider)
+                    Label {
+                        Text(provider.displayName)
+                    } icon: {
+                        ProviderLogo(provider: provider, size: 14)
+                    }
+                    .tag(provider)
                 }
             }
 
@@ -203,25 +208,20 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func keyRow(for provider: ProviderID) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
         HStack {
-            Text(provider.displayName)
-                .frame(width: 150, alignment: .leading)
+            HStack(spacing: 6) {
+                ProviderLogo(provider: provider, size: 14)
+                Text(provider.displayName)
+            }
+            .frame(width: 150, alignment: .leading)
 
             if let masked = maskedKeys[provider] ?? nil {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(masked)
-                            .font(.system(.callout, design: .monospaced))
-                            .foregroundColor(.secondary)
-                        keyTestIndicator(for: provider.rawValue)
-                    }
-                    // Inline reason when a key is invalid.
-                    if case .failed(let reason) = keyTests[provider.rawValue] {
-                        Text(reason)
-                            .font(.caption2)
-                            .foregroundColor(.red)
-                            .lineLimit(2)
-                    }
+                HStack(spacing: 6) {
+                    Text(masked)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    keyTestIndicator(for: provider.rawValue)
                 }
                 Spacer()
                 Button(L("keys.recheck")) {
@@ -249,6 +249,24 @@ struct SettingsView: View {
                 }
                 .disabled((keyInput[provider] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+        }
+        // Full-width error line below the row — squeezing it into the row
+        // truncated the message beyond usefulness.
+        keyErrorLine(for: provider.rawValue)
+        }
+    }
+
+    /// The full validation-failure reason, wrapping across the section width;
+    /// selectable so it can be copied into a search or bug report.
+    @ViewBuilder
+    private func keyErrorLine(for id: String) -> some View {
+        if case .failed(let reason) = keyTests[id] {
+            Text(reason)
+                .font(.caption)
+                .foregroundColor(.red)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .help(reason)
         }
     }
 
@@ -344,23 +362,19 @@ struct SettingsView: View {
         Section {
             Toggle(L("web.allow"), isOn: $settings.webSearchEnabled)
 
+            VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(L("web.brave"))
-                    .frame(width: 150, alignment: .leading)
+                HStack(spacing: 6) {
+                    ProviderGlyph(name: "brave", fallbackLetter: "B", size: 14)
+                    Text(L("web.brave"))
+                }
+                .frame(width: 150, alignment: .leading)
                 if let masked = braveMasked {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(masked)
-                                .font(.system(.callout, design: .monospaced))
-                                .foregroundColor(.secondary)
-                            keyTestIndicator(for: "brave")
-                        }
-                        if case .failed(let reason) = keyTests["brave"] {
-                            Text(reason)
-                                .font(.caption2)
-                                .foregroundColor(.red)
-                                .lineLimit(2)
-                        }
+                    HStack(spacing: 6) {
+                        Text(masked)
+                            .font(.system(.callout, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        keyTestIndicator(for: "brave")
                     }
                     Spacer()
                     Button(L("keys.recheck")) {
@@ -388,6 +402,8 @@ struct SettingsView: View {
                     }
                     .disabled(braveKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            }
+            keyErrorLine(for: "brave")
             }
         } header: {
             Text(L("web.header"))
@@ -417,7 +433,12 @@ struct SettingsView: View {
         Section {
             Picker(L("voice.transcription"), selection: $settings.sttProvider) {
                 ForEach(STTProviderID.allCases) { provider in
-                    Text(provider.displayName).tag(provider)
+                    Label {
+                        Text(provider.displayName)
+                    } icon: {
+                        STTProviderLogo(provider: provider, size: 14)
+                    }
+                    .tag(provider)
                 }
             }
             .onChange(of: settings.sttProvider) { _, newValue in
@@ -429,6 +450,13 @@ struct SettingsView: View {
                 .onChange(of: sttModelInput) { _, newValue in
                     settings.setSTTModel(newValue, for: settings.sttProvider)
                 }
+
+            // Parameter tabs hold pickers only; keys live in the API Keys tab.
+            if !settings.sttProvider.hasKey {
+                Text(L("voice.needKey"))
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
         } header: {
             Text(L("voice.header"))
         } footer: {
@@ -498,7 +526,12 @@ struct SettingsView: View {
 
     private var ocrSection: some View {
         Section {
-            LabeledContent(L("ocr.provider"), value: "Mistral OCR")
+            LabeledContent(L("ocr.provider")) {
+                HStack(spacing: 6) {
+                    ProviderLogo(provider: .mistral, size: 14)
+                    Text("Mistral OCR")
+                }
+            }
 
             TextField(L("ocr.model"), text: $settings.ocrModel, prompt: Text(AppSettings.defaultOCRModel))
                 .textFieldStyle(.roundedBorder)
