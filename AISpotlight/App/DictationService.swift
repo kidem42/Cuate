@@ -68,6 +68,7 @@ final class DictationService: NSObject, ObservableObject {
     /// Same hotkey starts and stops. A second mode's hotkey while recording
     /// also stops (whatever is captured gets processed in the started mode).
     func toggle(mode: Mode) {
+        Diagnostics.log("dictation", "toggle mode=\(mode) phase=\(phase)")
         switch phase {
         case .idle:
             start(mode: mode)

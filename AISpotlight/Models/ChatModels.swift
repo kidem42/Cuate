@@ -135,6 +135,7 @@ class ChatStore: ObservableObject {
     }
 
     private func loadFromDisk() {
+        let start = DispatchTime.now()
         guard let data = try? Data(contentsOf: Self.storeURL),
               let persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) else { return }
         // Drop dangling voice-file references (recordings are session-scoped).
@@ -147,6 +148,8 @@ class ChatStore: ObservableObject {
         }
         conversationSummary = persisted.conversationSummary
         summaryCoversCount = min(persisted.summaryCoversCount, messages.count)
+        let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
+        Diagnostics.log("store", "load bytes=\(data.count) messages=\(messages.count) ms=\(ms)")
     }
 
     /// Debounced write of the conversation to Application Support.
@@ -164,8 +167,11 @@ class ChatStore: ObservableObject {
                 summaryCoversCount: self.summaryCoversCount
             )
             DispatchQueue.global(qos: .utility).async {
+                let start = DispatchTime.now()
                 if let data = try? JSONEncoder().encode(persisted) {
                     try? data.write(to: Self.storeURL, options: .atomic)
+                    let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
+                    Diagnostics.log("store", "save bytes=\(data.count) messages=\(persisted.messages.count) ms=\(ms)")
                 }
             }
         }

@@ -223,6 +223,16 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    // MARK: - Diagnostics
+
+    /// Opt-in local logging + hang watchdog (see `Diagnostics`).
+    @Published var diagnosticsEnabled: Bool {
+        didSet {
+            defaults.set(diagnosticsEnabled, forKey: Diagnostics.defaultsKey)
+            Diagnostics.setEnabled(diagnosticsEnabled)
+        }
+    }
+
     // MARK: - Language
 
     @Published var language: AppLanguage {
@@ -358,6 +368,7 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         webSearchEnabled = defaults.object(forKey: "webSearchEnabled") as? Bool ?? true
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         panelFollowsMouse = defaults.object(forKey: "panelFollowsMouse") as? Bool ?? true
+        diagnosticsEnabled = defaults.bool(forKey: Diagnostics.defaultsKey)
         panelHasCustomPosition = defaults.bool(forKey: "panelHasCustomPosition")
         let lang = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .english
         language = lang

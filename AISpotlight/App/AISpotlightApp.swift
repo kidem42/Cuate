@@ -30,6 +30,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Opt-in logging + hang watchdog — first, so launch events are captured.
+        Diagnostics.startIfEnabled()
+        Diagnostics.log("app", "launch")
+
         // Hide dock icon - app will run in background
         NSApp.setActivationPolicy(.accessory)
 
@@ -568,6 +572,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showChatWindow() {
         guard let window = chatWindow else { return }
 
+        Diagnostics.log("ui", "panel.show")
         positionPanelForShow(window)
 
         // Use NSRunningApplication for more reliable activation in macOS Sonoma+
@@ -588,6 +593,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         Task { @MainActor in
             do {
+                Diagnostics.log("ui", "screenshot.full")
                 let screenshotData = try await ScreenshotCapturer.captureActiveDisplay()
                 appState.setScreenshot(data: screenshotData)
                 showChatWindow()
@@ -608,6 +614,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Task { @MainActor in
             hideChatWindow() // don't capture our own panel
             do {
+                Diagnostics.log("ui", "screenshot.area")
                 guard let data = try await ScreenshotCapturer.captureInteractiveArea() else {
                     return // user pressed Esc
                 }
@@ -634,6 +641,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let window = chatWindow, window.isVisible else { return }
         // Keep the panel visible while the user works in Settings
         if let settingsWindow, settingsWindow.isKeyWindow { return }
+        Diagnostics.log("ui", "panel.hide")
         window.orderOut(nil)
     }
 }

@@ -62,11 +62,14 @@ You have a web_search tool. Use it when the answer depends on current events, li
 
         let initialMessages = try await buildMessages(from: history, providerID: providerID)
         let provider = ProviderRegistry.provider(for: providerID)
+        Diagnostics.log("chat", "turn.start provider=\(providerID.rawValue) model=\(model) history=\(history.count) tools=\(options.tools.count)")
 
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 var messages = initialMessages
                 var iteration = 0
+                var chunkCount = 0
+                var totalChars = 0
                 do {
                     while true {
                         iteration += 1
@@ -84,6 +87,8 @@ You have a web_search tool. Use it when the answer depends on current events, li
                             switch event {
                             case .text(let chunk):
                                 turnText += chunk
+                                chunkCount += 1
+                                totalChars += chunk.count
                                 continuation.yield(.text(chunk))
                             case .toolCalls(let calls):
                                 toolCalls = calls
@@ -96,6 +101,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
                         // tools, and loop for the follow-up turn.
                         messages.append(LLMMessage(role: .assistant, text: turnText, toolCalls: toolCalls))
                         for call in toolCalls {
+                            Diagnostics.log("chat", "tool.call \(call.name)")
                             let result: String
                             if call.name == BraveSearchService.toolSpec.name {
                                 let query = call.arguments["query"] as? String ?? ""
@@ -117,8 +123,10 @@ You have a web_search tool. Use it when the answer depends on current events, li
                         }
                         continuation.yield(.status(L("panel.thinking")))
                     }
+                    Diagnostics.log("chat", "turn.end iterations=\(iteration) chunks=\(chunkCount) chars=\(totalChars)")
                     continuation.finish()
                 } catch {
+                    Diagnostics.log("chat", "turn.error \(String(error.localizedDescription.prefix(200)))")
                     continuation.finish(throwing: error)
                 }
             }
@@ -206,6 +214,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
 
         let toSummarize = active.dropLast(keepRecentCount).filter { $0.messageType != .system }
         guard !toSummarize.isEmpty else { return }
+        Diagnostics.log("chat", "compress.start messages=\(toSummarize.count)")
         let newCoversCount = store.messages.count - keepRecentCount
 
         var transcript = ""
@@ -243,6 +252,7 @@ context notes, not prose.
 
         let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        Diagnostics.log("chat", "compress.done chars=\(trimmed.count) covers=\(newCoversCount)")
         store.setSummary(trimmed, coversCount: newCoversCount)
     }
 }

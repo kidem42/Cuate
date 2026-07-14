@@ -104,6 +104,7 @@ final class LayoutFixAddon {
         guard !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
+        Diagnostics.log("layoutfix", "fix.begin smart=\(smart)")
 
         guard TextInserter.checkAccessibility(promptIfNeeded: true) else {
             NSSound.beep()

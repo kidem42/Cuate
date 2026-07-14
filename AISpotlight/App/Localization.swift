@@ -116,6 +116,14 @@ enum Localization {
         // MARK: General
         "general.launchAtLogin": [.english: "Launch at login", .spanish: "Abrir al iniciar sesión", .russian: "Запускать при входе в систему"],
 
+        // MARK: Diagnostics
+        "diag.header": [.english: "Diagnostics", .spanish: "Diagnóstico", .russian: "Диагностика"],
+        "diag.enable": [.english: "Logging & freeze detection", .spanish: "Registro y detección de bloqueos", .russian: "Логи и мониторинг зависаний"],
+        "diag.export": [.english: "Export Logs to Downloads", .spanish: "Exportar registros a Descargas", .russian: "Экспортировать логи в «Загрузки»"],
+        "diag.open": [.english: "Open Logs Folder", .spanish: "Abrir carpeta de registros", .russian: "Открыть папку логов"],
+        "diag.exported": [.english: "Logs exported to Downloads", .spanish: "Registros exportados a Descargas", .russian: "Логи выгружены в «Загрузки»"],
+        "diag.footer": [.english: "Writes an event log on this Mac and, if the interface freezes for over 2 seconds, saves a report with stack traces. No message texts, prompts or API keys are ever recorded. Export the archive and attach it to a bug report.", .spanish: "Guarda un registro de eventos en este Mac y, si la interfaz se congela más de 2 segundos, crea un informe con trazas de pila. Nunca se registran textos de mensajes, prompts ni claves API. Exporta el archivo y adjúntalo a un informe de error.", .russian: "Ведёт журнал событий на этом Mac и при зависании интерфейса дольше 2 секунд сохраняет отчёт со стеками потоков. Тексты сообщений, промпты и ключи API никогда не записываются. Выгрузите архив и приложите его к сообщению об ошибке."],
+
         // MARK: Panel placement
         "panel.header": [.english: "Panel", .spanish: "Panel", .russian: "Панель"],
         "panel.followMouse": [.english: "Open panel on the screen with the cursor", .spanish: "Abrir el panel en la pantalla con el cursor", .russian: "Открывать панель на экране с курсором"],

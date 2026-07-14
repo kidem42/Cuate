@@ -45,7 +45,7 @@ struct SettingsView: View {
                 .tabItem { Label(L("tab.voice"), systemImage: "mic") }
                 .tag(SettingsTab.voice)
 
-            tab { generalSection; hotkeysSection; panelSection; appearanceSection }
+            tab { generalSection; hotkeysSection; panelSection; appearanceSection; diagnosticsSection }
                 .tabItem { Label(L("tab.general"), systemImage: "gearshape") }
                 .tag(SettingsTab.general)
 
@@ -709,6 +709,42 @@ struct SettingsView: View {
             Text(L("panel.footer"))
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Diagnostics
+
+    private var diagnosticsSection: some View {
+        Section {
+            Toggle(L("diag.enable"), isOn: $settings.diagnosticsEnabled)
+
+            HStack {
+                Button(L("diag.export")) { exportLogs() }
+                Button(L("diag.open")) { Diagnostics.openLogsFolder() }
+            }
+        } header: {
+            Text(L("diag.header"))
+        } footer: {
+            Text(L("diag.footer"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    /// Zips logs into ~/Downloads off the main thread (ditto + file copies).
+    private func exportLogs() {
+        statusMessage = nil
+        Task {
+            do {
+                let url = try await Task.detached(priority: .userInitiated) {
+                    try Diagnostics.exportToDownloads()
+                }.value
+                statusMessage = "\(L("diag.exported")): \(url.lastPathComponent)"
+                statusIsError = false
+            } catch {
+                statusMessage = error.localizedDescription
+                statusIsError = true
+            }
         }
     }
 
