@@ -49,7 +49,7 @@ struct SettingsView: View {
                 .tabItem { Label(L("tab.general"), systemImage: "gearshape") }
                 .tag(SettingsTab.general)
 
-            tab { promptSection }
+            tab { switcherSection; promptSection }
                 .tabItem { Label(L("tab.prompts"), systemImage: "text.quote") }
                 .tag(SettingsTab.prompts)
 
@@ -748,6 +748,42 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Panel switcher (style + per-preset visibility)
+
+    private var switcherSection: some View {
+        Section {
+            Picker(L("switcher.style"), selection: $settings.presetSwitcherStyle) {
+                ForEach(PresetSwitcherStyle.allCases) { style in
+                    Text(style.displayName).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            // One visibility switch per preset (menu and chip row alike).
+            ForEach(settings.allPresets) { preset in
+                Toggle(isOn: Binding(
+                    get: { settings.isPresetShownInSwitcher(named: preset.name) },
+                    set: { settings.setPresetShownInSwitcher($0, named: preset.name) }
+                )) {
+                    HStack(spacing: 6) {
+                        if let icon = settings.presetIcon(named: preset.name) {
+                            Text(icon)
+                        }
+                        Text(preset.isBuiltIn ? preset.name : "\(preset.name) (\(L("prompts.custom")))")
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+        } header: {
+            Text(L("switcher.header"))
+        } footer: {
+            Text(L("switcher.footer"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
     // MARK: - System prompt & presets
 
     private var promptSection: some View {
@@ -777,14 +813,6 @@ struct SettingsView: View {
                 .disabled(isActivePresetBuiltIn)
                 .help(isActivePresetBuiltIn ? L("prompts.builtInNoDelete") : L("prompts.deleteThis"))
             }
-
-            // How the preset switcher is rendered in the panel header.
-            Picker(L("prompts.switcherStyle"), selection: $settings.presetSwitcherStyle) {
-                ForEach(PresetSwitcherStyle.allCases) { style in
-                    Text(style.displayName).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
 
             TextEditor(text: $settings.systemPrompt)
                 .font(.system(size: 12))

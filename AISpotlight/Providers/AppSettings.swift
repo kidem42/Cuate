@@ -356,6 +356,12 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         didSet { defaults.set(presetSwitcherStyle.rawValue, forKey: "presetSwitcherStyle") }
     }
 
+    /// Presets excluded from the panel's switcher (menu and chip row alike).
+    /// The active preset is always offered regardless — see `switcherPresets`.
+    @Published private(set) var hiddenPresets: Set<String> {
+        didSet { defaults.set(Array(hiddenPresets), forKey: "hiddenPresets") }
+    }
+
     private init() {
         chatProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
         selectedModels = defaults.dictionary(forKey: "selectedModels") as? [String: String] ?? [:]
@@ -385,6 +391,7 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         customPresets = defaults.dictionary(forKey: "customPresets") as? [String: String] ?? [:]
         presetIcons = defaults.dictionary(forKey: "presetIcons") as? [String: String] ?? [:]
         presetSwitcherStyle = PresetSwitcherStyle(rawValue: defaults.string(forKey: "presetSwitcherStyle") ?? "") ?? .menu
+        hiddenPresets = Set(defaults.stringArray(forKey: "hiddenPresets") ?? [])
         activePresetName = defaults.string(forKey: "activePresetName") ?? Self.builtInPresets[0].name
         systemPrompt = defaults.string(forKey: "systemPrompt") ?? Self.builtInPresets[0].text
 
@@ -426,6 +433,25 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
     var allPresets: [PromptPreset] {
         Self.builtInPresets + customPresets.keys.sorted().map {
             PromptPreset(name: $0, text: customPresets[$0] ?? "", isBuiltIn: false)
+        }
+    }
+
+    /// Presets the panel switcher offers: the non-hidden ones, plus the active
+    /// preset — the panel must always be able to display its current state.
+    var switcherPresets: [PromptPreset] {
+        allPresets.filter { !hiddenPresets.contains($0.name) || $0.name == activePresetName }
+    }
+
+    /// Whether a preset appears in the panel switcher (menu or chip row).
+    func isPresetShownInSwitcher(named name: String) -> Bool {
+        !hiddenPresets.contains(name)
+    }
+
+    func setPresetShownInSwitcher(_ shown: Bool, named name: String) {
+        if shown {
+            hiddenPresets.remove(name)
+        } else {
+            hiddenPresets.insert(name)
         }
     }
 
@@ -483,6 +509,7 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         guard customPresets[name] != nil else { return }
         customPresets.removeValue(forKey: name)
         presetIcons.removeValue(forKey: name)
+        hiddenPresets.remove(name)
         if activePresetName == name {
             applyPreset(named: Self.builtInPresets[0].name)
         }

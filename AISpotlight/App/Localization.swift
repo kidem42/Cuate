@@ -149,9 +149,13 @@ enum Localization {
         "prompts.savePlaceholder": [.english: "Save current text as a new preset…", .spanish: "Guardar el texto actual como nuevo preajuste…", .russian: "Сохранить текущий текст как новый пресет…"],
         "prompts.savePreset": [.english: "Save Preset", .spanish: "Guardar preajuste", .russian: "Сохранить пресет"],
         "prompts.footer": [.english: "Pick a preset, edit the text freely (an “Edited” marker appears), revert anytime, or save your edits under a new name.", .spanish: "Elige un preajuste, edita el texto libremente (aparece un marcador “Editado”), revierte cuando quieras o guarda con un nombre nuevo.", .russian: "Выберите пресет, свободно правьте текст (появится метка «Изменено»), в любой момент откатывайте или сохраняйте под новым именем."],
-        "prompts.switcherStyle": [.english: "Panel switcher", .spanish: "Selector en el panel", .russian: "Переключатель в панели"],
         "prompts.styleMenu": [.english: "Menu", .spanish: "Menú", .russian: "Меню"],
         "prompts.styleButtons": [.english: "Buttons", .spanish: "Botones", .russian: "Кнопки"],
+
+        // MARK: Panel switcher section
+        "switcher.header": [.english: "Panel Switcher", .spanish: "Selector del panel", .russian: "Переключатель в панели"],
+        "switcher.style": [.english: "Style", .spanish: "Estilo", .russian: "Вид"],
+        "switcher.footer": [.english: "How presets appear in the panel header and which of them are offered there. Hidden presets stay fully usable on this tab; the active preset is always shown in the panel.", .spanish: "Cómo se muestran los preajustes en la cabecera del panel y cuáles se ofrecen ahí. Los preajustes ocultos siguen totalmente disponibles en esta pestaña; el preajuste activo siempre se muestra en el panel.", .russian: "Как пресеты выглядят в шапке панели и какие из них там доступны. Скрытые пресеты остаются полностью рабочими на этой вкладке; активный пресет всегда виден в панели."],
         "prompts.iconHelp": [.english: "Preset icon — click to pick an emoji, right-click to reset", .spanish: "Icono del preajuste: clic para elegir un emoji, clic derecho para restablecer", .russian: "Иконка пресета — клик открывает выбор эмодзи, правый клик сбрасывает"],
         "prompts.iconClear": [.english: "Reset icon", .spanish: "Restablecer icono", .russian: "Сбросить иконку"],
 

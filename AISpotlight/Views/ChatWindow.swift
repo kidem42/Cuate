@@ -426,7 +426,7 @@ struct ChatWindow: View {
     /// Classic dropdown: icon + active preset name.
     private var presetMenu: some View {
         Menu {
-            presetMenuItems(settings.allPresets)
+            presetMenuItems(settings.switcherPresets)
         } label: {
             headerControlLabel(text: settings.activePresetName) {
                 Image(systemName: "person.crop.square")
@@ -445,7 +445,7 @@ struct ChatWindow: View {
     /// One-click chip row. When the active preset is hidden in the overflow,
     /// the "…" button borrows its icon so the active state stays visible.
     private var presetChipsRow: some View {
-        let presets = settings.allPresets
+        let presets = settings.switcherPresets
         let visible = Array(presets.prefix(Self.maxVisiblePresetChips))
         let overflow = Array(presets.dropFirst(Self.maxVisiblePresetChips))
         return HStack(spacing: 6) {
