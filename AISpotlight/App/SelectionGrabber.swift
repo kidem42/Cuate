@@ -70,7 +70,9 @@ enum SelectionGrabber {
     /// Same technique as LayoutFix's copySelection: a unique sentinel
     /// distinguishes "nothing was copied" from real content, and the user's
     /// clipboard is restored afterwards.
-    private static func clipboardSelection() async -> String? {
+    /// Internal (not private) so the e2e harness can exercise the sentinel /
+    /// restore mechanics directly.
+    static func clipboardSelection() async -> String? {
         let pasteboard = NSPasteboard.general
         let saved = pasteboard.string(forType: .string)
         let sentinel = "‹aispotlight-grab-\(pasteboard.changeCount)›"
