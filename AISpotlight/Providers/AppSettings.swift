@@ -20,6 +20,21 @@ enum AppearanceMode: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+/// How the prompt-preset switcher is rendered in the panel header.
+enum PresetSwitcherStyle: String, CaseIterable, Identifiable {
+    case menu
+    case buttons
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .menu: return L("prompts.styleMenu")
+        case .buttons: return L("prompts.styleButtons")
+        }
+    }
+}
+
 /// Non-secret app settings (provider choice, models, system prompt).
 /// API keys are NOT stored here — they live in the Keychain (`APIKeyStore`).
 @MainActor
@@ -321,6 +336,16 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         didSet { defaults.set(customPresets, forKey: "customPresets") }
     }
 
+    /// Per-preset emoji icons (user overrides; built-in defaults live in `builtInIcons`).
+    @Published private(set) var presetIcons: [String: String] {
+        didSet { defaults.set(presetIcons, forKey: "presetIcons") }
+    }
+
+    /// How the preset switcher looks in the panel header: dropdown menu or chip row.
+    @Published var presetSwitcherStyle: PresetSwitcherStyle {
+        didSet { defaults.set(presetSwitcherStyle.rawValue, forKey: "presetSwitcherStyle") }
+    }
+
     private init() {
         chatProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
         selectedModels = defaults.dictionary(forKey: "selectedModels") as? [String: String] ?? [:]
@@ -347,6 +372,8 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         dictationTargetLanguage = defaults.string(forKey: "dictationTargetLanguage") ?? "English"
         dictationChunked = defaults.object(forKey: "dictationChunked") as? Bool ?? true
         customPresets = defaults.dictionary(forKey: "customPresets") as? [String: String] ?? [:]
+        presetIcons = defaults.dictionary(forKey: "presetIcons") as? [String: String] ?? [:]
+        presetSwitcherStyle = PresetSwitcherStyle(rawValue: defaults.string(forKey: "presetSwitcherStyle") ?? "") ?? .menu
         activePresetName = defaults.string(forKey: "activePresetName") ?? Self.builtInPresets[0].name
         systemPrompt = defaults.string(forKey: "systemPrompt") ?? Self.builtInPresets[0].text
 
@@ -398,6 +425,28 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
         return customPresets[name]
     }
 
+    /// Default emoji for built-in presets (user overrides live in `presetIcons`).
+    private static let builtInIcons: [String: String] = [
+        "Assistant": "💬",
+        "Translator": "📖",
+        "Translator ES": "🌮"
+    ]
+
+    /// The emoji shown for a preset in the panel header, if any.
+    func presetIcon(named name: String) -> String? {
+        presetIcons[name] ?? Self.builtInIcons[name]
+    }
+
+    /// Sets (or clears) a preset's emoji; only the first grapheme is kept.
+    func setPresetIcon(_ emoji: String, forPreset name: String) {
+        let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            presetIcons.removeValue(forKey: name)
+        } else {
+            presetIcons[name] = String(trimmed.prefix(1))
+        }
+    }
+
     /// Switches to a preset, replacing the working copy.
     func applyPreset(named name: String) {
         guard let text = presetText(named: name) else { return }
@@ -422,6 +471,7 @@ Do not mark plain emphasis this way; use **bold** for emphasis.
     func deleteCustomPreset(named name: String) {
         guard customPresets[name] != nil else { return }
         customPresets.removeValue(forKey: name)
+        presetIcons.removeValue(forKey: name)
         if activePresetName == name {
             applyPreset(named: Self.builtInPresets[0].name)
         }

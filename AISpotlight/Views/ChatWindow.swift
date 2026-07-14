@@ -51,9 +51,11 @@ struct ChatWindow: View {
                         .background(Color.clear)
                         .accessibilityHidden(true)
 
-                    // Provider switcher + prompt preset switcher + new chat.
-                    // All three share the same visual language: 11pt secondary
-                    // text / 12pt icons, a fixed 20pt row, centered vertically.
+                    // Provider switcher (left corner) · preset switcher + new
+                    // chat (right corner). All share the same visual language:
+                    // 11pt secondary text / 12pt icons, a fixed 20pt row.
+                    // The Spacer between the zones stays click-through, so the
+                    // middle of the strip still drags the window.
                     HStack(alignment: .center, spacing: 12) {
                         // Quick chat-provider switcher — only providers with keys
                         let available = availableProviders
@@ -86,29 +88,15 @@ struct ChatWindow: View {
                             .help(L("panel.providerHelp"))
                         }
 
-                        // Prompt preset switcher
-                        Menu {
-                            ForEach(settings.allPresets) { preset in
-                                Button {
-                                    settings.applyPreset(named: preset.name)
-                                } label: {
-                                    if preset.name == settings.activePresetName {
-                                        Label(preset.name, systemImage: "checkmark")
-                                    } else {
-                                        Text(preset.name)
-                                    }
-                                }
-                            }
-                        } label: {
-                            headerControlLabel(text: settings.activePresetName) {
-                                Image(systemName: "person.crop.square")
-                                    .font(.system(size: 11))
-                            }
+                        Spacer(minLength: 12)
+
+                        // Prompt preset switcher: dropdown menu or one-click
+                        // chip row, per the style chosen in Settings → Prompts.
+                        if settings.presetSwitcherStyle == .buttons {
+                            presetChipsRow
+                        } else {
+                            presetMenu
                         }
-                        .menuIndicator(.hidden)
-                        .buttonStyle(PlainButtonStyle())
-                        .fixedSize()
-                        .help(L("panel.presetHelp"))
 
                         Button(action: startNewChat) {
                             Image(systemName: "square.and.pencil")
@@ -118,9 +106,12 @@ struct ChatWindow: View {
                         }
                         .buttonStyle(PlainButtonStyle())
                         .help(L("panel.newChat"))
+                        // Extra gap: visually separates "new chat" from the
+                        // preset zone so a mis-click doesn't wipe the chat.
+                        .padding(.leading, 10)
                     }
                     .frame(height: 20)
-                    .padding(.trailing, 12)
+                    .padding(.horizontal, 12)
                     .padding(.top, 5)
                 }
                 .frame(height: 22)
@@ -407,6 +398,101 @@ struct ChatWindow: View {
         }
         .foregroundColor(.secondary)
         .frame(height: 20)
+    }
+
+    // MARK: - Preset switcher (header)
+
+    /// Menu entries for a list of presets; a checkmark marks the active one.
+    @ViewBuilder
+    private func presetMenuItems(_ presets: [AppSettings.PromptPreset]) -> some View {
+        ForEach(presets) { preset in
+            Button {
+                settings.applyPreset(named: preset.name)
+            } label: {
+                if preset.name == settings.activePresetName {
+                    Label(preset.name, systemImage: "checkmark")
+                } else {
+                    Text(preset.name)
+                }
+            }
+        }
+    }
+
+    /// Classic dropdown: icon + active preset name.
+    private var presetMenu: some View {
+        Menu {
+            presetMenuItems(settings.allPresets)
+        } label: {
+            headerControlLabel(text: settings.activePresetName) {
+                Image(systemName: "person.crop.square")
+                    .font(.system(size: 11))
+            }
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(PlainButtonStyle())
+        .fixedSize()
+        .help(L("panel.presetHelp"))
+    }
+
+    /// Presets beyond the first five collapse into a trailing "…" menu.
+    private static let maxVisiblePresetChips = 5
+
+    /// One-click chip row. When the active preset is hidden in the overflow,
+    /// the "…" button borrows its icon so the active state stays visible.
+    private var presetChipsRow: some View {
+        let presets = settings.allPresets
+        let visible = Array(presets.prefix(Self.maxVisiblePresetChips))
+        let overflow = Array(presets.dropFirst(Self.maxVisiblePresetChips))
+        return HStack(spacing: 6) {
+            ForEach(visible) { preset in
+                Button {
+                    settings.applyPreset(named: preset.name)
+                } label: {
+                    presetChipIcon(preset, isActive: preset.name == settings.activePresetName)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(preset.name)
+            }
+            if !overflow.isEmpty {
+                let hiddenActive = overflow.first { $0.name == settings.activePresetName }
+                Menu {
+                    presetMenuItems(overflow)
+                } label: {
+                    if let hiddenActive {
+                        presetChipIcon(hiddenActive, isActive: true)
+                    } else {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .frame(width: 20, height: 20)
+                    }
+                }
+                .menuIndicator(.hidden)
+                .buttonStyle(PlainButtonStyle())
+                .fixedSize()
+                .help(L("panel.presetHelp"))
+            }
+        }
+        .frame(height: 20)
+    }
+
+    /// A 20pt chip: the preset's emoji (grayscale when inactive, colored when
+    /// active) or a two-letter fallback in a subtle circle.
+    @ViewBuilder
+    private func presetChipIcon(_ preset: AppSettings.PromptPreset, isActive: Bool) -> some View {
+        if let emoji = settings.presetIcon(named: preset.name) {
+            Text(emoji)
+                .font(.system(size: 13))
+                .grayscale(isActive ? 0 : 1)
+                .opacity(isActive ? 1 : 0.65)
+                .frame(width: 20, height: 20)
+        } else {
+            Text(String(preset.name.trimmingCharacters(in: .whitespaces).prefix(2)).uppercased())
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(isActive ? .primary : .secondary)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Color.secondary.opacity(isActive ? 0.25 : 0.12)))
+        }
     }
 
     private func startNewChat() {

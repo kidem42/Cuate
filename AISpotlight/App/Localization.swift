@@ -141,6 +141,11 @@ enum Localization {
         "prompts.savePlaceholder": [.english: "Save current text as a new preset…", .spanish: "Guardar el texto actual como nuevo preajuste…", .russian: "Сохранить текущий текст как новый пресет…"],
         "prompts.savePreset": [.english: "Save Preset", .spanish: "Guardar preajuste", .russian: "Сохранить пресет"],
         "prompts.footer": [.english: "Pick a preset, edit the text freely (an “Edited” marker appears), revert anytime, or save your edits under a new name.", .spanish: "Elige un preajuste, edita el texto libremente (aparece un marcador “Editado”), revierte cuando quieras o guarda con un nombre nuevo.", .russian: "Выберите пресет, свободно правьте текст (появится метка «Изменено»), в любой момент откатывайте или сохраняйте под новым именем."],
+        "prompts.switcherStyle": [.english: "Panel switcher", .spanish: "Selector en el panel", .russian: "Переключатель в панели"],
+        "prompts.styleMenu": [.english: "Menu", .spanish: "Menú", .russian: "Меню"],
+        "prompts.styleButtons": [.english: "Buttons", .spanish: "Botones", .russian: "Кнопки"],
+        "prompts.iconHelp": [.english: "Preset icon — click to pick an emoji, right-click to reset", .spanish: "Icono del preajuste: clic para elegir un emoji, clic derecho para restablecer", .russian: "Иконка пресета — клик открывает выбор эмодзи, правый клик сбрасывает"],
+        "prompts.iconClear": [.english: "Reset icon", .spanish: "Restablecer icono", .russian: "Сбросить иконку"],
 
         // MARK: Status menu
         "menu.open": [.english: "Open Assistant", .spanish: "Abrir asistente", .russian: "Открыть ассистента"],

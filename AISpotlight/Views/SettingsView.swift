@@ -727,6 +727,12 @@ struct SettingsView: View {
                     }
                 }
 
+                // Emoji icon of the active preset (shown as a chip in the panel).
+                EmojiIconPicker(
+                    icon: settings.presetIcon(named: settings.activePresetName),
+                    onPick: { settings.setPresetIcon($0, forPreset: settings.activePresetName) }
+                )
+
                 Button(role: .destructive) {
                     settings.deleteCustomPreset(named: settings.activePresetName)
                 } label: {
@@ -735,6 +741,14 @@ struct SettingsView: View {
                 .disabled(isActivePresetBuiltIn)
                 .help(isActivePresetBuiltIn ? L("prompts.builtInNoDelete") : L("prompts.deleteThis"))
             }
+
+            // How the preset switcher is rendered in the panel header.
+            Picker(L("prompts.switcherStyle"), selection: $settings.presetSwitcherStyle) {
+                ForEach(PresetSwitcherStyle.allCases) { style in
+                    Text(style.displayName).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
 
             TextEditor(text: $settings.systemPrompt)
                 .font(.system(size: 12))
@@ -777,5 +791,98 @@ struct SettingsView: View {
 
     private var promptIsModified: Bool {
         settings.systemPrompt != settings.presetText(named: settings.activePresetName)
+    }
+}
+
+/// Button showing the active preset's emoji icon. Clicking focuses an
+/// (invisible until focused) text field and opens the NATIVE macOS emoji
+/// palette (the ⌃⌘Space one) targeting it — the picked emoji lands in the
+/// field and is applied immediately. Right-click resets the icon. An outline
+/// smiley (SF Symbol) marks the "no icon" state so it can't be mistaken for
+/// a chosen emoji.
+private struct EmojiIconPicker: View {
+    let icon: String?
+    let onPick: (String) -> Void
+
+    /// One-shot: set true to focus the capture field and open the palette.
+    @State private var trigger = false
+
+    var body: some View {
+        ZStack {
+            // Invisible AppKit field the palette inserts into. The visible
+            // layer never depends on its focus, so no state can "stick".
+            EmojiCaptureField(trigger: $trigger, onPick: onPick)
+                .frame(width: 28, height: 22)
+                .opacity(0.02)
+
+            Button {
+                trigger = true
+            } label: {
+                Group {
+                    if let icon {
+                        Text(icon).font(.system(size: 14))
+                    } else {
+                        Image(systemName: "face.smiling")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(width: 28, height: 22)
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+        }
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+        .contextMenu {
+            Button(L("prompts.iconClear")) { onPick("") }
+        }
+        .help(L("prompts.iconHelp"))
+    }
+}
+
+/// Hidden NSTextField that receives the system emoji palette's insertion.
+/// AppKit first-responder handling is reliable here, unlike SwiftUI
+/// @FocusState which desyncs when the palette takes key status.
+private struct EmojiCaptureField: NSViewRepresentable {
+    @Binding var trigger: Bool
+    let onPick: (String) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.alignment = .center
+        field.font = .systemFont(ofSize: 14)
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.onPick = onPick   // keep the latest preset binding
+        if trigger {
+            DispatchQueue.main.async {
+                trigger = false
+                field.stringValue = ""
+                field.window?.makeFirstResponder(field)
+                NSApp.orderFrontCharacterPalette(nil)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var onPick: (String) -> Void
+        init(onPick: @escaping (String) -> Void) { self.onPick = onPick }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let last = trimmed.last else { return }
+            onPick(String(last))   // last grapheme = the newly inserted emoji
+            field.stringValue = ""
+            field.window?.makeFirstResponder(nil)
+        }
     }
 }
