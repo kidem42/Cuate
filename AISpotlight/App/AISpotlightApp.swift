@@ -46,6 +46,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Setup hotkey manager
         setupHotkeys()
 
+        // LayoutFix addon — self-contained; all code lives in Addons/LayoutFix.
+        LayoutFixAddon.shared.start()
+
         // Re-register global shortcuts when the user rebinds them in Settings
         NotificationCenter.default.addObserver(forName: .hotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -56,6 +59,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Rebuild the status-bar menu when the interface language changes
         NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.setupStatusItem() }
+        }
+
+        // Refresh the menu when the LayoutFix addon toggles (enable / auto).
+        NotificationCenter.default.addObserver(forName: .layoutFixHotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.setupStatusItem() }
         }
 
@@ -187,6 +195,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             menu.addItem(NSMenuItem.separator())
         }
 
+        // LayoutFix addon — AutoSwitcher controls (shown when enabled).
+        if LayoutFixSettings.shared.enabled {
+            menu.addItem(NSMenuItem.separator())
+
+            let autoItem = NSMenuItem(
+                title: LFL("lf.menu.auto"),
+                action: #selector(toggleLayoutAuto(_:)),
+                keyEquivalent: ""
+            )
+            autoItem.target = self
+            autoItem.state = LayoutFixSettings.shared.autoEnabled ? .on : .off
+            menu.addItem(autoItem)
+
+            let layoutSettingsItem = NSMenuItem(
+                title: LFL("lf.menu.openSettings"),
+                action: #selector(openLayoutSettings(_:)),
+                keyEquivalent: ""
+            )
+            layoutSettingsItem.target = self
+            menu.addItem(layoutSettingsItem)
+
+            menu.addItem(NSMenuItem.separator())
+        }
+
         let settingsItem = NSMenuItem(title: L("menu.settings"), action: #selector(openSettings(_:)), keyEquivalent: ",")
         settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = self
@@ -282,6 +314,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func togglePanelFollowsMouse(_ sender: NSMenuItem) {
         AppSettings.shared.panelFollowsMouse.toggle()
         setupStatusItem() // refresh checkmark
+    }
+
+    // LayoutFix addon — menu-bar controls.
+    @objc private func toggleLayoutAuto(_ sender: NSMenuItem) {
+        // didSet posts .layoutFixHotkeysDidChange → the addon starts/stops the
+        // monitor and the menu refreshes (checkmark) via the observer above.
+        LayoutFixSettings.shared.autoEnabled.toggle()
+    }
+
+    @objc private func openLayoutSettings(_ sender: Any?) {
+        openSettings(sender)
+        NotificationCenter.default.post(name: .selectSettingsTab, object: SettingsTab.layoutFix.rawValue)
     }
 
     @objc private func selectAppearance(_ sender: NSMenuItem) {

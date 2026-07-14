@@ -4,10 +4,12 @@ import SwiftUI
 /// model parameters, web search, speech-to-text, and system prompt presets.
 enum SettingsTab: String, Hashable {
     case chat, keys, voice, general, prompts
+    case layoutFix // LayoutFix addon (Addons/LayoutFix)
 }
 
 struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var layoutFix = LayoutFixSettings.shared // addon: gates its tab
 
     enum KeyTestState: Equatable {
         case testing
@@ -50,6 +52,14 @@ struct SettingsView: View {
             tab { promptSection }
                 .tabItem { Label(L("tab.prompts"), systemImage: "text.quote") }
                 .tag(SettingsTab.prompts)
+
+            // LayoutFix addon — the tab appears only when the addon is enabled
+            // (master switch in the General tab). Brings its own Form.
+            if layoutFix.enabled {
+                LayoutFixSettingsView()
+                    .tabItem { Label(LFL("lf.tab"), systemImage: "keyboard") }
+                    .tag(SettingsTab.layoutFix)
+            }
         }
         .id(settings.language) // re-render the whole tree on language change
         .onReceive(NotificationCenter.default.publisher(for: .selectSettingsTab)) { note in
@@ -679,6 +689,7 @@ struct SettingsView: View {
     private var generalSection: some View {
         Section {
             Toggle(L("general.launchAtLogin"), isOn: $settings.launchAtLogin)
+            LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
         }
     }
 
