@@ -10,6 +10,34 @@ import Foundation
 enum APIKeyStore {
     private static let service = "org.topassistant.AISpotlight.apikeys"
 
+    /// In-memory presence cache. SwiftUI bodies check key presence on every
+    /// render (e.g. per streamed token), and each Keychain round-trip is a
+    /// securityd IPC that can even block on an ACL prompt — reading the
+    /// Keychain from the render path froze the app for some users. Presence
+    /// is cached until any key changes; full key values are never cached.
+    private static var presenceCache: [String: Bool] = [:]
+    private static let presenceLock = NSLock()
+
+    private static func cachedPresence(_ account: String, compute: () -> Bool) -> Bool {
+        presenceLock.lock()
+        if let hit = presenceCache[account] {
+            presenceLock.unlock()
+            return hit
+        }
+        presenceLock.unlock()
+        let value = compute()
+        presenceLock.lock()
+        presenceCache[account] = value
+        presenceLock.unlock()
+        return value
+    }
+
+    private static func invalidatePresenceCache() {
+        presenceLock.lock()
+        presenceCache.removeAll()
+        presenceLock.unlock()
+    }
+
     static func key(for provider: ProviderID) -> String? {
         guard let data = KeychainHelper.load(service: service, account: provider.rawValue),
               let key = String(data: data, encoding: .utf8),
@@ -34,7 +62,11 @@ enum APIKeyStore {
     }
 
     static func hasKey(for provider: ProviderID) -> Bool {
-        key(for: provider) != nil
+        cachedPresence(provider.rawValue) { key(for: provider) != nil }
+    }
+
+    static func hasKey(aux: AuxKey) -> Bool {
+        cachedPresence("aux." + aux.rawValue) { key(aux: aux) != nil }
     }
 
     /// Masked representation for the UI, e.g. "••••••••1a2b". Never expose the full key.
@@ -45,6 +77,7 @@ enum APIKeyStore {
     }
 
     private static func notifyChange() {
+        invalidatePresenceCache()
         NotificationCenter.default.post(name: .apiKeysDidChange, object: nil)
     }
 
@@ -52,10 +85,12 @@ enum APIKeyStore {
 
     enum AuxKey: String, CaseIterable {
         case brave
+        case deepgram
 
         var displayName: String {
             switch self {
             case .brave: return "Brave Search"
+            case .deepgram: return "Deepgram"
             }
         }
     }

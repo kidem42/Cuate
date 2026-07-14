@@ -327,10 +327,15 @@ struct MarkdownText: View {
         return attributed
     }
     
+    /// Shared detector: creating an NSDataDetector compiles a regex — doing
+    /// that per render (per streamed token on the growing message) burned
+    /// main-thread CPU for nothing. NSDataDetector is thread-safe.
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     private func linkifyRawURLs(in attributed: AttributedString) -> AttributedString {
         var result = attributed
         let plain = String(result.characters)
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+        guard let detector = Self.linkDetector else {
             return result
         }
         let ns = plain as NSString

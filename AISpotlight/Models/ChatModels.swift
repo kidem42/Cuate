@@ -150,6 +150,10 @@ class ChatStore: ObservableObject {
     }
 
     /// Debounced write of the conversation to Application Support.
+    /// The snapshot is taken on the main thread (cheap copy-on-write), but
+    /// encoding + disk I/O run on a background queue: attachments make the
+    /// JSON multi-megabyte (image data → base64), and encoding it on the
+    /// main thread froze the UI for noticeable stretches.
     func scheduleSave() {
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
@@ -159,8 +163,10 @@ class ChatStore: ObservableObject {
                 conversationSummary: self.conversationSummary,
                 summaryCoversCount: self.summaryCoversCount
             )
-            if let data = try? JSONEncoder().encode(persisted) {
-                try? data.write(to: Self.storeURL, options: .atomic)
+            DispatchQueue.global(qos: .utility).async {
+                if let data = try? JSONEncoder().encode(persisted) {
+                    try? data.write(to: Self.storeURL, options: .atomic)
+                }
             }
         }
         saveWorkItem = item

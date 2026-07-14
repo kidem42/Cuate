@@ -20,7 +20,10 @@ enum WaveformAnalyzer {
         return computed
     }
 
-    private static func compute(url: URL, buckets: Int) -> [Float]? {
+    /// nonisolated: PCM decoding of a minutes-long file is CPU-heavy; the
+    /// module defaults to MainActor, so without the annotation this would be
+    /// main-actor-isolated (and the detached call above merely warned).
+    private nonisolated static func compute(url: URL, buckets: Int) -> [Float]? {
         guard buckets > 0, let file = try? AVAudioFile(forReading: url) else { return nil }
         let totalFrames = Int(file.length)
         guard totalFrames > 0 else { return nil }
