@@ -698,8 +698,14 @@ struct SettingsView: View {
     private var generalSection: some View {
         Section {
             Toggle(L("general.launchAtLogin"), isOn: $settings.launchAtLogin)
-            Toggle(L("general.prefillSelection"), isOn: $settings.prefillFromSelection)
-                .help(L("general.prefillSelection.help"))
+            VStack(alignment: .leading, spacing: 3) {
+                Toggle(L("general.prefillSelection"), isOn: $settings.prefillFromSelection)
+                    .help(L("general.prefillSelection.help"))
+                Text(L("general.prefillSelection.caption"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
         }
     }

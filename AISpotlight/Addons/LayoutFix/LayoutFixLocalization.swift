@@ -18,6 +18,7 @@ enum LayoutFixStrings {
 
         // General tab master switch + menu-bar items
         "lf.general.enable": [.english: "AutoSwitcher (beta)", .spanish: "AutoSwitcher (beta)", .russian: "Автосвитчер (бета)"],
+        "lf.general.enable.caption": [.english: "Fixes text typed in the wrong keyboard layout (ghbdtn → привет) in any app: automatically as you type, or by hotkey. Configure in the Layout tab.", .spanish: "Corrige el texto escrito con la distribución de teclado equivocada (ghbdtn → привет) en cualquier app: automáticamente al escribir o con un atajo. Se configura en la pestaña Layout.", .russian: "Исправляет текст, набранный не в той раскладке (ghbdtn → привет), в любом приложении: автоматически при наборе или по хоткею. Настраивается во вкладке «Раскладка»."],
         "lf.menu.title": [.english: "Layout Switcher", .spanish: "Cambiador de distribución", .russian: "Переключатель раскладки"],
         "lf.menu.auto": [.english: "Auto-fix layout while typing", .spanish: "Autocorregir distribución al escribir", .russian: "Автоисправление раскладки при наборе"],
         "lf.menu.openSettings": [.english: "Layout Switcher Settings…", .spanish: "Ajustes del cambiador…", .russian: "Настройки переключателя…"],

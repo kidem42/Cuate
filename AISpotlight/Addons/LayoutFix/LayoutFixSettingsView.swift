@@ -185,6 +185,12 @@ struct LayoutFixEnableToggle: View {
     @ObservedObject private var settings = LayoutFixSettings.shared
 
     var body: some View {
-        Toggle(LFL("lf.general.enable"), isOn: $settings.enabled)
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(LFL("lf.general.enable"), isOn: $settings.enabled)
+            Text(LFL("lf.general.enable.caption"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
