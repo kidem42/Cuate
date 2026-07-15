@@ -116,6 +116,13 @@ final class AutoSwitcher {
         monitor.onTapAutoReenabled = { [weak self] in
             self?.log("!! tap was disabled by the system and re-enabled (keystrokes lost in the gap)")
         }
+        monitor.onPermissionLost = { [weak self] in
+            // Already on the main queue; the monitor has stopped itself.
+            self?.log("!! monitor shut down: Accessibility lost mid-run (or tap disable loop)")
+            Diagnostics.log("layoutfix", "tap stopped — permission lost or disable loop")
+            self?.stop()
+            LayoutFixSettings.shared.autoMonitorActive = false
+        }
         monitor.autoCapitalize = config.autoCapitalize
         monitor.capitalizationAllowed = { [weak self] in
             self?.guardsPass(verbose: false) ?? false

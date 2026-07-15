@@ -60,6 +60,17 @@ final class KeystrokeMonitor {
     /// input) and it was re-enabled — keystrokes in the gap were lost.
     var onTapAutoReenabled: (() -> Void)?
 
+    /// Fired (on the main queue) after the monitor shut itself down because
+    /// the Accessibility permission disappeared mid-run or the tap entered a
+    /// disable loop. The owner must update its state; do NOT restart blindly.
+    var onPermissionLost: (() -> Void)?
+
+    /// Guards against the re-enable loop that freezes system-wide input:
+    /// timestamps of recent auto-re-enables + the one-shot shutdown flag.
+    /// Guarded by `stateLock`.
+    private var reenableTimestamps: [Date] = []
+    private var shuttingDown = false
+
     /// Auto-capitalize the first letter after ". " / "! " / "? " (and after
     /// Enter). The keyDown event is rewritten in place — no synthetic replays.
     var autoCapitalize = false
@@ -108,6 +119,10 @@ final class KeystrokeMonitor {
     @discardableResult
     func start() -> Bool {
         guard tap == nil else { return true }
+        stateLock.lock()
+        shuttingDown = false
+        reenableTimestamps = []
+        stateLock.unlock()
 
         // NB: no `.flagsChanged` — Shift/Option are normal typing modifiers, and
         // resetting the word buffer on every Shift press/release truncated any
@@ -202,13 +217,51 @@ final class KeystrokeMonitor {
         return Date().timeIntervalSince(at) < Self.undoWindow
     }
 
+    enum TapDisabledReaction { case reenable, stop, ignore }
+
+    /// Pure decision for a tapDisabled* event; internal for the e2e harness.
+    /// `.stop` fires at most once per monitor run (later calls → `.ignore`).
+    func reactionToTapDisabled(trusted: Bool, now: Date = Date()) -> TapDisabledReaction {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if shuttingDown { return .ignore }
+        var shouldStop = !trusted
+        if !shouldStop {
+            reenableTimestamps = reenableTimestamps.filter { now.timeIntervalSince($0) < 10 }
+            reenableTimestamps.append(now)
+            shouldStop = reenableTimestamps.count > 4 // >4 disables in 10s
+        }
+        if shouldStop {
+            shuttingDown = true
+            return .stop
+        }
+        return .reenable
+    }
+
     // MARK: - Event handling (tap thread)
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // The system disables a tap that's too slow or during heavy input — re-arm it.
+        // The system disables a tap that's too slow or during heavy input.
+        // Re-arm it ONLY while we still hold the Accessibility permission and
+        // the disables are rare. Blindly re-enabling an ACTIVE tap after the
+        // permission was revoked mid-run wedges the whole machine's input
+        // pipeline (every keystroke system-wide queues behind a dead tap,
+        // disable → re-enable, forever) — observed as a hard freeze that
+        // needed a power-button reboot. Same for a pathological disable loop.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-            onTapAutoReenabled?()
+            switch reactionToTapDisabled(trusted: AXIsProcessTrusted()) {
+            case .reenable:
+                if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+                onTapAutoReenabled?()
+            case .stop:
+                // Leave the tap disabled (input flows again) and shut down.
+                DispatchQueue.main.async { [weak self] in
+                    self?.stop()
+                    self?.onPermissionLost?()
+                }
+            case .ignore:
+                break // shutdown already scheduled
+            }
             return Unmanaged.passUnretained(event)
         }
 
