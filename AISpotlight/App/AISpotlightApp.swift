@@ -40,6 +40,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Apply the saved appearance override (Auto/Light/Dark)
         AppSettings.shared.applyAppearance()
 
+        // Drop TCC entries stuck on an older build's signature (one shot per
+        // version) so macOS can re-ask instead of silently failing.
+        PermissionHealer.healIfNeeded()
+
         // Warm up the active provider's model list so the saved selection is
         // available immediately (otherwise it looks "reset" until Load Models).
         AppSettings.shared.autoLoadModelsIfNeeded(for: AppSettings.shared.chatProvider)
