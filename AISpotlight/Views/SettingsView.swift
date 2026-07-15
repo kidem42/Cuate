@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// App settings: provider API keys (Keychain), chat provider/model,
 /// model parameters, web search, speech-to-text, and system prompt presets.
@@ -30,6 +31,9 @@ struct SettingsView: View {
     @State private var sttModelInput = ""
     @State private var newPresetName = ""
     @State private var selectedTab = SettingsTab.chat
+    @State private var accessibilityGranted = true
+    @State private var screenGranted = true
+    @State private var micGranted = true
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -45,7 +49,7 @@ struct SettingsView: View {
                 .tabItem { Label(L("tab.voice"), systemImage: "mic") }
                 .tag(SettingsTab.voice)
 
-            tab { generalSection; hotkeysSection; panelSection; appearanceSection; diagnosticsSection }
+            tab { generalSection; permissionsSection; hotkeysSection; panelSection; appearanceSection; diagnosticsSection }
                 .tabItem { Label(L("tab.general"), systemImage: "gearshape") }
                 .tag(SettingsTab.general)
 
@@ -76,6 +80,11 @@ struct SettingsView: View {
             sttModelInput = settings.sttModel(for: settings.sttProvider)
             settings.autoLoadModelsIfNeeded(for: settings.chatProvider)
             validateAllKeys()
+            refreshPermissions()
+        }
+        // Re-check when the user comes back from System Settings.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshPermissions()
         }
         .onChange(of: settings.chatProvider) { _, provider in
             // Load the newly selected provider's models if not cached yet.
@@ -693,6 +702,68 @@ struct SettingsView: View {
                 .help(L("general.prefillSelection.help"))
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
         }
+    }
+
+    // MARK: - Permissions (always-visible status indicators)
+
+    private var permissionsSection: some View {
+        Section {
+            permissionRow(L("perm.accessibility"), granted: accessibilityGranted) {
+                // The system request adds the app to the list; the pane opens
+                // so the user can flip the switch right away.
+                _ = TextInserter.checkAccessibility(promptIfNeeded: true)
+                openPrivacyPane("Privacy_Accessibility")
+            }
+            permissionRow(L("perm.screen"), granted: screenGranted) {
+                if !CGRequestScreenCaptureAccess() {
+                    openPrivacyPane("Privacy_ScreenCapture")
+                }
+            }
+            permissionRow(L("perm.mic"), granted: micGranted) {
+                if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                    AVCaptureDevice.requestAccess(for: .audio) { _ in
+                        DispatchQueue.main.async { refreshPermissions() }
+                    }
+                } else {
+                    openPrivacyPane("Privacy_Microphone")
+                }
+            }
+        } header: {
+            Text(L("perm.header"))
+        } footer: {
+            Text(L("perm.footer"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func permissionRow(_ title: String, granted: Bool, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundColor(granted ? .green : .orange)
+            Text(title)
+            Spacer()
+            if granted {
+                Text(L("perm.granted"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Button(L("perm.grant")) { action() }
+            }
+        }
+    }
+
+    private func openPrivacyPane(_ anchor: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func refreshPermissions() {
+        accessibilityGranted = TextInserter.checkAccessibility(promptIfNeeded: false)
+        screenGranted = CGPreflightScreenCaptureAccess()
+        micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private var panelSection: some View {

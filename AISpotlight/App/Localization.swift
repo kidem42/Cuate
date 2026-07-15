@@ -116,6 +116,14 @@ enum Localization {
         // MARK: General
         "general.launchAtLogin": [.english: "Launch at login", .spanish: "Abrir al iniciar sesión", .russian: "Запускать при входе в систему"],
         "general.prefillSelection": [.english: "Open panel with the selected text", .spanish: "Abrir el panel con el texto seleccionado", .russian: "Открывать панель с выделенным текстом"],
+        // MARK: Permissions
+        "perm.header": [.english: "Permissions", .spanish: "Permisos", .russian: "Разрешения"],
+        "perm.accessibility": [.english: "Accessibility", .spanish: "Accesibilidad", .russian: "Универсальный доступ"],
+        "perm.screen": [.english: "Screen Recording", .spanish: "Grabación de pantalla", .russian: "Запись экрана"],
+        "perm.mic": [.english: "Microphone", .spanish: "Micrófono", .russian: "Микрофон"],
+        "perm.granted": [.english: "granted", .spanish: "concedido", .russian: "выдано"],
+        "perm.grant": [.english: "Grant…", .spanish: "Conceder…", .russian: "Выдать…"],
+        "perm.footer": [.english: "Accessibility powers dictation typing, selection capture and LayoutFix; Screen Recording — screenshots; Microphone — voice input. After an update macOS may require granting again — the app cleans up stale entries automatically on first launch.", .spanish: "Accesibilidad impulsa la escritura del dictado, la captura de selección y LayoutFix; Grabación de pantalla — las capturas; Micrófono — la entrada de voz. Tras una actualización, macOS puede exigir concederlos de nuevo; la app limpia las entradas obsoletas automáticamente al primer arranque.", .russian: "«Универсальный доступ» нужен впечатыванию диктовки, захвату выделения и LayoutFix; «Запись экрана» — скриншотам; «Микрофон» — голосовому вводу. После обновления macOS может потребовать выдать разрешения заново — протухшие записи приложение чистит автоматически при первом запуске."],
         "general.prefillSelection.help": [.english: "When you summon the panel, the text selected in the current app lands in the input field — press Enter to run the active preset on it (e.g. instant translation). Requires the Accessibility permission.", .spanish: "Al invocar el panel, el texto seleccionado en la app actual aparece en el campo de entrada; pulsa Intro para aplicarle el preajuste activo (p. ej. traducción instantánea). Requiere el permiso de Accesibilidad.", .russian: "При вызове панели выделенный в текущем приложении текст подставляется в поле ввода — Enter применит к нему активный пресет (например, мгновенный перевод). Нужно разрешение «Универсальный доступ»."],
 
         // MARK: Diagnostics
