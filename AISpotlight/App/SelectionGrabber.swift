@@ -32,13 +32,30 @@ enum SelectionGrabber {
         case .text(let text):
             Diagnostics.log("ui", "prefill.grab via=ax chars=\(text.count)")
             return String(text.prefix(maxLength))
-        case .empty:
+        case .empty where !frontmostIsChatApp():
             return nil // a text context with nothing selected — no fallback needed
-        case .unavailable:
+        case .empty, .unavailable:
+            // Chat apps keep focus in the compose box while the selection
+            // lives in the message list — the focused element honestly says
+            // "empty" and only ⌘C can reach the real selection.
             guard let text = await clipboardSelection() else { return nil }
             Diagnostics.log("ui", "prefill.grab via=clipboard chars=\(text.count)")
             return String(text.prefix(maxLength))
         }
+    }
+
+    /// Messengers whose focused element (the compose box) never holds the
+    /// selection the user made in the conversation list.
+    private static let chatAppBundleIDs: Set<String> = [
+        "net.whatsapp.WhatsApp", "WhatsApp",
+        "ru.keepcoder.Telegram", "org.telegram.desktop",
+        "com.tinyspeck.slackmacgap", "com.hnc.Discord",
+        "org.whispersystems.signal-desktop", "com.viber.osx",
+    ]
+
+    private static func frontmostIsChatApp() -> Bool {
+        guard let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return chatAppBundleIDs.contains(bundle)
     }
 
     // MARK: - Quote formatting (pure — e2e-tested)
