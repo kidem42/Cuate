@@ -100,6 +100,19 @@ enum DecisionEngine {
                 }
             }
         }
+        // Several layouts can render the SAME fixed text (EN and ES layouts
+        // share the latin letters) — that is one correction, not ambiguity.
+        // Without this, users with three layouts got a tie → nil for nearly
+        // every latin word. The ambiguity guard below stays for genuinely
+        // different renderings.
+        if winners.count > 1, Set(winners.map(\.core)).count == 1 {
+            let best = winners.min { l, r in
+                let lListed = l.freqQ != nil, rListed = r.freqQ != nil
+                if lListed != rListed { return lListed } // freq-listed wins
+                return (l.charAvgQ ?? 255) < (r.charAvgQ ?? 255)
+            }
+            return best?.id
+        }
         return winners.count == 1 ? winners.first?.id : nil
     }
 
