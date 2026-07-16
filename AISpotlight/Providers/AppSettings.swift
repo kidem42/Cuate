@@ -338,6 +338,7 @@ The app renders three tap-to-copy formats; mark anything the user is likely to r
 2) > blockquote for any quotation, saying, poem or verbatim passage the user asked for.
 3) Fenced code blocks ONLY for actual multi-line code, configs or scripts, never for emphasis.
 Do not mark plain emphasis this way; use **bold** for emphasis.
+In USER messages, lines starting with "> " are quoted external text the user captured (e.g. a text selection); the rest of the message is the instruction about it. When the message contains only the quote, apply the current task to the quoted text. Never echo the "> " markers back in your reply.
 """
 
     /// The editable working copy of the system prompt.

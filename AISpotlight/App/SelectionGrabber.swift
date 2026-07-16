@@ -41,6 +41,34 @@ enum SelectionGrabber {
         }
     }
 
+    // MARK: - Quote formatting (pure — e2e-tested)
+
+    /// Formats captured text as a markdown blockquote for the composer:
+    /// every line prefixed with "> " (bare ">" for inner empty lines so the
+    /// block stays contiguous). The result is plain editable text the model
+    /// reads as a quotation — see `AppSettings.mandatoryPromptRules`.
+    nonisolated static func quoteBlock(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line in
+                let content = line.trimmingCharacters(in: .whitespaces)
+                return content.isEmpty ? ">" : "> \(content)"
+            }
+            .joined(separator: "\n")
+    }
+
+    /// Assembles the outgoing message from the composer parts: the quote (as
+    /// a markdown blockquote) on top, the typed instruction below. The "> "
+    /// markers exist only in the sent text — the editor shows the quote as a
+    /// styled region without any markup.
+    nonisolated static func message(quote: String?, instruction: String) -> String {
+        let quoted = quote.map(quoteBlock) ?? ""
+        let body = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        if quoted.isEmpty { return body }
+        return body.isEmpty ? quoted : quoted + "\n\n" + body
+    }
+
     // MARK: - Accessibility attribute (fast path)
 
     private enum AXSelection {

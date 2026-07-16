@@ -13,6 +13,9 @@ struct ChatWindow: View {
     @StateObject private var audioRecorder = AudioRecorder()
     @State private var handledAutoStopToken: UUID = UUID()
     @State private var messageText = ""
+    /// Captured selection shown as an editable styled region in the composer.
+    @State private var quotedText: String?
+    @State private var quoteToInsert: String?
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: AppState
     @State private var pendingAttachment: ChatAttachment?
@@ -260,7 +263,7 @@ struct ChatWindow: View {
                     HStack(alignment: .bottom, spacing: 8) {
                         // Multi-line text input
                         ZStack(alignment: .topLeading) {
-                            if messageText.isEmpty {
+                            if messageText.isEmpty, quotedText == nil {
                                 Text(L("panel.typeMessage"))
                                     .font(.system(size: 13))
                                     .foregroundColor(.secondary.opacity(0.5))
@@ -271,6 +274,8 @@ struct ChatWindow: View {
 
                             CustomTextEditor(
                                 text: $messageText,
+                                quotedText: $quotedText,
+                                quoteToInsert: $quoteToInsert,
                                 measuredHeight: $textEditorHeight,
                                 onSubmit: sendMessage,
                                 isDisabled: audioRecorder.isRecording
@@ -312,7 +317,7 @@ struct ChatWindow: View {
                         Button(action: sendMessage) {
                             ZStack {
                                 Circle()
-                                    .fill(Color.accentColor.opacity(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.3 : 1.0))
+                                    .fill(Color.accentColor.opacity(composerIsEmpty ? 0.3 : 1.0))
                                     .frame(width: 32, height: 32)
 
                                 Image(systemName: "paperplane.fill")
@@ -321,7 +326,7 @@ struct ChatWindow: View {
                             }
                         }
                         .buttonStyle(PlainButtonStyle())
-                        .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || audioRecorder.isRecording)
+                        .disabled(composerIsEmpty || audioRecorder.isRecording)
                         .help(L("tooltip.send"))
                     }
                     .padding(.horizontal, 12)
@@ -361,9 +366,10 @@ struct ChatWindow: View {
         }
         .onReceive(appState.$pendingInputText) { text in
             guard let text, !text.isEmpty else { return }
-            // Prefill only an empty composer — never clobber a draft.
-            if messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                messageText = text
+            // The captured selection lands as an editable styled quote region
+            // at the top of the composer; a typed draft stays below it.
+            if quotedText != text.trimmingCharacters(in: .whitespacesAndNewlines) {
+                quoteToInsert = text
             }
             appState.pendingInputText = nil
         }
@@ -554,11 +560,19 @@ struct ChatWindow: View {
         return true
     }
 
+    /// True when there is nothing to send: no instruction and no quote.
+    private var composerIsEmpty: Bool {
+        messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && quotedText == nil
+    }
+
     private func sendMessage() {
-        let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The quote region (if any) becomes a markdown blockquote in the
+        // outgoing text; on screen it was a styled block without markers.
+        let text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
         guard !text.isEmpty else { return }
         guard ensureChatConfigured() else {
             messageText = ""
+            quotedText = nil
             return
         }
 
@@ -568,6 +582,7 @@ struct ChatWindow: View {
         let userMessage = ChatMessage(text: text, isUser: true, attachments: attachments)
         chatStore.appendNow(userMessage)
         messageText = "" // the editor re-measures itself back to one line
+        quotedText = nil
         clearCurrentAttachment()
 
         streamAssistantReply()

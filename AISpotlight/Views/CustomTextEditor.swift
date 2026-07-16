@@ -1,13 +1,71 @@
 import SwiftUI
 import AppKit
 
+/// NSTextView that draws a QuoteBlockView-style accent bar along the quote
+/// region, so the composer quote looks exactly like it will in the sent
+/// bubble: rounded 3pt accent stripe on the left, muted indented text.
+final class QuoteComposerTextView: NSTextView {
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawQuoteBar()
+        super.draw(dirtyRect)
+    }
+
+    private func drawQuoteBar() {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        var start = NSNotFound
+        var end = 0
+        storage.enumerateAttribute(CustomTextEditor.quoteAttribute,
+                                   in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard (value as? Bool) == true else { return }
+            if start == NSNotFound { start = range.location }
+            end = max(end, range.location + range.length)
+        }
+        guard start != NSNotFound else { return }
+        let quoteRange = NSRange(location: start, length: end - start)
+
+        // Union of the region's line-fragment rects (TextKit 2, TK1 fallback).
+        var union = NSRect.null
+        if let tlm = textLayoutManager, let cm = tlm.textContentManager,
+           let from = cm.location(cm.documentRange.location, offsetBy: quoteRange.location),
+           let to = cm.location(from, offsetBy: quoteRange.length),
+           let textRange = NSTextRange(location: from, end: to) {
+            tlm.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+                union = union.union(frame)
+                return true
+            }
+        } else if let lm = layoutManager, let tc = textContainer {
+            let glyphs = lm.glyphRange(forCharacterRange: quoteRange, actualCharacterRange: nil)
+            lm.enumerateEnclosingRects(forGlyphRange: glyphs,
+                                       withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                       in: tc) { rect, _ in union = union.union(rect) }
+        }
+        guard !union.isNull, union.height > 0 else { return }
+
+        let bar = NSRect(x: textContainerInset.width + 1,
+                         y: union.minY + textContainerInset.height,
+                         width: 3,
+                         height: union.height)
+        NSColor.controlAccentColor.withAlphaComponent(0.6).setFill()
+        NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+    }
+}
+
 /// Multi-line chat input backed by NSTextView.
 /// - Return submits, Shift+Return inserts a newline.
 /// - Reports its real laid-out text height (word wrap included) through
 ///   `measuredHeight`, so the field grows like modern chat inputs and shows
 ///   an inner scroller once it reaches `maxHeight`.
+/// - A captured selection lives INSIDE the editor as a visually styled,
+///   freely editable quote region (marked with `quoteAttribute` — no "> "
+///   markers on screen; they are added at send time, see
+///   `SelectionGrabber.message`). `text` binds the instruction part only,
+///   `quotedText` mirrors the quote region's current content.
 struct CustomTextEditor: NSViewRepresentable {
     @Binding var text: String
+    @Binding var quotedText: String?
+    /// One-shot trigger: set to place a captured selection into the editor.
+    @Binding var quoteToInsert: String?
     @Binding var measuredHeight: CGFloat
     var onSubmit: () -> Void
     var isDisabled: Bool
@@ -15,11 +73,88 @@ struct CustomTextEditor: NSViewRepresentable {
     static let minHeight: CGFloat = 27
     static let maxHeight: CGFloat = 27 + 17 * 4 // ~5 lines, then scroll
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return scrollView
+    // MARK: - Quote region (attribute-marked, e2e-tested)
+
+    /// Marks characters belonging to the captured-quote region.
+    static let quoteAttribute = NSAttributedString.Key("aispotlight.capturedQuote")
+
+    static var bodyAttributes: [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: 13),
+         .foregroundColor: NSColor.labelColor]
+    }
+
+    /// Quote look — mirrors the sent bubble's QuoteBlockView: muted text,
+    /// indented past the accent bar (drawn by `QuoteComposerTextView`).
+    static var quoteAttributes: [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = 12
+        paragraph.headIndent = 12
+        return [.font: NSFont.systemFont(ofSize: 13),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+                quoteAttribute: true]
+    }
+
+    /// Heals the quote region after edits: characters typed INSIDE the quote
+    /// arrive with body typing attributes, which would split the region and
+    /// let a later rebuild relocate them below the quote. Everything before
+    /// the last quote-attributed character belongs to the quote.
+    static func normalizeQuoteRegion(in storage: NSMutableAttributedString) {
+        let full = NSRange(location: 0, length: storage.length)
+        var lastQuoteEnd = 0
+        storage.enumerateAttribute(quoteAttribute, in: full) { value, range, _ in
+            if (value as? Bool) == true { lastQuoteEnd = max(lastQuoteEnd, range.location + range.length) }
         }
+        guard lastQuoteEnd > 0 else { return }
+        storage.beginEditing()
+        storage.addAttributes(quoteAttributes, range: NSRange(location: 0, length: lastQuoteEnd))
+        storage.endEditing()
+    }
+
+    /// Full editor document from its parts: styled quote on top (if any),
+    /// a plain separator newline, then the instruction body.
+    static func buildDocument(quote: String?, body: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let trimmedQuote = quote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedQuote.isEmpty {
+            result.append(NSAttributedString(string: trimmedQuote, attributes: quoteAttributes))
+            result.append(NSAttributedString(string: "\n", attributes: bodyAttributes))
+        }
+        result.append(NSAttributedString(string: body, attributes: bodyAttributes))
+        return result
+    }
+
+    /// Splits a document back into (quote, body) by the marker attribute —
+    /// robust to any user edits inside or around the quote region.
+    static func extractParts(from storage: NSAttributedString) -> (quote: String?, body: String) {
+        let full = storage.string as NSString
+        var quote = ""
+        var body = ""
+        storage.enumerateAttribute(quoteAttribute, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            let piece = full.substring(with: range)
+            if (value as? Bool) == true { quote += piece } else { body += piece }
+        }
+        let cleanQuote = quote.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanQuote.isEmpty, body.hasPrefix("\n") {
+            body.removeFirst() // the separator newline is structural, not content
+        }
+        return (cleanQuote.isEmpty ? nil : cleanQuote, body)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        // Manual construction (instead of NSTextView.scrollableTextView) so
+        // the document view can be our accent-bar-drawing subclass.
+        let textView = QuoteComposerTextView(usingTextLayoutManager: true)
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.allowsUndo = true
+        textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
 
         // Configure text view
         textView.delegate = context.coordinator
@@ -35,6 +170,7 @@ struct CustomTextEditor: NSViewRepresentable {
         // Set text container insets to control padding
         textView.textContainerInset = NSSize(width: 5, height: 5)
         textView.textContainer?.lineFragmentPadding = 0
+        textView.typingAttributes = Self.bodyAttributes
 
         // Configure scroll view: scroll appears only when maxHeight is reached
         scrollView.backgroundColor = .clear
@@ -62,19 +198,38 @@ struct CustomTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.parent = self
 
-        // Update text if needed
-        if textView.string != text {
-            textView.string = text
-            // Programmatic fills (selection prefill) leave the caret at the
-            // end — ready to type an instruction or hit Enter right away.
-            textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
-            context.coordinator.remeasure()
+        if let pending = quoteToInsert {
+            // A captured selection arrives: (re)build the document with the
+            // new quote on top; the typed instruction is preserved.
+            let doc = Self.buildDocument(quote: pending, body: context.coordinator.lastBody)
+            setDocument(doc, in: textView, coordinator: context.coordinator)
+            let inserted = context.coordinator.lastQuote
+            DispatchQueue.main.async {
+                quoteToInsert = nil
+                quotedText = inserted
+            }
+        } else if text != context.coordinator.lastBody || quotedText != context.coordinator.lastQuote {
+            // External change (e.g. the composer is cleared after sending).
+            let doc = Self.buildDocument(quote: quotedText, body: text)
+            setDocument(doc, in: textView, coordinator: context.coordinator)
         }
 
         // Update disabled state
         textView.isEditable = !isDisabled
         textView.isSelectable = !isDisabled
-        textView.textColor = isDisabled ? .secondaryLabelColor : .labelColor
+        textView.alphaValue = isDisabled ? 0.6 : 1.0
+    }
+
+    /// Replaces the editor content, leaves the caret at the end ready for
+    /// typing, and refreshes the coordinator's split-state snapshot.
+    private func setDocument(_ doc: NSAttributedString, in textView: NSTextView, coordinator: Coordinator) {
+        textView.textStorage?.setAttributedString(doc)
+        textView.typingAttributes = Self.bodyAttributes
+        textView.setSelectedRange(NSRange(location: doc.length, length: 0))
+        let parts = Self.extractParts(from: doc)
+        coordinator.lastQuote = parts.quote
+        coordinator.lastBody = parts.body
+        coordinator.remeasure()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -84,6 +239,10 @@ struct CustomTextEditor: NSViewRepresentable {
     class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CustomTextEditor
         weak var textView: NSTextView?
+        /// Snapshot of the last known (quote, body) split — updateNSView uses
+        /// it to tell user edits apart from external binding changes.
+        var lastQuote: String?
+        var lastBody: String = ""
 
         init(_ parent: CustomTextEditor) {
             self.parent = parent
@@ -95,7 +254,19 @@ struct CustomTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            parent.text = textView.string
+            if let storage = textView.textStorage {
+                CustomTextEditor.normalizeQuoteRegion(in: storage)
+                if storage.length == 0 {
+                    // Deleting everything must not leave quote typing attrs.
+                    textView.typingAttributes = CustomTextEditor.bodyAttributes
+                }
+            }
+            let parts = CustomTextEditor.extractParts(from: textView.attributedString())
+            lastQuote = parts.quote
+            lastBody = parts.body
+            parent.quotedText = parts.quote
+            parent.text = parts.body
+            textView.needsDisplay = true // the accent bar tracks the region
             remeasure()
         }
 
@@ -128,6 +299,11 @@ struct CustomTextEditor: NSViewRepresentable {
                     self.parent.measuredHeight = clamped
                 }
             }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            // Keep the bar crisp while the caret moves through the region.
+            (notification.object as? NSTextView)?.needsDisplay = true
         }
 
         // Handle Return and Shift+Return
