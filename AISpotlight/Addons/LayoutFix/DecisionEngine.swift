@@ -35,6 +35,12 @@ enum DecisionEngine {
         var freqDominance = 17.0
         /// Per-impossible-trigram bonus added to the source's badness.
         var impossibleBonus = 14.0
+        /// Softer clean bar for alternatives explicitly present in the
+        /// frequency list: brands/anglicisms whose letter patterns are alien
+        /// to the language (gmail 46.4, tiktok 48.5, netflix 47.4 — all above
+        /// `cleanQ`, yet unambiguous words). Zero impossible trigrams still
+        /// required.
+        var cleanQFreqListed = 56.0
         /// Single letters (no trigram signal): fix only when the typed char is
         /// a deep-rare standalone token (z=52, b=45, ш=56 …) and the flip is a
         /// top-frequency word (я=14, и=17, i=14 …). d(40)/c(43)/e(43) don't pass.
@@ -68,8 +74,11 @@ enum DecisionEngine {
         var winners: [Hypothesis] = []
         for alt in alternatives {
             guard alt.core.count >= 2, alt.core != source.core else { continue }
-            // The target must read as genuinely clean text in its language.
-            guard let altAvg = alt.charAvgQ, alt.impossible == 0, altAvg <= t.cleanQ else { continue }
+            // The target must read as genuinely clean text in its language —
+            // or be a word the frequency list explicitly knows (anglicisms).
+            guard let altAvg = alt.charAvgQ, alt.impossible == 0 else { continue }
+            let cleanBar = alt.freqQ != nil ? t.cleanQFreqListed : t.cleanQ
+            guard altAvg <= cleanBar else { continue }
             let altSupported = alt.dictValid == true || alt.freqQ != nil
             let margin = srcQ - altAvg
 
