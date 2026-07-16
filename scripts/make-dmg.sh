@@ -48,10 +48,13 @@ TMP_DMG="$BUILD_DIR/tmp.dmg"
 if [ "${SKIP_BUILD:-0}" = "1" ] && [ -d "$RELEASE_APP" ]; then
     echo "==> SKIP_BUILD=1 — reusing existing $RELEASE_APP"
 else
-    echo "==> Building $APP_NAME $VERSION (Release)…"
+    echo "==> Building $APP_NAME $VERSION (Release, universal arm64+x86_64)…"
     rm -rf "$DERIVED"
+    # ARCHS/ONLY_ACTIVE_ARCH overrides: the project builds the active arch
+    # only (fast dev cycle); the shipped app must also run on Intel Macs.
     xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
         -derivedDataPath "$DERIVED" \
+        ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
         CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
         build >/dev/null
 fi
