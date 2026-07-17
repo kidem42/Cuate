@@ -35,11 +35,14 @@ struct MaskEditorView: View {
         VStack(alignment: .leading, spacing: 8) {
             Picker("", selection: $mode) {
                 Text(IAL("ia.cleanup.brush")).tag(Mode.brush)
+                    .help(IAL("ia.help.brushMode"))
                 Text(IAL("ia.cleanup.text")).tag(Mode.text)
+                    .help(IAL("ia.help.textMode"))
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 220)
+            .help(mode == .brush ? IAL("ia.help.brushMode") : IAL("ia.help.textMode"))
 
             if mode == .brush {
                 brushEditor
@@ -133,6 +136,7 @@ struct MaskEditorView: View {
                     .font(.caption)
                 Slider(value: $brushSize, in: 10...100)
                     .frame(width: 130)
+                    .help(IAL("ia.help.brushSize"))
                 Text("\(Int(brushSize)) px")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -144,10 +148,12 @@ struct MaskEditorView: View {
                     _ = strokes.popLast()
                 }
                 .disabled(strokes.isEmpty)
+                .help(IAL("ia.help.undo"))
                 Button(IAL("ia.cleanup.clear")) {
                     strokes.removeAll()
                 }
                 .disabled(strokes.isEmpty)
+                .help(IAL("ia.help.clear"))
             }
             .controlSize(.small)
 
@@ -161,6 +167,7 @@ struct MaskEditorView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(strokes.isEmpty)
+                .help(IAL("ia.help.applyMask"))
             }
             .controlSize(.small)
         }
@@ -180,6 +187,7 @@ struct MaskEditorView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(promptText.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help(IAL("ia.help.applyText"))
             }
             .controlSize(.small)
         }

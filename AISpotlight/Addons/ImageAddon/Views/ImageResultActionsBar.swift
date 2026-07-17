@@ -28,10 +28,12 @@ struct ImageResultActionsBar: View {
                             systemImage: savedURL == nil ? "square.and.arrow.down" : "checkmark"
                         )
                     }
-                    .help(settings.saveFolderURL.path)
+                    .help(String(format: IAL("ia.help.save"),
+                                 (settings.saveFolderURL.path as NSString).abbreviatingWithTildeInPath))
 
                     if savedURL != nil {
                         Button(IAL("ia.result.reveal")) { reveal() }
+                            .help(IAL("ia.help.reveal"))
                     }
 
                     Button {
@@ -42,6 +44,7 @@ struct ImageResultActionsBar: View {
                             systemImage: justCopied ? "checkmark" : "doc.on.doc"
                         )
                     }
+                    .help(IAL("ia.help.copy"))
 
                     // «Повторить с другой моделью» / «Продолжить
                     // редактирование» — только пока жива сессионная запись
@@ -52,6 +55,7 @@ struct ImageResultActionsBar: View {
                             Button(IAL("ia.result.continueEditing")) {
                                 ImageOperations.restoreAttachment(attachment)
                             }
+                            .help(IAL("ia.help.continueEditing"))
                         }
                     }
                 }
@@ -84,6 +88,7 @@ struct ImageResultActionsBar: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .disabled(runner.isRunning)
+            .help(IAL("ia.help.retryOther"))
         }
     }
 

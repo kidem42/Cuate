@@ -29,7 +29,7 @@ struct ImageAttachmentActionsBar: View {
                     upscaleControl
                     functionButton(titleKey: "ia.action.removeBg",
                                    icon: "person.and.background.dotted",
-                                   help: helpText(for: settings.backgroundModelInfo)) {
+                                   help: functionHelp("ia.help.removeBg", model: settings.backgroundModelInfo)) {
                         runIfKeyed {
                             guard let model = settings.backgroundModelInfo else { return }
                             start(function: .removeBackground, model: model)
@@ -37,7 +37,7 @@ struct ImageAttachmentActionsBar: View {
                     }
                     functionButton(titleKey: "ia.action.cleanup",
                                    icon: "eraser",
-                                   help: helpText(for: settings.cleanupModelInfo)) {
+                                   help: functionHelp("ia.help.cleanup", model: settings.cleanupModelInfo)) {
                         if APIKeyStore.hasKey(aux: .fal) {
                             showingCleanupEditor.toggle()
                         } else {
@@ -103,11 +103,11 @@ struct ImageAttachmentActionsBar: View {
             .controlSize(.small)
             .fixedSize()
             .disabled(runner.isRunning)
-            .help(helpText(for: model))
+            .help(functionHelp("ia.help.upscale", model: model))
         } else {
             functionButton(titleKey: "ia.action.upscale",
                            icon: "arrow.up.backward.and.arrow.down.forward.rectangle",
-                           help: helpText(for: model)) {
+                           help: functionHelp("ia.help.upscale", model: model)) {
                 runIfKeyed {
                     guard let model else { return }
                     start(function: .upscale, model: model)
@@ -147,9 +147,10 @@ struct ImageAttachmentActionsBar: View {
         .help(help)
     }
 
-    private func helpText(for model: ImageModelInfo?) -> String {
+    /// "Что делает · модель (цена) · слэш-альтернатива" per function.
+    private func functionHelp(_ key: String, model: ImageModelInfo?) -> String {
         guard let model else { return "" }
-        return String(format: IAL("ia.action.upscale.help"), model.name, model.priceLabel)
+        return String(format: IAL(key), model.name, model.priceLabel)
     }
 
     /// ТЗ §6: кнопки видны и без ключа; клик объясняет, куда идти.

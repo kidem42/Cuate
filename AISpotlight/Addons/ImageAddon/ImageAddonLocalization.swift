@@ -130,6 +130,22 @@ enum ImageAddonStrings {
         "ia.action.cleanup": [.english: "Remove Objects", .spanish: "Quitar objetos", .russian: "Удалить объекты"],
         "ia.action.faceEnhance": [.english: "Enhance faces", .spanish: "Mejorar rostros", .russian: "Улучшить лица"],
         "ia.action.factorMax": [.english: "max", .spanish: "máx", .russian: "макс"],
+        // Function tooltips: what it does · model (price) · slash alternative
+        "ia.help.upscale": [
+            .english: "Increase the image resolution and detail.\nModel: %@ (%@). The ▾ menu picks the factor.\nAlso: type /upscale in the input field",
+            .spanish: "Aumenta la resolución y el detalle de la imagen.\nModelo: %@ (%@). El menú ▾ elige el factor.\nTambién: escribe /upscale en el campo de entrada",
+            .russian: "Увеличивает разрешение и детализацию картинки.\nМодель: %@ (%@). Меню ▾ — выбор кратности.\nАльтернатива: команда /upscale в поле ввода"
+        ],
+        "ia.help.removeBg": [
+            .english: "Remove the background — the result is a PNG with transparency.\nModel: %@ (%@).\nAlso: type /bg in the input field",
+            .spanish: "Elimina el fondo — el resultado es un PNG con transparencia.\nModelo: %@ (%@).\nTambién: escribe /bg en el campo de entrada",
+            .russian: "Удаляет фон — результат PNG с прозрачностью.\nМодель: %@ (%@).\nАльтернатива: команда /bg в поле ввода"
+        ],
+        "ia.help.cleanup": [
+            .english: "Remove unwanted objects, text or defects: paint them with a brush or describe them in words.\nModel: %@ (%@).\nAlso: /cleanup <what to remove>",
+            .spanish: "Elimina objetos, textos o defectos no deseados: píntalos con el pincel o descríbelos con palabras.\nModelo: %@ (%@).\nTambién: /cleanup <qué eliminar>",
+            .russian: "Удаляет лишние объекты, надписи, дефекты: закрасьте их кистью или опишите словами.\nМодель: %@ (%@).\nАльтернатива: /cleanup <что удалить>"
+        ],
         "ia.action.upscale.help": [
             .english: "Run with %@ (%@)",
             .spanish: "Ejecutar con %@ (%@)",
@@ -166,9 +182,71 @@ enum ImageAddonStrings {
             .russian: "Изображение уменьшено с %.0f до %.0f МП (лимит входа)."
         ],
 
+        // Result bar tooltips
+        "ia.help.save": [
+            .english: "Save to “%@” — no dialogs. The folder is set in Settings → Images",
+            .spanish: "Guardar en “%@” — sin diálogos. La carpeta se elige en Ajustes → Imágenes",
+            .russian: "Сохранить в «%@» — без диалогов. Папка меняется в Настройках → «Изображения»"
+        ],
+        "ia.help.reveal": [
+            .english: "Show the saved file in Finder",
+            .spanish: "Mostrar el archivo guardado en Finder",
+            .russian: "Показать сохранённый файл в Finder"
+        ],
+        "ia.help.copy": [
+            .english: "Copy the image to the clipboard",
+            .spanish: "Copiar la imagen al portapapeles",
+            .russian: "Копировать изображение в буфер обмена"
+        ],
+        "ia.help.retryOther": [
+            .english: "Run the same operation on the original with a different model — handy for comparing quality",
+            .spanish: "Repite la misma operación sobre el original con otro modelo — útil para comparar calidad",
+            .russian: "Повторить ту же операцию над исходником другой моделью — удобно сравнить качество"
+        ],
+        "ia.help.continueEditing": [
+            .english: "Attach this result as the new input and keep removing objects",
+            .spanish: "Adjunta este resultado como nueva entrada y sigue eliminando objetos",
+            .russian: "Сделать этот результат новым вложением и продолжить удаление объектов"
+        ],
+
         // Mask editor
         "ia.cleanup.brush": [.english: "Brush", .spanish: "Pincel", .russian: "Кисть"],
         "ia.cleanup.text": [.english: "By text", .spanish: "Por texto", .russian: "Текстом"],
+        "ia.help.brushMode": [
+            .english: "Paint a mask over the areas to remove",
+            .spanish: "Pinta una máscara sobre las zonas a eliminar",
+            .russian: "Закрасьте маской области, которые нужно удалить"
+        ],
+        "ia.help.textMode": [
+            .english: "Describe the object in words — no painting needed (smart model)",
+            .spanish: "Describe el objeto con palabras — sin pintar (modelo inteligente)",
+            .russian: "Опишите объект словами — без закрашивания (умная модель)"
+        ],
+        "ia.help.brushSize": [
+            .english: "Brush diameter in image pixels",
+            .spanish: "Diámetro del pincel en píxeles de la imagen",
+            .russian: "Диаметр кисти в пикселях изображения"
+        ],
+        "ia.help.undo": [
+            .english: "Remove the last stroke",
+            .spanish: "Eliminar el último trazo",
+            .russian: "Убрать последний мазок"
+        ],
+        "ia.help.clear": [
+            .english: "Clear the whole mask",
+            .spanish: "Borrar toda la máscara",
+            .russian: "Стереть всю маску"
+        ],
+        "ia.help.applyMask": [
+            .english: "Remove everything painted over",
+            .spanish: "Eliminar todo lo pintado",
+            .russian: "Удалить всё закрашенное"
+        ],
+        "ia.help.applyText": [
+            .english: "Remove what the description matches",
+            .spanish: "Eliminar lo que coincida con la descripción",
+            .russian: "Удалить то, что подходит под описание"
+        ],
         "ia.cleanup.hint": [
             .english: "Paint over what you want removed",
             .spanish: "Pinta sobre lo que quieras eliminar",
