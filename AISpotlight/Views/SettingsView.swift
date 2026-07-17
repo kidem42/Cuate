@@ -6,11 +6,13 @@ import AVFoundation
 enum SettingsTab: String, Hashable {
     case chat, keys, voice, general, prompts
     case layoutFix // LayoutFix addon (Addons/LayoutFix)
+    case imageAddon // ImageAddon (Addons/ImageAddon)
 }
 
 struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var layoutFix = LayoutFixSettings.shared // addon: gates its tab
+    @ObservedObject private var imageAddon = ImageAddonSettings.shared // addon: gates its tab
 
     enum KeyTestState: Equatable {
         case testing
@@ -63,6 +65,13 @@ struct SettingsView: View {
                 LayoutFixSettingsView()
                     .tabItem { Label(LFL("lf.tab"), systemImage: "keyboard") }
                     .tag(SettingsTab.layoutFix)
+            }
+
+            // ImageAddon — same pattern: the tab appears only when enabled.
+            if imageAddon.enabled {
+                ImageAddonSettingsView()
+                    .tabItem { Label(IAL("ia.tab"), systemImage: "photo") }
+                    .tag(SettingsTab.imageAddon)
             }
         }
         .id(settings.language) // re-render the whole tree on language change
@@ -707,6 +716,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
+            ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
         }
     }
 

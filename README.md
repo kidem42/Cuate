@@ -14,6 +14,8 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
   - Optional LLM cleanup of transcribed text (punctuation, filler words)
 - **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
 - **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default
+- **Image tools addon** — process an attached image with cloud AI models (one fal.ai key): **upscale** (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), **background removal** (Bria RMBG-2.0 / BiRefNet v2), **object removal** with an inline brush-mask editor or a text description (Bria Eraser / Object Removal). Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; off by default
+- **Attach images** — paperclip button or paste with ⌘V (files, screenshots, browser images; HEIC/TIFF converted automatically)
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
 - **OCR** — extract text from images and documents (Mistral OCR)
 - **Web search** — augment answers with live results (Brave Search API)

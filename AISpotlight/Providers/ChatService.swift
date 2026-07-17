@@ -159,7 +159,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
                 if message.id == lastUserID {
                     if providerID.supportsVision {
                         images = message.attachments.map {
-                            LLMImage(mimeType: $0.mimeType, base64: $0.base64)
+                            LLMImage(mimeType: $0.mimeType, base64: $0.contentBase64)
                         }
                     } else {
                         // Non-vision provider: OCR the attachments into text.
@@ -168,7 +168,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
                         }
                         for attachment in message.attachments where attachment.mimeType.hasPrefix("image") {
                             let ocrText = try await MistralOCRService.extractText(
-                                imageBase64: attachment.base64,
+                                imageBase64: attachment.contentBase64,
                                 mimeType: attachment.mimeType
                             )
                             text += "\n\n[Image content extracted via OCR]:\n\(ocrText)"

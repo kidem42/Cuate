@@ -196,6 +196,8 @@ enum Localization {
 
         // MARK: Tooltips
         "tooltip.input": [.english: "Enter — send, Shift+Enter — new line", .spanish: "Intro — enviar, Mayús+Intro — nueva línea", .russian: "Enter — отправить, Shift+Enter — новая строка"],
+        "tooltip.attach": [.english: "Attach an image (or paste one with ⌘V)", .spanish: "Adjuntar una imagen (o pégala con ⌘V)", .russian: "Прикрепить изображение (или вставьте через ⌘V)"],
+        "chat.mediaExpired": [.english: "(media removed — retention limit)", .spanish: "(multimedia eliminado — límite de retención)", .russian: "(медиа удалено — истёк срок хранения)"],
         "tooltip.send": [.english: "Send message (Enter)", .spanish: "Enviar mensaje (Intro)", .russian: "Отправить сообщение (Enter)"],
         "tooltip.voice.start": [.english: "Record a voice message. While recording: Space — send, double Space / Esc — cancel", .spanish: "Grabar un mensaje de voz. Durante la grabación: Espacio — enviar, doble Espacio / Esc — cancelar", .russian: "Записать голосовое. Во время записи: Пробел — отправить, двойной Пробел / Esc — отмена"],
         "tooltip.voice.stop": [.english: "Stop and send (or press Space)", .spanish: "Detener y enviar (o pulsa Espacio)", .russian: "Остановить и отправить (или Пробел)"],

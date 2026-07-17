@@ -6,6 +6,16 @@ import AppKit
 /// bubble: rounded 3pt accent stripe on the left, muted indented text.
 final class QuoteComposerTextView: NSTextView {
 
+    /// Host-installed hook: return true when the pasteboard was consumed as
+    /// an image attachment (⌘V of a picture); false falls through to the
+    /// normal text paste.
+    var onPasteImage: ((NSPasteboard) -> Bool)?
+
+    override func paste(_ sender: Any?) {
+        if let onPasteImage, onPasteImage(NSPasteboard.general) { return }
+        super.paste(sender)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawQuoteBar()
         super.draw(dirtyRect)
@@ -69,6 +79,9 @@ struct CustomTextEditor: NSViewRepresentable {
     @Binding var measuredHeight: CGFloat
     var onSubmit: () -> Void
     var isDisabled: Bool
+    /// Called on ⌘V when the pasteboard may hold an image. Return true to
+    /// consume the paste (the image became an attachment).
+    var onPasteImage: ((NSPasteboard) -> Bool)? = nil
 
     static let minHeight: CGFloat = 27
     static let maxHeight: CGFloat = 27 + 17 * 4 // ~5 lines, then scroll
@@ -158,6 +171,11 @@ struct CustomTextEditor: NSViewRepresentable {
 
         // Configure text view
         textView.delegate = context.coordinator
+        // Route ⌘V through the coordinator so the closure the host passed on
+        // the LATEST update is used (the representable struct is recreated).
+        textView.onPasteImage = { [weak coordinator = context.coordinator] pasteboard in
+            coordinator?.parent.onPasteImage?(pasteboard) ?? false
+        }
         textView.isRichText = false
         textView.font = .systemFont(ofSize: 13)
         textView.backgroundColor = .clear

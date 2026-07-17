@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 extension Notification.Name {
     static let chatWindowDidBecomeVisible = Notification.Name("chatWindowDidBecomeVisible")
@@ -143,6 +144,9 @@ struct ChatWindow: View {
                                     Text(chatStore.statusText ?? L("panel.thinking"))
                                         .font(.footnote)
                                         .foregroundColor(.secondary)
+                                    // ImageAddon: cancels a running image
+                                    // operation; hidden otherwise.
+                                    ImageOperationCancelButton()
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
@@ -182,9 +186,23 @@ struct ChatWindow: View {
                     }
                     .onChange(of: showThinkingIndicator) { _, visible in
                         // Reveal the "Thinking…" pill when it appears below
-                        // the last message.
+                        // the last message. Deferred a beat so the pill is
+                        // actually laid out (scrollTo an unrendered id is a
+                        // silent no-op in a LazyVStack).
                         if visible, isNearBottom {
-                            DispatchQueue.main.async { scrollToBottom(proxy) }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                scrollToBottom(proxy)
+                            }
+                        }
+                    }
+                    .onChange(of: chatStore.statusText) { _, status in
+                        // A NEW status (image operation, web search) must
+                        // bring the progress pill into view — its text can
+                        // appear/change without the indicator toggling.
+                        guard status != nil,
+                              isNearBottom || chatStore.messages.last?.isUser == true else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            scrollToBottom(proxy)
                         }
                     }
                     .onAppear {
@@ -258,9 +276,30 @@ struct ChatWindow: View {
                             extractTextAction: { extractText(from: attachment) }
                         )
                         .padding(.horizontal, 12)
+
+                        // ImageAddon actions (Addons/ImageAddon) — renders
+                        // nothing while the addon is disabled.
+                        ImageAttachmentActionsBar(
+                            attachment: attachment,
+                            chatStore: chatStore,
+                            clearAttachment: clearCurrentAttachment
+                        )
+                        .padding(.horizontal, 12)
                     }
 
                     HStack(alignment: .bottom, spacing: 8) {
+                        // Attach an image (opens as a sheet so the panel
+                        // doesn't auto-hide on losing key status)
+                        Button(action: presentAttachOpenPanel) {
+                            Image(systemName: "paperclip")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .frame(width: 24, height: 27)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .disabled(audioRecorder.isRecording)
+                        .help(L("tooltip.attach"))
+
                         // Multi-line text input
                         ZStack(alignment: .topLeading) {
                             if messageText.isEmpty, quotedText == nil {
@@ -278,7 +317,8 @@ struct ChatWindow: View {
                                 quoteToInsert: $quoteToInsert,
                                 measuredHeight: $textEditorHeight,
                                 onSubmit: sendMessage,
-                                isDisabled: audioRecorder.isRecording
+                                isDisabled: audioRecorder.isRecording,
+                                onPasteImage: handleImagePaste
                             )
                             .frame(height: textEditorHeight)
                             .focused($isInputFocused)
@@ -360,6 +400,14 @@ struct ChatWindow: View {
             self.pendingAttachment = appState.pendingAttachment
             installVoiceKeyMonitor()
             installScrollIntentMonitor()
+            ChatWindowBridge.chatStore = chatStore // ImageAddon (Addons/ImageAddon)
+        }
+        // ImageAddon: retry-after-error and «Продолжить редактирование»
+        // hand an attachment back to the composer.
+        .onReceive(NotificationCenter.default.publisher(for: .imageAddonAttachRequest)) { note in
+            if let attachment = note.object as? ChatAttachment {
+                appState.pendingAttachment = attachment
+            }
         }
         .onReceive(appState.$pendingAttachment) { attachment in
             self.pendingAttachment = attachment
@@ -566,6 +614,18 @@ struct ChatWindow: View {
     }
 
     private func sendMessage() {
+        // ImageAddon slash commands (/upscale, /bg, /cleanup) act on the
+        // pending attachment instead of being sent as chat text.
+        if ImageSlashCommands.handle(
+            input: messageText,
+            attachment: pendingAttachment,
+            chatStore: chatStore,
+            clearAttachment: clearCurrentAttachment
+        ) {
+            messageText = ""
+            return
+        }
+
         // The quote region (if any) becomes a markdown blockquote in the
         // outgoing text; on screen it was a styled block without markers.
         let text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
@@ -669,6 +729,82 @@ struct ChatWindow: View {
         appState.clearPendingAttachment()
     }
 
+    /// Formats the chat/vision providers take as-is; anything else (HEIC,
+    /// TIFF, …) is converted to PNG locally before attaching.
+    private static let directlyAttachableMimes = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
+    /// "Attach an image" via a system dialog. Presented as a SHEET of the
+    /// floating panel: the dialog takes key status, and a free-standing
+    /// dialog would trigger the panel's auto-hide (see `hideChatWindow`).
+    private func presentAttachOpenPanel() {
+        guard let window = NSApp.windows.first(where: { $0 is FloatingPanelWindow }) else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.png, .jpeg, .webP, .heic, .heif, .tiff, .gif]
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            _ = attachImageFile(at: url)
+        }
+    }
+
+    /// Reads an image file and attaches it, converting exotic formats to PNG.
+    @discardableResult
+    private func attachImageFile(at url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        let mime = UTType(filenameExtension: url.pathExtension.lowercased())?.preferredMIMEType ?? "application/octet-stream"
+        if Self.directlyAttachableMimes.contains(mime.lowercased()) {
+            attach(data: data, mime: mime, filename: url.lastPathComponent)
+            return true
+        }
+        guard let png = Self.pngData(from: data) else { return false }
+        attach(data: png, mime: "image/png",
+               filename: (url.lastPathComponent as NSString).deletingPathExtension + ".png")
+        return true
+    }
+
+    /// ⌘V in the composer: an image on the pasteboard becomes the pending
+    /// attachment (Slack/Telegram-style). Plain-text pastes fall through.
+    private func handleImagePaste(_ pasteboard: NSPasteboard) -> Bool {
+        // A copied image FILE (Finder ⌘C) arrives as a file URL + its name as
+        // a string — the file wins over the text.
+        let urlOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+            .urlReadingContentsConformToTypes: [UTType.image.identifier]
+        ]
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: urlOptions) as? [URL],
+           let url = urls.first {
+            return attachImageFile(at: url)
+        }
+
+        // Raster data (screenshot copy, browser "Copy Image"). TIFF is the
+        // clipboard lingua franca — normalize to PNG.
+        if let type = pasteboard.availableType(from: [.png, .tiff]),
+           let data = pasteboard.data(forType: type) {
+            let png = (type == .png) ? data : Self.pngData(from: data)
+            guard let png else { return false }
+            let timestamp = Int(Date().timeIntervalSince1970)
+            attach(data: png, mime: "image/png", filename: "pasted-\(timestamp).png")
+            return true
+        }
+        return false
+    }
+
+    private func attach(data: Data, mime: String, filename: String) {
+        appState.pendingAttachment = ChatAttachment(
+            filename: filename,
+            mimeType: mime,
+            base64: data.base64EncodedString()
+        )
+    }
+
+    /// Re-encodes arbitrary image bytes (HEIC, TIFF, …) to PNG.
+    private static func pngData(from data: Data) -> Data? {
+        guard let rep = NSBitmapImageRep(data: data) else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+
     /// Runs Mistral OCR on the pending image. The result is structured
     /// markdown (headings, lists, tables mirror the original layout): it is
     /// shown rendered in the chat and the raw markdown is copied to the
@@ -680,7 +816,7 @@ struct ChatWindow: View {
         Task { @MainActor in
             do {
                 let markdown = try await MistralOCRService.extractText(
-                    imageBase64: attachment.base64,
+                    imageBase64: attachment.contentBase64,
                     mimeType: attachment.mimeType
                 )
                 NSPasteboard.general.clearContents()

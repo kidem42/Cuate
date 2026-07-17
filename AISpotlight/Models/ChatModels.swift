@@ -7,17 +7,35 @@ struct ChatAttachment: Identifiable, Codable {
     let id: UUID
     let filename: String
     let mimeType: String
+    /// Inline payload. Empty when the attachment lives as a file on disk
+    /// (`fileURLString`) — large results would bloat chat.json otherwise.
     let base64: String
+    /// Absolute path of a file-backed payload (Application Support). The
+    /// optional decodes as nil for chats saved by older versions.
+    var fileURLString: String?
 
-    init(filename: String, mimeType: String, base64: String, id: UUID = UUID()) {
+    init(filename: String, mimeType: String, base64: String, id: UUID = UUID(), fileURLString: String? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.base64 = base64
+        self.fileURLString = fileURLString
+    }
+
+    var fileURL: URL? {
+        fileURLString.map { URL(fileURLWithPath: $0) }
     }
 
     var data: Data? {
-        Data(base64Encoded: base64)
+        if !base64.isEmpty { return Data(base64Encoded: base64) }
+        if let fileURL { return try? Data(contentsOf: fileURL) }
+        return nil
+    }
+
+    /// Base64 of the payload regardless of where it lives (for API calls).
+    var contentBase64: String {
+        if !base64.isEmpty { return base64 }
+        return data?.base64EncodedString() ?? ""
     }
 }
 
@@ -139,25 +157,54 @@ class ChatStore: ObservableObject {
 
     /// Loads the persisted conversation off the main thread: attachments make
     /// the JSON multi-megabyte (images → base64), and decoding it synchronously
-    /// in init stalled the app at launch.
+    /// in init stalled the app at launch. Also applies media retention and
+    /// sweeps orphaned media files while it's at it.
     private func loadFromDisk() {
         let url = Self.storeURL
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let start = DispatchTime.now()
             var loaded: PersistedChat?
+            var prunedMedia = false
             if let data = try? Data(contentsOf: url),
                var persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) {
-                // Drop dangling voice-file references (recordings are session-scoped).
+                // Media retention: attachments and recordings older than the
+                // window are dropped — files deleted, references stripped,
+                // the message text stays (image-only messages get a stub).
+                let cutoff = Date().addingTimeInterval(-Double(Config.mediaRetentionDays) * 86400)
                 persisted.messages = persisted.messages.map { message in
                     var message = message
+                    if message.timestamp < cutoff {
+                        if let audioURL = message.audioURL {
+                            try? FileManager.default.removeItem(at: audioURL)
+                            message.audioURL = nil
+                            prunedMedia = true
+                        }
+                        if !message.attachments.isEmpty {
+                            for attachment in message.attachments {
+                                if let fileURL = attachment.fileURL {
+                                    try? FileManager.default.removeItem(at: fileURL)
+                                }
+                            }
+                            message.attachments = []
+                            prunedMedia = true
+                            if message.text.isEmpty {
+                                message.text = L("chat.mediaExpired")
+                            }
+                        }
+                    }
+                    // Drop dangling voice-file references (recordings are session-scoped).
                     if let audioURL = message.audioURL, !FileManager.default.fileExists(atPath: audioURL.path) {
                         message.audioURL = nil
                     }
                     return message
                 }
+                Self.sweepOrphanedMedia(referencedBy: persisted.messages)
                 let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
-                Diagnostics.log("store", "load bytes=\(data.count) messages=\(persisted.messages.count) ms=\(ms)")
+                Diagnostics.log("store", "load bytes=\(data.count) messages=\(persisted.messages.count) prunedMedia=\(prunedMedia) ms=\(ms)")
                 loaded = persisted
+            } else {
+                // No (readable) history — every media file is an orphan.
+                Self.sweepOrphanedMedia(referencedBy: [])
             }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -166,9 +213,48 @@ class ChatStore: ObservableObject {
                     self.messages = loaded.messages + self.messages
                     self.conversationSummary = loaded.conversationSummary
                     self.summaryCoversCount = min(loaded.summaryCoversCount, loaded.messages.count)
+                    if prunedMedia {
+                        self.scheduleSave() // persist the stripped references
+                    }
                 }
                 self.isHistoryLoaded = true
             }
+        }
+    }
+
+    /// Deletes media files no message references anymore. Covers crash
+    /// windows (a result file written, chat.json's debounced save never
+    /// landed) and recordings that never became a message. A 1-hour age
+    /// grace protects files of operations racing this startup sweep.
+    nonisolated private static func sweepOrphanedMedia(referencedBy messages: [ChatMessage]) {
+        var referenced = Set<String>()
+        for message in messages {
+            if let audioURL = message.audioURL { referenced.insert(audioURL.path) }
+            for attachment in message.attachments {
+                if let fileURL = attachment.fileURL { referenced.insert(fileURL.path) }
+            }
+        }
+
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AISpotlight", isDirectory: true)
+        let gracePeriod: TimeInterval = 3600
+        var removed = 0
+        for subdir in ["Recordings", "images"] {
+            let dir = base.appendingPathComponent(subdir, isDirectory: true)
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
+            )) ?? []
+            for file in files where !referenced.contains(file.path) {
+                let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                if Date().timeIntervalSince(modified) > gracePeriod {
+                    try? FileManager.default.removeItem(at: file)
+                    removed += 1
+                }
+            }
+        }
+        if removed > 0 {
+            Diagnostics.log("store", "sweep removed \(removed) orphaned media file(s)")
         }
     }
 
@@ -252,11 +338,17 @@ class ChatStore: ObservableObject {
 
     func clearMessages() {
         DispatchQueue.main.async {
-            // Delete voice recordings referenced by the cleared conversation
-            // so they don't pile up as orphans in Application Support.
+            // Delete voice recordings and file-backed attachments referenced
+            // by the cleared conversation so they don't pile up as orphans
+            // in Application Support.
             for message in self.messages {
                 if let url = message.audioURL {
                     try? FileManager.default.removeItem(at: url)
+                }
+                for attachment in message.attachments {
+                    if let url = attachment.fileURL {
+                        try? FileManager.default.removeItem(at: url)
+                    }
                 }
             }
             self.messages.removeAll()

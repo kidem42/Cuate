@@ -76,12 +76,13 @@ struct MessageRow: View {
     private var assistantMessageBubble: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "brain")
-                        .foregroundColor(.accentColor)
-                        .font(.caption)
-                    Spacer()
-                }
+                // No trailing Spacer: it used to stretch every assistant
+                // bubble to the full 75% width — image-only results looked
+                // like a small picture lost in an empty field. The bubble
+                // now hugs its content (long text still fills the width).
+                Image(systemName: "brain")
+                    .foregroundColor(.accentColor)
+                    .font(.caption)
                 
                 assistantAttachmentsSection()
 
@@ -157,12 +158,19 @@ struct MessageRow: View {
         MarkdownBlocksView(text: text, linkColor: linkColor)
     }
 
+    /// Image previews scale with the panel: ~70% of the bubble width
+    /// (bubbles are ~75% of the window), never below the legacy 220pt.
+    /// SwiftUI re-evaluates this on window resize, so previews follow.
+    private var attachmentPreviewWidth: CGFloat {
+        max(220, maxBubbleWidth * 0.7)
+    }
+
     @ViewBuilder
     private func userAttachmentsSection() -> some View {
         if !message.attachments.isEmpty {
             VStack(alignment: .trailing, spacing: 8) {
                 ForEach(message.attachments) { attachment in
-                    AttachmentPreviewBubble(attachment: attachment, alignment: .trailing)
+                    AttachmentPreviewBubble(attachment: attachment, maxImageWidth: attachmentPreviewWidth)
                 }
             }
         }
@@ -173,7 +181,10 @@ struct MessageRow: View {
         if !message.attachments.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(message.attachments) { attachment in
-                    AttachmentPreviewBubble(attachment: attachment, alignment: .leading)
+                    AttachmentPreviewBubble(attachment: attachment, maxImageWidth: attachmentPreviewWidth)
+                    // ImageAddon (Addons/ImageAddon): Save/Copy under images
+                    // the assistant produced; renders nothing when disabled.
+                    ImageResultActionsBar(attachment: attachment)
                 }
             }
         }
@@ -356,9 +367,12 @@ struct MarkdownText: View {
 
 private struct AttachmentPreviewBubble: View {
     let attachment: ChatAttachment
-    let alignment: Alignment
+    /// Scales with the bubble (see `MessageRow.attachmentPreviewWidth`).
+    let maxImageWidth: CGFloat
 
     var body: some View {
+        // The bubble hugs the preview — no `.infinity` stretcher: an
+        // image-only message must not blow the bubble up to full width.
         Group {
             if attachment.mimeType.hasPrefix("image"),
                let data = attachment.data,
@@ -366,7 +380,9 @@ private struct AttachmentPreviewBubble: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
-                    .frame(maxWidth: 220)
+                    // maxHeight keeps portrait shots from towering over the
+                    // chat; scaledToFit honors both bounds.
+                    .frame(maxWidth: maxImageWidth, maxHeight: 360)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -393,7 +409,6 @@ private struct AttachmentPreviewBubble: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: alignment)
         .help(L("tooltip.attachment"))
     }
 }

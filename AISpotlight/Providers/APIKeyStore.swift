@@ -165,11 +165,13 @@ enum APIKeyStore {
     enum AuxKey: String, CaseIterable {
         case brave
         case deepgram
+        case fal // ImageAddon (Addons/ImageAddon)
 
         var displayName: String {
             switch self {
             case .brave: return "Brave Search"
             case .deepgram: return "Deepgram"
+            case .fal: return "fal.ai"
             }
         }
     }
@@ -206,4 +208,6 @@ extension Notification.Name {
     static let panelPositionDidReset = Notification.Name("panelPositionDidReset")
     static let showOnboarding = Notification.Name("showOnboarding")
     static let selectSettingsTab = Notification.Name("selectSettingsTab")
+    /// Opens the Settings window from anywhere (AppDelegate listens).
+    static let openSettingsWindow = Notification.Name("openSettingsWindow")
 }

@@ -57,6 +57,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // LayoutFix addon — self-contained; all code lives in Addons/LayoutFix.
         LayoutFixAddon.shared.start()
 
+        // ImageAddon — self-contained; all code lives in Addons/ImageAddon.
+        ImageAddon.shared.start()
+
         // Re-register global shortcuts when the user rebinds them in Settings
         NotificationCenter.default.addObserver(forName: .hotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -73,6 +76,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Refresh the menu when the LayoutFix addon toggles (enable / auto).
         NotificationCenter.default.addObserver(forName: .layoutFixHotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.setupStatusItem() }
+        }
+
+        // Opening the Settings window must work from anywhere (e.g. the
+        // ImageAddon "no key" hint in the panel). The sender follows up with
+        // a .selectSettingsTab post for the tab itself.
+        NotificationCenter.default.addObserver(forName: .openSettingsWindow, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.openSettings(nil) }
         }
 
         // "Reset Panel Position" in Settings: recenter immediately
@@ -652,6 +662,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let window = chatWindow, window.isVisible else { return }
         // Keep the panel visible while the user works in Settings
         if let settingsWindow, settingsWindow.isKeyWindow { return }
+        // A system dialog (Open/Save) presented as the panel's sheet takes
+        // key status — that must not count as "the user left the panel".
+        if window.attachedSheet != nil { return }
         Diagnostics.log("ui", "panel.hide")
         window.orderOut(nil)
     }
