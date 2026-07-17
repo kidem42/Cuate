@@ -28,7 +28,8 @@ final class DictationService: NSObject, ObservableObject {
     /// Normalized mic level 0…1 for the equalizer.
     @Published var level: Float = 0
 
-    private var mode: Mode = .transcribe
+    /// Published so the widget can show the translate-mode language badge.
+    @Published private(set) var mode: Mode = .transcribe
     private var recorder: AVAudioRecorder?
     private var meterTimer: Timer?
     private var fileURL: URL?
@@ -354,10 +355,15 @@ Translate this dictated text into \(settings.dictationTargetLanguage). First men
 
     // MARK: - Widget (Liquid Glass pill under the camera notch)
 
+    /// Wider in translate mode to fit the language badge.
+    var widgetSize: NSSize {
+        NSSize(width: mode == .translate ? 182 : 148, height: 34)
+    }
+
     private func showWidget() {
         if panel == nil {
             let panel = NonKeyPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 148, height: 34),
+                contentRect: NSRect(origin: .zero, size: widgetSize),
                 // .nonactivatingPanel + a canBecomeKey=false subclass guarantee
                 // the widget never steals focus from the field being dictated
                 // into (borderless panels can otherwise become key).
@@ -385,6 +391,8 @@ Translate this dictated text into \(settings.dictationTargetLanguage). First men
         // on every show.
         panel?.appearance = NSApp.appearance
 
+        // The panel is reused across sessions; the width depends on the mode.
+        panel?.setContentSize(widgetSize)
         positionUnderNotch()
         panel?.orderFrontRegardless()
     }
@@ -418,9 +426,11 @@ private final class NonKeyPanel: NSPanel {
 // MARK: - Widget view
 
 /// Minimal Liquid Glass pill: live equalizer while recording (click = stop),
-/// tiny spinner while processing. Nothing else.
+/// tiny spinner while processing. In translate mode also shows the target
+/// language's ISO code; right-click switches the language mid-dictation.
 private struct DictationWidgetView: View {
     @ObservedObject var service: DictationService
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         AdaptiveGlassContainer {
@@ -431,17 +441,52 @@ private struct DictationWidgetView: View {
                 } else {
                     EqualizerBars(level: service.level)
                 }
+                if service.mode == .translate {
+                    // Left-clicking the badge opens the language menu (the
+                    // rest of the pill still stops on click).
+                    Menu {
+                        languagePicker
+                    } label: {
+                        Text(AppSettings.dictationISOCode(for: settings.dictationTargetLanguage))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2.5)
+                            .background(Capsule().fill(Color.primary.opacity(0.08)))
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
             }
-            .frame(width: 148, height: 34)
+            .frame(width: service.widgetSize.width, height: service.widgetSize.height)
             .contentShape(Capsule())
             .onTapGesture {
                 if service.phase == .recording {
                     Task { await service.stopAndProcess() }
                 }
             }
+            .contextMenu {
+                if service.mode == .translate {
+                    languagePicker
+                }
+            }
             .adaptiveGlassCapsule()
         }
         .help("Click or press the dictation hotkey to stop")
+    }
+
+    /// Shared between the badge's click menu and the pill's right-click menu.
+    /// Takes effect immediately: postProcess reads the setting per segment,
+    /// so upcoming phrases use the new language.
+    private var languagePicker: some View {
+        Picker(L("dictation.translateTo"), selection: $settings.dictationTargetLanguage) {
+            ForEach(AppSettings.dictationLanguages, id: \.self) { language in
+                Text(language).tag(language)
+            }
+        }
+        .pickerStyle(.inline)
     }
 }
 

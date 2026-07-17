@@ -168,6 +168,16 @@ final class AppSettings: ObservableObject {
 
     static let dictationLanguages = ["English", "Russian", "German", "French", "Spanish", "Italian", "Portuguese", "Chinese", "Japanese"]
 
+    /// ISO 639-1 code shown in the dictation pill while translating.
+    static func dictationISOCode(for language: String) -> String {
+        let codes: [String: String] = [
+            "English": "EN", "Russian": "RU", "German": "DE",
+            "French": "FR", "Spanish": "ES", "Italian": "IT",
+            "Portuguese": "PT", "Chinese": "ZH", "Japanese": "JA",
+        ]
+        return codes[language] ?? String(language.prefix(2)).uppercased()
+    }
+
     // MARK: - Panel placement
 
     /// Open the chat panel on the screen where the mouse cursor currently is.
