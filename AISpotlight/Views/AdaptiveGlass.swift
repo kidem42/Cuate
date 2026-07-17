@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Liquid Glass with a graceful fallback: on macOS 26+ the real
 /// `GlassEffectContainer`/`.glassEffect` is used; on older systems (the app
@@ -43,5 +44,24 @@ extension View {
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
         }
+    }
+}
+
+/// Behind-window blur (the desktop faintly shows through). Used as the
+/// Settings detail-pane background: SwiftUI materials blend with the window's
+/// own background, so real see-through needs NSVisualEffectView directly.
+struct BehindWindowBlur: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .underWindowBackground
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
     }
 }

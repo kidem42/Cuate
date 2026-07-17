@@ -46,6 +46,8 @@ enum Localization {
         "tab.voice": [.english: "Voice", .spanish: "Voz", .russian: "Голос"],
         "tab.general": [.english: "General", .spanish: "General", .russian: "Общие"],
         "tab.prompts": [.english: "Prompts", .spanish: "Prompts", .russian: "Промпты"],
+        "sidebar.addons": [.english: "Add-ons", .spanish: "Complementos", .russian: "Аддоны"],
+        "prompts.resizeHelp": [.english: "Drag to resize the editor", .spanish: "Arrastra para cambiar el tamaño del editor", .russian: "Потяните, чтобы изменить высоту редактора"],
 
         // MARK: Chat tab
         "chat.header": [.english: "Chat", .spanish: "Chat", .russian: "Чат"],

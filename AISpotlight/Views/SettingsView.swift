@@ -33,57 +33,39 @@ struct SettingsView: View {
     @State private var sttModelInput = ""
     @State private var newPresetName = ""
     @State private var selectedTab = SettingsTab.chat
+    // Prompt editor height: user-resizable via the grip below the field,
+    // persisted so a tall editor stays tall on the next open.
+    @AppStorage("settings.promptEditorHeight") private var promptEditorHeight: Double = 140
+    @State private var promptDragBase: Double?
     @State private var accessibilityGranted = true
     @State private var screenGranted = true
     @State private var micGranted = true
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            tab { chatSection; parametersSection; ocrSection }
-                .tabItem { Label(L("tab.chat"), systemImage: "bubble.left.and.bubble.right") }
-                .tag(SettingsTab.chat)
-
-            tab { keysSection; speechKeysSection; webSection }
-                .tabItem { Label(L("tab.keys"), systemImage: "key") }
-                .tag(SettingsTab.keys)
-
-            tab { voiceSection; dictationSection }
-                .tabItem { Label(L("tab.voice"), systemImage: "mic") }
-                .tag(SettingsTab.voice)
-
-            tab { generalSection; permissionsSection; hotkeysSection; panelSection; appearanceSection; diagnosticsSection }
-                .tabItem { Label(L("tab.general"), systemImage: "gearshape") }
-                .tag(SettingsTab.general)
-
-            tab { switcherSection; promptSection }
-                .tabItem { Label(L("tab.prompts"), systemImage: "text.quote") }
-                .tag(SettingsTab.prompts)
-
-            // LayoutFix addon — the tab appears only when the addon is enabled
-            // (master switch in the General tab). Brings its own Form.
-            if layoutFix.enabled {
-                LayoutFixSettingsView()
-                    .tabItem { Label(LFL("lf.tab"), systemImage: "keyboard") }
-                    .tag(SettingsTab.layoutFix)
-            }
-
-            // ImageAddon — same pattern: the tab appears only when enabled.
-            if imageAddon.enabled {
-                ImageAddonSettingsView()
-                    .tabItem { Label(IAL("ia.tab"), systemImage: "photo") }
-                    .tag(SettingsTab.imageAddon)
-            }
+        // System Settings-style layout: translucent sidebar with the sections,
+        // grouped forms in the detail pane floating on a behind-window blur —
+        // the settings-window take on the panel's Liquid Glass language.
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            detail
         }
+        .navigationSplitViewStyle(.balanced)
         .id(settings.language) // re-render the whole tree on language change
         .onReceive(NotificationCenter.default.publisher(for: .selectSettingsTab)) { note in
             if let raw = note.object as? String, let t = SettingsTab(rawValue: raw) {
                 selectedTab = t
             }
         }
-        // Breathing room between the window's title bar and the tab strip —
-        // without it the tabs sit flush against (and get clipped by) the edge.
-        .padding(.top, 10)
-        .frame(width: 560, height: 650)
+        // Addon tabs disappear with their master switch — bounce the selection
+        // back to General so the detail pane never shows an orphaned tab.
+        .onChange(of: layoutFix.enabled) { _, enabled in
+            if !enabled && selectedTab == .layoutFix { selectedTab = .general }
+        }
+        .onChange(of: imageAddon.enabled) { _, enabled in
+            if !enabled && selectedTab == .imageAddon { selectedTab = .general }
+        }
+        .frame(minWidth: 720, minHeight: 560)
         .onAppear {
             refreshMasks()
             sttModelInput = settings.sttModel(for: settings.sttProvider)
@@ -99,6 +81,78 @@ struct SettingsView: View {
             // Load the newly selected provider's models if not cached yet.
             settings.autoLoadModelsIfNeeded(for: provider)
         }
+    }
+
+    // MARK: - Sidebar & detail
+
+    private var sidebar: some View {
+        List(selection: Binding<SettingsTab?>(
+            get: { selectedTab },
+            set: { if let tab = $0 { selectedTab = tab } }
+        )) {
+            sidebarRow(L("tab.chat"), systemImage: "bubble.left.and.bubble.right.fill", color: .blue)
+                .tag(SettingsTab.chat)
+            sidebarRow(L("tab.keys"), systemImage: "key.fill", color: .orange)
+                .tag(SettingsTab.keys)
+            sidebarRow(L("tab.voice"), systemImage: "mic.fill", color: .red)
+                .tag(SettingsTab.voice)
+            sidebarRow(L("tab.general"), systemImage: "gearshape.fill", color: .gray)
+                .tag(SettingsTab.general)
+            sidebarRow(L("tab.prompts"), systemImage: "text.quote", color: .purple)
+                .tag(SettingsTab.prompts)
+
+            // Addon rows appear only while the addon is enabled
+            // (master switches live in the General section).
+            if layoutFix.enabled || imageAddon.enabled {
+                Section(L("sidebar.addons")) {
+                    if layoutFix.enabled {
+                        sidebarRow(LFL("lf.tab"), systemImage: "keyboard.fill", color: .indigo)
+                            .tag(SettingsTab.layoutFix)
+                    }
+                    if imageAddon.enabled {
+                        sidebarRow(IAL("ia.tab"), systemImage: "photo.fill", color: .green)
+                            .tag(SettingsTab.imageAddon)
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationSplitViewColumnWidth(min: 176, ideal: 192, max: 240)
+    }
+
+    /// System Settings-style row: white glyph in a colored rounded square.
+    private func sidebarRow(_ title: String, systemImage: String, color: Color) -> some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 21, height: 21)
+                .background(RoundedRectangle(cornerRadius: 5.5).fill(color.gradient))
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        Group {
+            switch selectedTab {
+            case .chat: tab { chatSection; parametersSection; ocrSection }
+            case .keys: tab { keysSection; speechKeysSection; webSection }
+            case .voice: tab { voiceSection; dictationSection }
+            case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; appearanceSection; diagnosticsSection }
+            case .prompts: tab { switcherSection; promptSection }
+            case .layoutFix: LayoutFixSettingsView()   // brings its own Form
+            case .imageAddon: ImageAddonSettingsView() // brings its own Form
+            }
+        }
+        // The "glass" part: hide the forms' opaque scroll background (the
+        // section cards keep their own fill, so legibility holds) and let a
+        // behind-window blur show the desktop through, like the chat panel.
+        .scrollContentBackground(.hidden)
+        .background(BehindWindowBlur().ignoresSafeArea())
+        // No .navigationTitle: the section name already shows in the sidebar
+        // and the form headers — the toolbar copy was the third one.
     }
 
     /// Wraps a tab's sections in a Form and appends the shared status line.
@@ -905,7 +959,8 @@ struct SettingsView: View {
 
             TextEditor(text: $settings.systemPrompt)
                 .font(.system(size: 12))
-                .frame(minHeight: 70)
+                .frame(height: promptEditorHeight)
+            promptResizeGrip
 
             // Unsaved-changes marker + actions
             if promptIsModified {
@@ -936,6 +991,30 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+
+    /// Drag handle under the prompt editor: pull down for more room.
+    /// Clamped so the editor can't collapse or swallow the window.
+    private var promptResizeGrip: some View {
+        Capsule()
+            .fill(.tertiary)
+            .frame(width: 36, height: 4)
+            .frame(maxWidth: .infinity) // centered; the whole row is grabbable
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let base = promptDragBase ?? promptEditorHeight
+                        promptDragBase = base
+                        promptEditorHeight = min(600, max(70, base + value.translation.height))
+                    }
+                    .onEnded { _ in promptDragBase = nil }
+            )
+            .onHover { hovering in
+                if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .help(L("prompts.resizeHelp"))
     }
 
     private var isActivePresetBuiltIn: Bool {

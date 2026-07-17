@@ -366,11 +366,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let hosting = NSHostingController(rootView: SettingsView())
             let window = NSWindow(contentViewController: hosting)
             window.title = "AISpotlight Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable]
+            // Sidebar layout (NavigationSplitView): resizable window, titlebar
+            // blended into the content so the sidebar runs edge-to-edge — the
+            // System Settings look. The split view supplies the toolbar.
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            // No visible title: the section name already shows in the sidebar
+            // and the form headers — a third copy in the toolbar is noise.
+            // `window.title` stays set for the Dock / ⌘-Tab switcher.
+            window.titleVisibility = .hidden
+            window.toolbarStyle = .unified
             window.isReleasedWhenClosed = false
+            window.allowsToolTipsWhenApplicationIsInactive = true
             window.delegate = self
             // Remember size/position across opens and launches.
             if !window.setFrameUsingName(Self.settingsFrameName) {
+                window.setContentSize(NSSize(width: 760, height: 650))
                 window.center()
             }
             window.setFrameAutosaveName(Self.settingsFrameName)
@@ -379,7 +390,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    private static let settingsFrameName = "AISpotlightSettingsWindow"
+    // "v2": the sidebar redesign needs a wider default — don't inherit the
+    // old 560-wide TabView frame saved under the previous name.
+    private static let settingsFrameName = "AISpotlightSettingsWindow.v2"
 
     /// Clicking the Dock icon while Settings is open brings it back to front.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -459,6 +472,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
+        // Accessory apps activated cooperatively (macOS 14+) may stay
+        // formally "inactive" even while the panel is key — and AppKit
+        // suppresses ALL tooltips for inactive apps by default. This flag is
+        // why .help() tooltips never appeared anywhere in the panel.
+        window.allowsToolTipsWhenApplicationIsInactive = true
 
         // Embed SwiftUI content directly and let SwiftUI render Liquid Glass.
         // Empty sizingOptions: the window dictates the size, SwiftUI adapts —
@@ -593,16 +611,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showChatWindow() {
         guard let window = chatWindow else { return }
 
-        Diagnostics.log("ui", "panel.show")
+        Diagnostics.log("ui", "panel.show active=\(NSApp.isActive)")
         positionPanelForShow(window)
 
-        // Use NSRunningApplication for more reliable activation in macOS Sonoma+
+        // Cooperative activation (macOS 14+) can be silently DENIED for an
+        // accessory app summoned by a global hotkey — the panel still gets
+        // key status and accepts typing, but the app stays formally inactive
+        // and AppKit/SwiftUI suppress every tooltip. Force the legacy path
+        // when cooperation didn't (or won't) succeed.
         NSRunningApplication.current.activate()
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         window.makeKeyAndOrderFront(nil)
 
         // Notify ChatWindow to focus the input field
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             NotificationCenter.default.post(name: .chatWindowDidBecomeVisible, object: nil)
+            Diagnostics.log("ui", "panel.shown active=\(NSApp.isActive) key=\(window.isKeyWindow)")
         }
     }
 
