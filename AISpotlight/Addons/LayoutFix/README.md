@@ -1,8 +1,15 @@
 # LayoutFix — addon
 
-Keyboard-layout auto-switcher (AutoSwitcher) for AISpotlight. Select text typed in
-the wrong layout (or leave nothing selected to grab the last word) and press the
-hotkey — `ghbdtn` becomes `привет`. Works in any app.
+Keyboard-layout fixer for AISpotlight, two modes:
+
+- **AutoSwitcher (beta)** — fixes words automatically as you type, using
+  statistical detection (trigrams + word frequencies + the system spell
+  checker).
+- **Hotkey** — select text typed in the wrong layout (or leave nothing selected
+  to grab the last word) and press the hotkey — `ghbdtn` becomes `привет`.
+
+Works in any app. Conversion goes through the layouts actually enabled in
+macOS, so any installed layout pair works; detection is tuned for EN/RU/ES.
 
 ## Design
 
@@ -13,13 +20,20 @@ state in the app's `AppSettings` and adds nothing to the app's global `L()` tabl
 
 | File | Responsibility |
 |------|----------------|
-| `LayoutConverter.swift` | Pure, offline positional RU↔EN mapping + direction detection. No dependencies — unit-testable in isolation. |
+| `LayoutFixAddon.swift` | Controller: owns a private `HotkeyManager`, grabs the selection (clipboard + ⌘C), converts, pastes back (⌘V). Also the optional `LayoutSmartFixer` (LLM) and the `AutoSwitcher` lifecycle. |
+| `AutoSwitcher.swift` | Auto mode: consumes words from `KeystrokeMonitor`, decides via `DecisionEngine`, applies corrections on the space/Enter/mid-word paths. |
+| `KeystrokeMonitor.swift` | Global `CGEventTap` on a dedicated thread: accumulates the word being typed, injects tagged corrections, turns a Backspace right after a correction into undo. |
+| `SystemLayoutEngine.swift` | Converts text through the keyboard layouts actually enabled in macOS (`UCKeyTranslate`) — any installed layout is supported — and switches the active layout via the same OS API as the menu-bar picker. |
+| `LayoutConverter.swift` | Pure, offline positional RU↔EN mapping + direction detection. No dependencies — unit-testable in isolation; fallback/offline path. |
+| `NgramScorer.swift`, `DecisionEngine.swift` | Trigram + word-frequency statistics and the tuned verdict rules (see "Statistical engine"). |
+| `LanguageValidator.swift` | Deterministic "is this a real word in language X" via the system spell checker (`NSSpellChecker`). |
+| `PlausibilityScorer.swift` | Corpus-free per-script sanity heuristic (vowel/consonant runs). |
+| `Resources/` | Trigram tables (`trigrams_{en,ru,es}.bin`) + top-30k word lists for EN/RU/ES. |
 | `LayoutFixSettings.swift` | `UserDefaults`-backed settings (keys prefixed `layoutFix.`) and its own `.layoutFixHotkeysDidChange` notification. |
-| `LayoutFixAddon.swift` | Controller: owns a private `HotkeyManager`, grabs the selection (clipboard + ⌘C), converts, pastes back (⌘V). Also the optional `LayoutSmartFixer` (LLM). |
 | `LayoutFixLocalization.swift` | Self-contained `LFL()` strings (EN/ES/RU), following the app's current language. |
 | `LayoutFixSettingsView.swift` | The Settings tab UI (enable, hotkeys, options, AI, live preview, Accessibility warning). |
 
-## Host mount points (only two, outside this folder)
+## Host mount points (only three, outside this folder)
 
 1. **Boot** — one line in `App/AISpotlightApp.swift` → `applicationDidFinishLaunching`:
    ```swift
@@ -27,8 +41,11 @@ state in the app's `AppSettings` and adds nothing to the app's global `L()` tabl
    ```
 2. **Tab** — in `Views/SettingsView.swift`: a `case layoutFix` in the `SettingsTab`
    enum and one `LayoutFixSettingsView().tabItem { … }.tag(.layoutFix)` block.
+3. **Menu bar** — an AutoSwitcher section in the status-bar menu in
+   `App/AISpotlightApp.swift` (shown when the addon is enabled), plus a menu
+   refresh subscription to the addon's notifications.
 
-Removing the addon = delete this folder + revert those two hooks.
+Removing the addon = delete this folder + revert those three hooks.
 
 ## How it works
 

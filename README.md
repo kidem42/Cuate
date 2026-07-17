@@ -7,10 +7,13 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **Spotlight-style floating panel** — summoned with a global hotkey from any app, opens on the screen where your cursor is, remembers its position
 - **Multi-provider chat** — OpenAI, Anthropic (Claude), Google Gemini, Mistral and DeepSeek; model lists are fetched live from each provider's API
 - **Voice input**
+  - Speech-to-text via **Mistral (Voxtral)**, **OpenAI** or **Deepgram** — pick the provider in Settings → Voice
   - Voice messages in chat with playback
-  - System-wide **dictation**: press a hotkey in any text field, speak, and the transcribed text is typed for you (chunked streaming transcription is on by default)
-  - **Dictation with translation** into a target language on the fly
+  - System-wide **dictation**: press a hotkey in any text field, speak, and the transcribed text is typed for you phrase by phrase as you talk (chunked mode, on by default)
+  - **Dictation with translation** into a target language on the fly — the pill under the notch shows the language's ISO badge; click it to switch the language mid-dictation
   - Optional LLM cleanup of transcribed text (punctuation, filler words)
+- **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
+- **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
 - **OCR** — extract text from images and documents (Mistral OCR)
 - **Web search** — augment answers with live results (Brave Search API)
@@ -32,11 +35,11 @@ All hotkeys are configurable in Settings → General.
 
 ## Installation
 
-Requires **macOS 14 (Sonoma) or newer**. On macOS 26+ the panel renders with Liquid Glass; on older systems it falls back to the standard translucent material.
+Requires **macOS 14 (Sonoma) or newer**; the binary is universal (Apple Silicon + Intel). On macOS 26+ the panel renders with Liquid Glass; on older systems it falls back to the standard translucent material.
 
 1. Download `AISpotlight-<version>.dmg` from [Releases](https://github.com/kidem42/AISpotlight/releases)
 2. Drag **AISpotlight** to the **Applications** folder
-3. The build is ad-hoc signed (not notarized), so before the first launch remove the quarantine flag:
+3. The build is signed with a self-signed certificate (not notarized), so before the first launch remove the quarantine flag:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/AISpotlight.app
@@ -69,18 +72,20 @@ open AISpotlight.xcodeproj   # build & run the AISpotlight scheme
 SKIP_BUILD=1 ./scripts/make-dmg.sh # repackage without rebuilding
 ```
 
-The script builds Release, ad-hoc signs the app, generates a Retina drag-to-Applications window and produces `build/AISpotlight-<version>.dmg`. No external tools required.
+The script builds a universal Release (arm64 + x86_64), signs the app with the "AISpotlight Signing" self-signed certificate (falls back to ad-hoc if absent; the stable identity keeps TCC permissions across updates), generates a Retina drag-to-Applications window and produces `build/AISpotlight-<version>.dmg`. No external tools required.
 
 ## Project structure
 
 ```text
 AISpotlight/
-├── App/          # app entry, floating panel, hotkeys, dictation, screenshots
+├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots
+├── Addons/       # self-contained addons (LayoutFix keyboard-layout fixer)
+├── Diagnostics/  # in-app logging and hang watchdog
 ├── Providers/    # LLM/STT/OCR/search clients, settings, Keychain key store
 ├── Models/       # chat data models
 └── Views/        # SwiftUI: chat window, settings, onboarding, voice UI
 scripts/
-└── make-dmg.sh   # Release + DMG packaging
+└── make-dmg.sh   # Release + DMG packaging (universal binary)
 ```
 
 ## Privacy

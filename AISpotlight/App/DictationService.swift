@@ -7,8 +7,11 @@ import Carbon
 
 /// System-wide dictation (Superwhisper-style): a global hotkey starts
 /// recording, a tiny Liquid Glass pill under the camera notch shows live mic
-/// levels, and on stop the transcript (optionally cleaned up or translated by
-/// a fast LLM) is pasted into whatever text field currently has focus.
+/// levels, and the transcript (optionally cleaned up or translated by a fast
+/// LLM) is pasted into whatever text field currently has focus — phrase by
+/// phrase while speaking (chunked mode, default) or all at once on stop. In
+/// translate mode the pill shows the target language's ISO badge; clicking it
+/// switches the language mid-dictation.
 @MainActor
 final class DictationService: NSObject, ObservableObject {
     static let shared = DictationService()
