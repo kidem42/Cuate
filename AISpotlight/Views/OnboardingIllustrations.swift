@@ -3,7 +3,7 @@ import SwiftUI
 /// Simplified, recognizable mockups of real usage scenarios for the tour.
 /// Not pixel-perfect — just enough for the user to "get" each feature.
 enum OnboardingScene: String {
-    case panel, keys, screenshot, voice, dictation, tips
+    case panel, keys, selection, screenshot, voice, dictation, layoutfix, tips
 }
 
 struct OnboardingIllustration: View {
@@ -23,9 +23,11 @@ struct OnboardingIllustration: View {
             switch scene {
             case .panel: panelScene
             case .keys: keysScene
+            case .selection: selectionScene
             case .screenshot: screenshotScene
             case .voice: voiceScene
             case .dictation: dictationScene
+            case .layoutfix: layoutfixScene
             case .tips: tipsScene
             }
         }
@@ -117,6 +119,49 @@ struct OnboardingIllustration: View {
                     .font(.system(size: 12))
                     .foregroundColor(.green)
             }
+        }
+    }
+
+    private var selectionScene: some View {
+        VStack(spacing: 6) {
+            // A document with a highlighted (selected) line
+            VStack(alignment: .leading, spacing: 4) {
+                textLine(width: 120)
+                Text("Ce n'est pas possible !")
+                    .font(.system(size: 8))
+                    .padding(.horizontal, 4).padding(.vertical, 1.5)
+                    .background(Color.accentColor.opacity(0.35))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                textLine(width: 96)
+            }
+            .padding(8)
+            .frame(width: 180, alignment: .leading)
+            .background(Color.white.opacity(0.55))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            Image(systemName: "arrow.down")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(.secondary)
+
+            // The panel's input field with the selection as a styled quote
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.accentColor)
+                        .frame(width: 3, height: 12)
+                    Text("Ce n'est pas possible !")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                }
+                Text("Translate|")
+                    .font(.system(size: 8))
+                    .foregroundColor(.primary)
+            }
+            .padding(7)
+            .frame(width: 180, alignment: .leading)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
         }
     }
 
@@ -226,6 +271,37 @@ struct OnboardingIllustration: View {
                         .padding(.leading, 8),
                     alignment: .leading
                 )
+        }
+    }
+
+    private var layoutfixScene: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Ghbdtn! Rfr ltkf?")
+                    .font(.system(size: 10, design: .monospaced))
+                    .strikethrough(color: .red.opacity(0.6))
+                    .foregroundColor(.secondary)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.accentColor)
+                Text("Привет! Как дела?")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.primary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+
+            HStack(spacing: 6) {
+                ForEach(["EN", "RU", "ES"], id: \.self) { code in
+                    Text(code)
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2.5)
+                        .background(Capsule().fill(Color.primary.opacity(0.1)))
+                }
+            }
         }
     }
 

@@ -33,6 +33,11 @@ struct OnboardingView: View {
                 noteKey: "ob.p2.note"
             ),
             Page(
+                scene: .selection,
+                titleKey: "ob.selection.title", bodyKey: "ob.selection.body",
+                hotkeys: [(s.togglePanelHotkey.displayString, "hotkeys.openPanel")]
+            ),
+            Page(
                 scene: .screenshot,
                 titleKey: "ob.p3.title", bodyKey: "ob.p3.body",
                 hotkeys: [
@@ -51,6 +56,14 @@ struct OnboardingView: View {
                 hotkeys: [
                     (s.dictationHotkey.displayString, "hotkeys.dictate"),
                     (s.dictationTranslateHotkey.displayString, "hotkeys.dictateTranslate")
+                ]
+            ),
+            Page(
+                scene: .layoutfix,
+                titleKey: "ob.layoutfix.title", bodyKey: "ob.layoutfix.body",
+                hotkeys: [
+                    (LayoutFixSettings.shared.flipHotkey.displayString, "ob.layoutfix.flip"),
+                    (LayoutFixSettings.shared.smartHotkey.displayString, "ob.layoutfix.smart")
                 ]
             ),
             Page(
