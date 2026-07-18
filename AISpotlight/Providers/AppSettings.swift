@@ -3,6 +3,12 @@ import Combine
 import AppKit
 import ServiceManagement
 
+extension Notification.Name {
+    /// Posted after a custom preset is removed; object = preset name (String).
+    /// ChatWindow reacts by deleting the preset's isolated chat data, if any.
+    static let presetDeleted = Notification.Name("presetDeleted")
+}
+
 /// App-wide appearance override.
 enum AppearanceMode: String, CaseIterable, Codable, Identifiable {
     case system
@@ -381,6 +387,13 @@ In USER messages, lines starting with "> " are quoted external text the user cap
         didSet { defaults.set(Array(hiddenPresets), forKey: "hiddenPresets") }
     }
 
+    /// Presets whose activation switches the panel to a dedicated, separately
+    /// persisted conversation (Settings → Prompts, "Own chat" toggle).
+    /// Turning the flag off keeps the history dormant on disk.
+    @Published private(set) var isolatedPresets: Set<String> {
+        didSet { defaults.set(Array(isolatedPresets), forKey: "isolatedPresets") }
+    }
+
     private init() {
         chatProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
         selectedModels = defaults.dictionary(forKey: "selectedModels") as? [String: String] ?? [:]
@@ -412,6 +425,7 @@ In USER messages, lines starting with "> " are quoted external text the user cap
         presetIcons = defaults.dictionary(forKey: "presetIcons") as? [String: String] ?? [:]
         presetSwitcherStyle = PresetSwitcherStyle(rawValue: defaults.string(forKey: "presetSwitcherStyle") ?? "") ?? .menu
         hiddenPresets = Set(defaults.stringArray(forKey: "hiddenPresets") ?? [])
+        isolatedPresets = Set(defaults.stringArray(forKey: "isolatedPresets") ?? [])
         activePresetName = defaults.string(forKey: "activePresetName") ?? Self.builtInPresets[0].name
         systemPrompt = defaults.string(forKey: "systemPrompt") ?? Self.builtInPresets[0].text
 
@@ -475,6 +489,19 @@ In USER messages, lines starting with "> " are quoted external text the user cap
         }
     }
 
+    /// Whether the preset keeps its own isolated conversation.
+    func isPresetIsolated(named name: String) -> Bool {
+        isolatedPresets.contains(name)
+    }
+
+    func setPresetIsolated(_ isolated: Bool, named name: String) {
+        if isolated {
+            isolatedPresets.insert(name)
+        } else {
+            isolatedPresets.remove(name)
+        }
+    }
+
     func presetText(named name: String) -> String? {
         if let builtIn = Self.builtInPresets.first(where: { $0.name == name }) {
             return builtIn.text
@@ -530,9 +557,13 @@ In USER messages, lines starting with "> " are quoted external text the user cap
         customPresets.removeValue(forKey: name)
         presetIcons.removeValue(forKey: name)
         hiddenPresets.remove(name)
+        isolatedPresets.remove(name)
         if activePresetName == name {
             applyPreset(named: Self.builtInPresets[0].name)
         }
+        // Unconditional: a dormant chat file may remain from a previously
+        // enabled isolation toggle. ChatWindow deletes the file + its media.
+        NotificationCenter.default.post(name: .presetDeleted, object: name)
     }
 
     // MARK: - Accessors

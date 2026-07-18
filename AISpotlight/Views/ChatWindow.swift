@@ -29,6 +29,12 @@ struct ChatWindow: View {
         case transcription(URL)
     }
     @State private var pendingRetry: RetryAction?
+    /// In-flight assistant reply. Survives conversation switches (the reply
+    /// keeps streaming in the background into its origin chat); cancelled
+    /// only when the origin chat itself is deleted.
+    @State private var streamingTask: Task<Void, Never>?
+    /// Which conversation the in-flight reply belongs to.
+    @State private var streamingOrigin: ChatStore.ConversationID?
     /// Whether the scroll position is near the newest message.
     @State private var isNearBottom = true
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
@@ -401,6 +407,22 @@ struct ChatWindow: View {
             installVoiceKeyMonitor()
             installScrollIntentMonitor()
             ChatWindowBridge.chatStore = chatStore // ImageAddon (Addons/ImageAddon)
+            // Safety net: ChatStore.init resolved the conversation from
+            // UserDefaults before AppSettings' migrations could rewrite the
+            // active preset — re-align if they diverged.
+            syncConversation()
+        }
+        // Isolated preset chats: follow the active preset (panel switcher AND
+        // the Settings picker) and react to the isolation toggle itself.
+        .onChange(of: settings.activePresetName) {
+            syncConversation()
+        }
+        .onChange(of: settings.isolatedPresets) {
+            syncConversation()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .presetDeleted)) { note in
+            guard let name = note.object as? String else { return }
+            handlePresetDeleted(name)
         }
         // ImageAddon: retry-after-error and «Продолжить редактирование»
         // hand an attachment back to the composer.
@@ -567,6 +589,50 @@ struct ChatWindow: View {
         chatStore.addMessage(text: welcomeText(), isUser: false)
     }
 
+    // MARK: - Isolated preset chats
+
+    /// The conversation the active preset should be showing.
+    private func targetConversation() -> ChatStore.ConversationID {
+        settings.isPresetIsolated(named: settings.activePresetName)
+            ? .preset(settings.activePresetName)
+            : .general
+    }
+
+    /// Aligns the store's conversation with the active preset. An in-flight
+    /// reply is NOT interrupted: it keeps streaming in the background and is
+    /// delivered into its origin chat (see `streamAssistantReply`).
+    /// Idempotent — cheap to call from multiple observers.
+    private func syncConversation() {
+        let target = targetConversation()
+        guard target != chatStore.conversation else { return }
+        chatStore.switchConversation(to: target)
+    }
+
+    /// A custom preset was deleted: its dormant chat file + media go away.
+    /// If that chat is on screen, leave it first (applyPreset has already
+    /// moved the active preset back to a built-in one).
+    private func handlePresetDeleted(_ name: String) {
+        let deletedID = ChatStore.ConversationID.preset(name)
+        // A reply streaming FOR the deleted chat — live or background — is
+        // discarded: cancellation makes the stream task skip delivery, so it
+        // cannot resurrect the deleted file.
+        if streamingOrigin == deletedID {
+            streamingTask?.cancel()
+        }
+        if chatStore.conversation == deletedID {
+            Task { @MainActor in
+                if chatStore.conversation == deletedID {
+                    chatStore.switchConversation(to: targetConversation())
+                }
+                // Enqueued on the store's serial disk queue AFTER the switch's
+                // flush — the deletion also removes the just-flushed file.
+                ChatStore.deleteConversationData(presetNamed: name)
+            }
+        } else {
+            ChatStore.deleteConversationData(presetNamed: name)
+        }
+    }
+
     /// Whether the "Thinking…" pill is currently in the list.
     private var showThinkingIndicator: Bool {
         chatStore.isLoading && (chatStore.statusText != nil || chatStore.messages.last?.isUser == true)
@@ -656,9 +722,18 @@ struct ChatWindow: View {
         pendingRetry = nil
         let history = chatStore.activeContextMessages
         let summary = chatStore.conversationSummary
+        // The conversation this reply belongs to. If the user switches to
+        // another preset chat mid-stream, generation continues in the
+        // background and the reply is delivered back to this one.
+        let origin = chatStore.conversation
+        streamingOrigin = origin
 
-        Task { @MainActor in
-            var assistantID: UUID?
+        streamingTask = Task { @MainActor in
+            // Local canonical copy of the reply (stable UUID). The store is
+            // synced from it only while `origin` is on screen; while detached
+            // it just accumulates and is delivered at the end.
+            var reply: ChatMessage?
+            var isLive: Bool { chatStore.conversation == origin }
             // Coalesce streamed chunks before touching the store: every
             // mutation republishes `messages`, re-diffs the whole list and
             // re-parses the growing bubble's Markdown — per-chunk that adds
@@ -667,17 +742,28 @@ struct ChatWindow: View {
             // at a constant UI cost per second regardless of answer length.
             var pendingText = ""
             var lastFlush = ContinuousClock.now
+            func syncToStore() {
+                guard let current = reply, isLive, chatStore.isHistoryLoaded else { return }
+                if chatStore.messages.contains(where: { $0.id == current.id }) {
+                    // Full-text replace also covers the return mid-stream:
+                    // the store's copy (reloaded from disk) holds only the
+                    // partial text flushed before the switch-away.
+                    chatStore.setText(current.text, for: current.id)
+                } else {
+                    chatStore.appendNow(current)
+                }
+            }
             func flush() {
                 guard !pendingText.isEmpty else { return }
-                if let id = assistantID {
-                    chatStore.appendChunk(pendingText, to: id)
+                if var current = reply {
+                    current.text += pendingText
+                    reply = current
                 } else {
-                    let message = ChatMessage(text: pendingText, isUser: false)
-                    chatStore.appendNow(message)
-                    assistantID = message.id
+                    reply = ChatMessage(text: pendingText, isUser: false)
                 }
                 pendingText = ""
                 lastFlush = .now
+                syncToStore()
             }
             do {
                 let stream = try await ChatService.streamReply(history: history, summary: summary)
@@ -687,38 +773,66 @@ struct ChatWindow: View {
                         // Text is flowing — the thinking/search pill must go
                         // away (otherwise it lingers *below* the growing
                         // answer bubble, since it renders after the messages).
-                        if chatStore.statusText != nil {
+                        if isLive, chatStore.statusText != nil {
                             chatStore.statusText = nil
                         }
                         pendingText += chunk
                         // The first chunk flushes immediately so the bubble
                         // appears the moment text starts flowing.
-                        if assistantID == nil || lastFlush.duration(to: .now) > .milliseconds(120) {
+                        if reply == nil || lastFlush.duration(to: .now) > .milliseconds(120) {
                             flush()
                         }
                     case .status(let status):
                         flush() // keep text/status ordering intact
-                        chatStore.statusText = status
+                        if isLive { chatStore.statusText = status }
                     }
                 }
                 flush()
-                if assistantID == nil {
-                    chatStore.addMessage(text: "(empty reply)", isUser: false)
+                if !Task.isCancelled {
+                    if let finished = reply {
+                        // No-op when live and already synced; routes the reply
+                        // into the origin chat's file when detached.
+                        chatStore.deliver(finished, to: origin)
+                    } else if isLive {
+                        chatStore.addMessage(text: "(empty reply)", isUser: false)
+                    }
                 }
             } catch {
                 flush()
-                if let id = assistantID {
-                    chatStore.appendChunk("\n\n⚠️ \(error.localizedDescription)", to: id)
-                } else {
-                    chatStore.addMessage(text: error.localizedDescription, isUser: false, messageType: .system)
+                // Cancellation (preset deleted) discards the reply silently.
+                // `Task.isCancelled` covers both CancellationError and
+                // URLError.cancelled paths.
+                if !Task.isCancelled {
+                    if var failed = reply {
+                        failed.text += "\n\n⚠️ \(error.localizedDescription)"
+                        reply = failed
+                        chatStore.deliver(failed, to: origin)
+                    } else if isLive {
+                        chatStore.addMessage(text: error.localizedDescription, isUser: false, messageType: .system)
+                    } else {
+                        // Failed before any text while detached — surface the
+                        // error as a system line in the origin chat.
+                        chatStore.deliver(
+                            ChatMessage(text: error.localizedDescription, isUser: false, messageType: .system),
+                            to: origin
+                        )
+                    }
+                    // Retry only makes sense while the origin chat (whose
+                    // history the retry would resend) is still on screen.
+                    if isLive { pendingRetry = .chat }
                 }
-                pendingRetry = .chat
             }
-            chatStore.statusText = nil
-            chatStore.setLoading(false)
-
-            // Fold older turns into the rolling summary when the context grows.
-            await ChatService.compressHistoryIfNeeded(store: chatStore)
+            if isLive {
+                chatStore.statusText = nil
+                chatStore.setLoading(false)
+                // Fold older turns into the rolling summary when the context
+                // grows. Skipped on cancellation (the chat is being deleted).
+                if !Task.isCancelled {
+                    await ChatService.compressHistoryIfNeeded(store: chatStore)
+                }
+            }
+            // streamingTask deliberately NOT nil-ed here: a newer stream may
+            // already own the slot, and cancelling a finished task is a no-op.
         }
     }
 

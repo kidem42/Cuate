@@ -902,26 +902,50 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
 
-            // One visibility switch per preset (menu and chip row alike).
+            // Column captions for the two per-preset switches.
+            HStack {
+                Spacer()
+                Text(L("switcher.colShow"))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 64)
+                Text(L("switcher.colChat"))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 64)
+            }
+
+            // Per preset: visibility in the panel switcher + isolated chat.
             ForEach(settings.allPresets) { preset in
-                Toggle(isOn: Binding(
-                    get: { settings.isPresetShownInSwitcher(named: preset.name) },
-                    set: { settings.setPresetShownInSwitcher($0, named: preset.name) }
-                )) {
-                    HStack(spacing: 6) {
-                        if let icon = settings.presetIcon(named: preset.name) {
-                            Text(icon)
-                        }
-                        Text(preset.isBuiltIn ? preset.name : "\(preset.name) (\(L("prompts.custom")))")
+                HStack(spacing: 6) {
+                    if let icon = settings.presetIcon(named: preset.name) {
+                        Text(icon)
                     }
+                    Text(preset.isBuiltIn ? preset.name : "\(preset.name) (\(L("prompts.custom")))")
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { settings.isPresetShownInSwitcher(named: preset.name) },
+                        set: { settings.setPresetShownInSwitcher($0, named: preset.name) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .frame(width: 64)
+                    Toggle("", isOn: Binding(
+                        get: { settings.isPresetIsolated(named: preset.name) },
+                        set: { settings.setPresetIsolated($0, named: preset.name) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .frame(width: 64)
+                    .help(L("switcher.isolatedHelp"))
                 }
-                .toggleStyle(.switch)
-                .controlSize(.small)
             }
         } header: {
             Text(L("switcher.header"))
         } footer: {
-            Text(L("switcher.footer"))
+            Text(L("switcher.footer") + "\n\n" + L("switcher.isolatedFooter"))
                 .font(.caption)
                 .foregroundColor(.secondary)
         }

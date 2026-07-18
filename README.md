@@ -19,7 +19,7 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
 - **OCR** — extract text from images and documents (Mistral OCR)
 - **Web search** — augment answers with live results (Brave Search API)
-- **Prompt presets** — built-in and custom system prompts, switchable per conversation
+- **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its **own isolated chat** (separate history, context and rolling summary) via the "Own chat" toggle in Settings → Prompts — switching presets swaps the conversation, and a reply that is still generating keeps streaming into its home chat in the background
 - **Markdown rendering** with code blocks in responses
 - **Launch at login**, light/dark/system theme, UI in English, Spanish and Russian
 
