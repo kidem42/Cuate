@@ -566,7 +566,7 @@ private struct AttachmentPreviewBubble: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.08))
                     .frame(width: min(maxImageWidth, 220), height: 140)
-                    .overlay(ProgressView().controlSize(.small))
+                    .overlay(ThinkingEqualizer().scaleEffect(0.8))
                     .task(id: attachment.id) {
                         decodedImage = await AttachmentImageCache.image(for: attachment)
                     }

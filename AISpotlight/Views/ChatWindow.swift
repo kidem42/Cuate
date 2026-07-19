@@ -187,8 +187,8 @@ struct ChatWindow: View {
                             if chatStore.messages.count > visibleCount || chatStore.hasOlderMessages {
                                 HStack {
                                     Spacer()
-                                    ProgressView()
-                                        .controlSize(.small)
+                                    ThinkingEqualizer()
+                                        .scaleEffect(0.8)
                                     Spacer()
                                 }
                                 .frame(height: 24)
@@ -207,8 +207,7 @@ struct ChatWindow: View {
                             // chunk; also shows live tool activity (web search).
                             if showThinkingIndicator {
                                 HStack(spacing: 8) {
-                                    ProgressView()
-                                        .controlSize(.small)
+                                    ThinkingEqualizer()
                                     Text(chatStore.statusText ?? L("panel.thinking"))
                                         .font(.footnote)
                                         .foregroundColor(.secondary)
@@ -1359,7 +1358,7 @@ private struct PendingAttachmentPreview: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.08))
                     .frame(width: 180, height: 120)
-                    .overlay(ProgressView().controlSize(.small))
+                    .overlay(ThinkingEqualizer().scaleEffect(0.8))
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.fill")
