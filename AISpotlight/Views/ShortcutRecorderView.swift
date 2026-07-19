@@ -31,6 +31,7 @@ struct ShortcutRecorderView: View {
                     .frame(minWidth: 120)
             }
             .tint(isRecording ? .accentColor : nil)
+            .help(L("tooltip.shortcut.record"))
         }
         .onDisappear { stopRecording() }
     }

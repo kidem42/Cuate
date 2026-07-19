@@ -260,6 +260,9 @@ enum Localization {
         "tooltip.extract": [.english: "Recognize the text (OCR): shown in the chat, raw Markdown goes to the clipboard", .spanish: "Reconocer el texto (OCR): se muestra en el chat y el Markdown se copia al portapapeles", .russian: "Распознать текст (OCR): результат в чате, Markdown — в буфере обмена"],
         "tooltip.removeAttachment": [.english: "Remove the attachment", .spanish: "Quitar el adjunto", .russian: "Убрать вложение"],
         "tooltip.copy": [.english: "Copy message", .spanish: "Copiar mensaje", .russian: "Скопировать сообщение"],
+        "tooltip.shortcut.record": [.english: "Click to record a new shortcut (Esc — cancel)", .spanish: "Haz clic para grabar un nuevo atajo (Esc — cancelar)", .russian: "Клик — записать новое сочетание (Esc — отмена)"],
+        "tooltip.dictation.stop": [.english: "Click or press the dictation hotkey to stop", .spanish: "Haz clic o pulsa el atajo de dictado para detener", .russian: "Клик или хоткей диктовки — остановить"],
+        "tooltip.dictation.language": [.english: "Translation language — click to change", .spanish: "Idioma de traducción — haz clic para cambiar", .russian: "Язык перевода — клик, чтобы сменить"],
         "copy.copied": [.english: "Copied", .spanish: "Copiado", .russian: "Скопировано"],
         "tooltip.tapToCopy": [.english: "Click to copy", .spanish: "Haz clic para copiar", .russian: "Клик — скопировать"],
 

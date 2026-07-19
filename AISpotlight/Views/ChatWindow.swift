@@ -469,7 +469,9 @@ struct ChatWindow: View {
                                 handleVoiceRecordingCancel()
                             }
                         )
-                        .help(audioRecorder.isRecording ? L("tooltip.voice.stop") : L("tooltip.voice.start"))
+                        // Tooltip lives inside EnhancedVoiceButton (the deepest
+                        // view wins tooltip resolution, so a duplicate here
+                        // would just shadow-drift over time).
 
                         // Send button
                         Button(action: sendMessage) {

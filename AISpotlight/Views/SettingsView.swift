@@ -1325,6 +1325,9 @@ private struct OpenRouterModelField: View {
                     .padding(.vertical, 4)
                 }
                 .buttonStyle(.plain)
+                // The row truncates long slugs in the middle — the tooltip
+                // shows the full identifier.
+                .help(slug)
             }
             Divider()
             Button {

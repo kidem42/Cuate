@@ -68,7 +68,7 @@ struct EnhancedVoiceButton: View {
             .buttonStyle(PlainButtonStyle())
             .scaleEffect(isRecording ? 1.05 : 1.0)
             .animation(.easeInOut(duration: 0.2), value: isRecording)
-            .help(isRecording ? "Click to stop and send, double-tap to cancel" : "Click to start recording")
+            .help(isRecording ? L("tooltip.voice.stop") : L("tooltip.voice.start"))
             .onTapGesture(count: 2) {
                 // Double tap to cancel
                 if isRecording {

@@ -469,6 +469,7 @@ private struct DictationWidgetView: View {
                     .buttonStyle(.plain)
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    .help(L("tooltip.dictation.language"))
                 }
             }
             .frame(width: service.widgetSize.width, height: service.widgetSize.height)
@@ -499,7 +500,7 @@ private struct DictationWidgetView: View {
                 }
             }
         }
-        .help("Click or press the dictation hotkey to stop")
+        .help(L("tooltip.dictation.stop"))
     }
 
     /// Shared between the badge's click menu and the pill's right-click menu.
