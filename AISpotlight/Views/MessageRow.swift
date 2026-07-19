@@ -6,6 +6,11 @@ struct MessageRow: View {
     let message: ChatMessage
     /// Bubbles scale with the panel: ~75% of the available width.
     var maxBubbleWidth: CGFloat = 320
+    /// Whether this message is the reply currently being streamed. Artifact
+    /// cards use it to tell "fence still coming" from "stream ended with the
+    /// fence never closed" (e.g. cut off by the max-tokens limit) — the
+    /// latter must render as an openable card, not spin forever.
+    var isStreamingReply: Bool = false
 
     // Hover-to-copy (selecting across SwiftUI Text blocks is unreliable,
     // so whole-message copy is the primary affordance, like in Telegram)
@@ -232,7 +237,7 @@ struct MessageRow: View {
     /// Block-level rendering: headings, lists, quotes, code blocks and tables
     /// all display formatted (Telegram-style), not as raw markdown.
     private func renderMarkdownText(_ text: String, linkColor: Color = .blue) -> some View {
-        MarkdownBlocksView(text: text, linkColor: linkColor)
+        MarkdownBlocksView(text: text, linkColor: linkColor, isStreaming: isStreamingReply)
     }
 
     /// Image previews scale with the panel: ~70% of the bubble width

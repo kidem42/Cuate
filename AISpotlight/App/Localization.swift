@@ -79,6 +79,7 @@ enum Localization {
         "artifact.generating": [.english: "Generating page…", .spanish: "Generando página…", .russian: "Страница создаётся…"],
         "artifact.interactive": [.english: "Interactive page", .spanish: "Página interactiva", .russian: "Интерактивная страница"],
         "artifact.mdDoc": [.english: "Markdown document", .spanish: "Documento Markdown", .russian: "Markdown-документ"],
+        "artifact.truncated": [.english: "May be cut off — raise Max response tokens", .spanish: "Puede estar cortado — sube el máx. de tokens", .russian: "Возможно, обрезан — увеличьте лимит токенов ответа"],
         "artifact.open": [.english: "Open preview", .spanish: "Abrir vista previa", .russian: "Открыть превью"],
         "artifact.preview": [.english: "Preview", .spanish: "Vista previa", .russian: "Превью"],
         "artifact.code": [.english: "Code", .spanish: "Código", .russian: "Код"],

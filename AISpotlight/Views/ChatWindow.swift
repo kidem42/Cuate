@@ -198,7 +198,10 @@ struct ChatWindow: View {
                             ForEach(visibleMessages) { message in
                                 MessageRow(
                                     message: message,
-                                    maxBubbleWidth: max(320, bubbleContainerWidth * 0.75)
+                                    maxBubbleWidth: max(320, bubbleContainerWidth * 0.75),
+                                    isStreamingReply: chatStore.isLoading
+                                        && !message.isUser
+                                        && message.id == chatStore.messages.last?.id
                                 )
                                 .id(message.id)
                             }

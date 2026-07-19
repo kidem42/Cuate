@@ -11,6 +11,10 @@ struct MarkdownBlocksView: View {
     /// `.chat` keeps the compact bubble typography; `.document` uses larger,
     /// Notion-like typography for the artifact preview window.
     var style: Style = .chat
+    /// Whether the text is still being streamed in. An unterminated artifact
+    /// fence means "generating" only while this is true; once the stream is
+    /// over it renders as a finished (possibly truncated) card.
+    var isStreaming: Bool = false
     @Environment(\.themePalette) private var palette
 
     enum Style {
@@ -115,7 +119,12 @@ struct MarkdownBlocksView: View {
             CodeBlockView(content: content)
 
         case .artifact(let kind, let content, let complete):
-            ArtifactCardView(kind: kind, content: content, complete: complete)
+            ArtifactCardView(
+                kind: kind,
+                content: content,
+                complete: complete || !isStreaming,
+                truncated: !complete && !isStreaming
+            )
 
         case .table(let rows):
             tableView(rows)

@@ -441,7 +441,10 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         sttModels = defaults.dictionary(forKey: "sttModels") as? [String: String] ?? [:]
         ocrModel = defaults.string(forKey: "ocrModel") ?? Self.defaultOCRModel
         reasoningMode = ReasoningMode(rawValue: defaults.string(forKey: "reasoningMode") ?? "") ?? .auto
-        maxTokens = defaults.object(forKey: "maxTokens") as? Int ?? 8192
+        // 16k default: artifacts (full HTML pages) regularly exceed 8k output
+        // tokens, and on OpenAI /responses the reasoning tokens draw from the
+        // same budget. Users who explicitly set a value keep it.
+        maxTokens = defaults.object(forKey: "maxTokens") as? Int ?? 16384
         webSearchEnabled = defaults.object(forKey: "webSearchEnabled") as? Bool ?? true
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         theme = AppTheme(rawValue: defaults.string(forKey: "appTheme") ?? "") ?? .current

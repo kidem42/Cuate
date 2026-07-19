@@ -85,6 +85,9 @@ struct ArtifactCardView: View {
     let kind: ArtifactKind
     let content: String
     let complete: Bool
+    /// The stream ended without closing the fence — the document was likely
+    /// cut off by the max-tokens limit. Still openable; flagged in the subtitle.
+    var truncated: Bool = false
     @State private var isHovering = false
     @Environment(\.themePalette) private var palette
 
@@ -126,9 +129,9 @@ struct ArtifactCardView: View {
                         .font(.system(size: 12.5, weight: .semibold, design: palette.fontDesign))
                         .foregroundColor(palette.isGlass ? .primary : palette.primaryText)
                         .lineLimit(1)
-                    Text(complete ? "\(kind.typeLabel) · \(sizeLabel)" : sizeLabel)
+                    Text(subtitle)
                         .font(.system(size: 10.5, design: palette.fontDesign))
-                        .foregroundColor(palette.isGlass ? .secondary : palette.secondaryText)
+                        .foregroundColor(truncated ? .orange : (palette.isGlass ? .secondary : palette.secondaryText))
                 }
 
                 Spacer(minLength: 8)
@@ -161,6 +164,12 @@ struct ArtifactCardView: View {
             withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering }
         }
         .help(complete ? L("artifact.open") : L("artifact.generating"))
+    }
+
+    private var subtitle: String {
+        guard complete else { return sizeLabel }
+        if truncated { return "\(L("artifact.truncated")) · \(sizeLabel)" }
+        return "\(kind.typeLabel) · \(sizeLabel)"
     }
 
     private var accentColor: Color {

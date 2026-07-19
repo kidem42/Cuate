@@ -50,8 +50,12 @@ enum ChatService {
         dateFormatter.locale = Locale(identifier: "en_US")
         systemPrompt += "\n\nToday's date: \(dateFormatter.string(from: Date()))."
 
+        // DeepSeek (chat) and Gemini's mainstream flash models reject
+        // max_tokens above 8192 — clamp there so the raised default for
+        // artifact-sized replies doesn't break those providers.
+        let providerTokenCap = (providerID == .deepseek || providerID == .gemini) ? 8192 : Int.max
         var options = ChatRequestOptions(
-            maxTokens: settings.maxTokens,
+            maxTokens: min(settings.maxTokens, providerTokenCap),
             reasoning: settings.reasoningMode
         )
         options.modelSupportsReasoning = settings.modelSupportsReasoningControl(provider: providerID, model: model)
