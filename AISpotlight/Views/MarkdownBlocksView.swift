@@ -8,16 +8,15 @@ import SwiftUI
 struct MarkdownBlocksView: View {
     let text: String
     let linkColor: Color
+    @Environment(\.themePalette) private var palette
 
-    enum Block: Identifiable {
+    enum Block {
         case paragraph(String)
         case heading(level: Int, text: String)
         case bullets([String])
         case quote(String)
         case code(String)
         case table(rows: [[String]])
-
-        var id: UUID { UUID() }
     }
 
     var body: some View {
@@ -46,8 +45,9 @@ struct MarkdownBlocksView: View {
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .top, spacing: 6) {
-                        Text("•")
+                        Text(palette.isGlass ? "•" : palette.bulletGlyph)
                             .font(.system(size: 13))
+                            .foregroundColor(palette.isGlass ? .primary : (palette.bulletColor ?? palette.ink))
                         MarkdownText(item, linkColor: linkColor)
                     }
                 }
@@ -82,14 +82,15 @@ struct MarkdownBlocksView: View {
         let linkColor: Color
         @State private var justCopied = false
         @State private var isHovering = false
+        @Environment(\.themePalette) private var palette
 
         var body: some View {
             HStack(alignment: .top, spacing: 8) {
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.accentColor.opacity(0.6))
+                    .fill(palette.isGlass ? Color.accentColor.opacity(0.6) : (palette.quoteColor ?? palette.accent))
                     .frame(width: 3)
                 MarkdownText(content, linkColor: linkColor)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.isGlass ? .secondary : palette.secondaryText)
                 if isHovering || justCopied {
                     Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 9))
@@ -118,15 +119,17 @@ struct MarkdownBlocksView: View {
     private struct CodeBlockView: View {
         let content: String
         @State private var justCopied = false
+        @Environment(\.themePalette) private var palette
 
         var body: some View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(content)
                     .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundColor(palette.isGlass ? .primary : palette.codeText)
                     .textSelection(.enabled)
                     .padding(8)
             }
-            .background(Color.secondary.opacity(0.12))
+            .background(palette.isGlass ? AnyShapeStyle(Color.secondary.opacity(0.12)) : palette.codeFill)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .topTrailing) {
                 Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
@@ -168,17 +171,36 @@ struct MarkdownBlocksView: View {
             }
             .padding(10)
         }
-        .background(Color.secondary.opacity(0.08))
+        .background(palette.isGlass ? Color.secondary.opacity(0.08) : palette.ink.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                .stroke(palette.isGlass ? Color.secondary.opacity(0.18) : palette.ink.opacity(0.22), lineWidth: 1)
         )
     }
 
     // MARK: - Parsing
 
+    private final class BlockBox {
+        let blocks: [Block]
+        init(_ blocks: [Block]) { self.blocks = blocks }
+    }
+
+    /// Memoizes the block parse. `parse` used to run on every `body`
+    /// evaluation — per hover, per scroll, per geometry change, and per
+    /// streamed chunk of the growing bubble. The result depends only on
+    /// `text`, so it is cached by text; NSCache evicts under memory pressure
+    /// and the count cap bounds the streaming case (each grown increment is a
+    /// distinct key that ages out).
+    private static let parseCache: NSCache<NSString, BlockBox> = {
+        let cache = NSCache<NSString, BlockBox>()
+        cache.countLimit = 256
+        return cache
+    }()
+
     static func parse(_ text: String) -> [Block] {
+        let cacheKey = text as NSString
+        if let cached = parseCache.object(forKey: cacheKey) { return cached.blocks }
         var blocks: [Block] = []
         var paragraphLines: [String] = []
         var bulletItems: [String] = []
@@ -301,6 +323,7 @@ struct MarkdownBlocksView: View {
             blocks.append(.code(codeLines.joined(separator: "\n")))
         }
         flushAllText()
+        parseCache.setObject(BlockBox(blocks), forKey: cacheKey)
         return blocks
     }
 }

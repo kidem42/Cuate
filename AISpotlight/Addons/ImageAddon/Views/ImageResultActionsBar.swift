@@ -12,6 +12,7 @@ struct ImageResultActionsBar: View {
 
     @ObservedObject private var settings = ImageAddonSettings.shared
     @ObservedObject private var runner = ImageTaskRunner.shared
+    @Environment(\.themePalette) private var palette
     @State private var savedURL: URL?
     @State private var justCopied = false
     @State private var saveError: String?
@@ -61,6 +62,7 @@ struct ImageResultActionsBar: View {
                 }
                 .buttonStyle(.link)
                 .font(.caption)
+                .tint(palette.isGlass ? nil : palette.ink)
 
                 if let saveError {
                     Text(String(format: IAL("ia.error.saveFailed"), saveError))

@@ -9,10 +9,13 @@ extension Notification.Name {
 }
 
 struct ChatWindow: View {
-    @ObservedObject private var chatStore = ChatStore()
+    // @StateObject, NOT @ObservedObject: the view OWNS the store it creates.
+    // With @ObservedObject a re-instantiation of the root view struct would
+    // silently spin up a second ChatStore — whose init re-runs migration,
+    // load and the media sweep — and orphan the in-flight streaming state.
+    @StateObject private var chatStore = ChatStore()
     @ObservedObject private var settings = AppSettings.shared
     @StateObject private var audioRecorder = AudioRecorder()
-    @State private var handledAutoStopToken: UUID = UUID()
     @State private var messageText = ""
     /// Captured selection shown as an editable styled region in the composer.
     @State private var quotedText: String?
@@ -37,6 +40,9 @@ struct ChatWindow: View {
     @State private var streamingOrigin: ChatStore.ConversationID?
     /// Whether the scroll position is near the newest message.
     @State private var isNearBottom = true
+    /// Whether the chat content fits the viewport (no scrolling possible) —
+    /// see `trackContentFits` for why the intent monitor needs it.
+    @State private var scrollContentFits = true
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
     @State private var voiceKeyMonitor: Any?
     @State private var scrollIntentMonitor: Any?
@@ -46,6 +52,44 @@ struct ChatWindow: View {
     @State private var lastAutoScroll = Date.distantPast
     @FocusState private var isInputFocused: Bool
     @State private var textEditorHeight: CGFloat = 27 // Default height for one line
+
+    /// Windowed history rendering: only the newest `visibleCount` messages
+    /// live in the view tree, so the bottom-anchored layout lands on the
+    /// latest message instantly. Scrolling to the top backfills another page.
+    /// Purely presentation — the full history stays in ChatStore (and in the
+    /// API context).
+    private static let historyPageSize = 30
+    @State private var visibleCount = ChatWindow.historyPageSize
+    /// Guards against cascading backfills while one is restoring the scroll.
+    @State private var isBackfilling = false
+
+    /// Remembers the panel's content width across launches so the FIRST
+    /// layout pass already uses the real bubble width — starting from the
+    /// 320 pt fallback meant every row laid out twice on appear (once at the
+    /// fallback, again when the probe landed).
+    private static let containerWidthDefaultsKey = "chatPanelContentWidth"
+
+    /// Width of the scroll viewport, captured WITHOUT a layout-imposing
+    /// `GeometryReader` wrapper. The old wrapper fed `geo.size.width` into
+    /// every row, so any geometry event (external-display wake/reconfigure,
+    /// window resize, full-screen) re-proposed sizes to the whole list and
+    /// could pin the main thread re-laying it out. A background probe writes
+    /// this instead; only a genuine width change republishes.
+    @State private var bubbleContainerWidth: CGFloat = {
+        let stored = UserDefaults.standard.double(forKey: ChatWindow.containerWidthDefaultsKey)
+        return stored > 0 ? stored : 576 // default 600 pt panel minus padding
+    }()
+
+    /// The rendered slice of the conversation (newest `visibleCount`).
+    private var visibleMessages: ArraySlice<ChatMessage> {
+        chatStore.messages.suffix(visibleCount)
+    }
+
+    /// Resolved theme tokens for the active theme + color scheme. `current`
+    /// resolves to the glass palette and leaves every surface untouched.
+    private var palette: ThemePalette {
+        ThemePalette.palette(for: settings.theme, scheme: colorScheme)
+    }
 
     var body: some View {
         // Liquid Glass: the panel itself is a transient overlay (functional
@@ -75,6 +119,9 @@ struct ChatWindow: View {
                                 ForEach(available) { provider in
                                     Button {
                                         settings.chatProvider = provider
+                                        // Loads the provider's model list, or the
+                                        // OpenRouter catalog for manual entry —
+                                        // never clobbers a user-typed slug.
                                         settings.autoLoadModelsIfNeeded(for: provider)
                                     } label: {
                                         Label {
@@ -128,15 +175,30 @@ struct ChatWindow: View {
                 .frame(height: 22)
 
                 // Chat messages area
-                GeometryReader { geo in
                 ScrollViewReader { proxy in
                     ZStack(alignment: .bottomTrailing) {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(chatStore.messages) { message in
+                            // Backfill trigger: materializes when the user
+                            // scrolls up to the oldest rendered message, and
+                            // widens the window by another page — first from
+                            // the in-memory history, then by paging older
+                            // rows in from the store (windowed load).
+                            if chatStore.messages.count > visibleCount || chatStore.hasOlderMessages {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Spacer()
+                                }
+                                .frame(height: 24)
+                                .onAppear { loadOlderMessages(proxy) }
+                            }
+
+                            ForEach(visibleMessages) { message in
                                 MessageRow(
                                     message: message,
-                                    maxBubbleWidth: max(320, geo.size.width * 0.75)
+                                    maxBubbleWidth: max(320, bubbleContainerWidth * 0.75)
                                 )
                                 .id(message.id)
                             }
@@ -164,7 +226,30 @@ struct ChatWindow: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                     }
-                    .background(.clear)
+                    // Bottom-anchored layout: freshly (re)loaded history —
+                    // launch, conversation switch — is laid out already AT the
+                    // newest message. Post-hoc proxy.scrollTo can't do this
+                    // reliably: unrendered LazyVStack ids no-op, estimated row
+                    // heights land short, and the user sees the view travel.
+                    // While scrolled away from the bottom the anchor is
+                    // inactive, so reading history is not yanked around.
+                    .defaultScrollAnchor(.bottom)
+                    // Width probe: reads the viewport width without wrapping the
+                    // content in a GeometryReader (see `bubbleContainerWidth`).
+                    // A no-op when the width is unchanged, so a display
+                    // reconfigure that doesn't resize the window costs nothing.
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear
+                                .onAppear { updateContainerWidth(proxy.size.width) }
+                                .onChange(of: proxy.size.width) { _, newWidth in
+                                    updateContainerWidth(newWidth)
+                                }
+                        }
+                    )
+                    .trackContentFits { fits in
+                        scrollContentFits = fits
+                    }
                     .trackNearBottom { nearBottom in
                         if nearBottom {
                             isNearBottom = true
@@ -177,17 +262,39 @@ struct ChatWindow: View {
                             isNearBottom = false
                         }
                     }
-                    .onChange(of: chatStore.messages.count) {
-                        // Own messages always jump down; incoming ones don't
-                        // yank the view while the user is reading history.
-                        if isNearBottom || chatStore.messages.last?.isUser == true {
+                    .onChange(of: chatStore.messages.count) { oldCount, _ in
+                        if oldCount == 0 {
+                            // Wholesale history arrival (launch, conversation
+                            // switch): render only the newest page — combined
+                            // with the bottom-anchored layout the view OPENS
+                            // at the last message instead of travelling there.
+                            visibleCount = Self.historyPageSize
+                            isBackfilling = false
+                            scrollToBottom(proxy, pace: .instant)
+                            // The immediate scroll runs before the LazyVStack has
+                            // measured its rows; with variable-height rows the
+                            // estimated content height overshoots and leaves a
+                            // gap below the last message. Re-assert the bottom
+                            // once (and again) after layout settles — both
+                            // instant, so it reads as a single correct landing.
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                                scrollToBottom(proxy, pace: .instant)
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                scrollToBottom(proxy, pace: .instant)
+                            }
+                        } else if !isBackfilling, isNearBottom || chatStore.messages.last?.isUser == true {
+                            // Own messages always jump down; incoming ones don't
+                            // yank the view while the user is reading history.
+                            // (A store backfill PREPENDS — it also changes the
+                            // count, but must never move the viewport down.)
                             scrollToBottom(proxy)
                         }
                     }
                     .onChange(of: chatStore.messages.last?.text) {
                         // Follow streamed text as it grows
                         if isNearBottom {
-                            scrollToBottom(proxy, animated: false)
+                            scrollToBottom(proxy, pace: .follow)
                         }
                     }
                     .onChange(of: showThinkingIndicator) { _, visible in
@@ -215,13 +322,13 @@ struct ChatWindow: View {
                         // Land on the latest message when the view first loads
                         // persisted history (LazyVStack needs a beat to lay out).
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            scrollToBottom(proxy, animated: false)
+                            scrollToBottom(proxy, pace: .instant)
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
                         // Every time the panel is summoned, show the newest message.
                         DispatchQueue.main.async {
-                            scrollToBottom(proxy, animated: false)
+                            scrollToBottom(proxy, pace: .instant)
                         }
                     }
 
@@ -245,14 +352,13 @@ struct ChatWindow: View {
                     }
                     .animation(.easeInOut(duration: 0.15), value: isNearBottom)
                 }
-                }
 
                 // Input area (also acts as a drag region)
                 VStack(spacing: 8) {
                     // Recording status (shown when recording)
                     RecordingStatusView(isRecording: $audioRecorder.isRecording)
 
-                    Divider()
+                    ThemedComposerDivider(palette: palette)
 
                     // Retry after a failed turn — no re-typing / re-recording:
                     // the message (or the recorded audio file) is still there.
@@ -299,7 +405,7 @@ struct ChatWindow: View {
                         Button(action: presentAttachOpenPanel) {
                             Image(systemName: "paperclip")
                                 .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.isGlass ? .secondary : palette.ink)
                                 .frame(width: 24, height: 27)
                         }
                         .buttonStyle(PlainButtonStyle())
@@ -309,12 +415,21 @@ struct ChatWindow: View {
                         // Multi-line text input
                         ZStack(alignment: .topLeading) {
                             if messageText.isEmpty, quotedText == nil {
-                                Text(L("panel.typeMessage"))
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.secondary.opacity(0.5))
-                                    .padding(.leading, 7)
-                                    .padding(.top, 7)
-                                    .allowsHitTesting(false)
+                                HStack(spacing: 3) {
+                                    Text(palette.isGlass ? L("panel.typeMessage") : (palette.placeholderText ?? L("panel.typeMessage")))
+                                        .font(.system(size: 13, design: palette.fontDesign))
+                                        .foregroundColor(palette.isGlass ? .secondary.opacity(0.5) : palette.placeholderColor)
+                                    // Terminal's blinking block caret after the "$ …" prompt.
+                                    // The decorative placeholder caret steps
+                                    // aside while the field is focused — the
+                                    // REAL block caret takes over there.
+                                    if palette.placeholderCaret, !isInputFocused {
+                                        BlinkingCaret(color: palette.accent, height: 13)
+                                    }
+                                }
+                                .padding(.leading, 7)
+                                .padding(.top, 7)
+                                .allowsHitTesting(false)
                             }
 
                             CustomTextEditor(
@@ -324,7 +439,10 @@ struct ChatWindow: View {
                                 measuredHeight: $textEditorHeight,
                                 onSubmit: sendMessage,
                                 isDisabled: audioRecorder.isRecording,
-                                onPasteImage: handleImagePaste
+                                onPasteImage: handleImagePaste,
+                                // Terminal theme: a real blinking block caret
+                                // in the composer, not just the placeholder ▮.
+                                blockCaretColor: palette.placeholderCaret ? NSColor(palette.accent) : nil
                             )
                             .frame(height: textEditorHeight)
                             .focused($isInputFocused)
@@ -332,16 +450,8 @@ struct ChatWindow: View {
                         }
                         .padding(.horizontal, 4)
                         .padding(.vertical, 4)
-                        // System material keeps text legible on any wallpaper
-                        // and adapts to Reduce Transparency automatically.
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                        )
+                        // Material for Current; themed fill/border otherwise.
+                        .themedInputField(palette)
                         .shadow(color: Color.black.opacity(0.07), radius: 2, x: 0, y: 1)
 
                         // Enhanced Voice button with cancel functionality
@@ -361,14 +471,39 @@ struct ChatWindow: View {
 
                         // Send button
                         Button(action: sendMessage) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.accentColor.opacity(composerIsEmpty ? 0.3 : 1.0))
+                            if palette.themeID == .diaDeMuertos {
+                                // Marigold flower send button (with glow).
+                                MarigoldFlower(dark: colorScheme == .dark, withInner: true, withSparkle: true)
+                                    .frame(width: 34, height: 34)
+                                    .opacity(composerIsEmpty ? 0.45 : 1.0)
+                                    .shadow(color: palette.sendGlow ?? .clear, radius: 6)
+                            } else if palette.themeID == .halloween {
+                                // Glowing jack-o'-lantern send button (spec §2a).
+                                JackOLantern(dark: colorScheme == .dark)
+                                    .frame(width: 34, height: 32)
+                                    .opacity(composerIsEmpty ? 0.45 : 1.0)
+                                    .shadow(color: palette.sendGlow ?? .clear, radius: colorScheme == .dark ? 8 : 6,
+                                            y: colorScheme == .dark ? 0 : 2)
+                            } else {
+                                ZStack {
+                                    // Blueprint's composer buttons are rounded
+                                    // squares (composerButtonRadius); every other
+                                    // themed/glass send button stays a circle.
+                                    Group {
+                                        if let r = palette.composerButtonRadius, !palette.isGlass {
+                                            RoundedRectangle(cornerRadius: r).fill(palette.sendFill)
+                                        } else {
+                                            Circle().fill(palette.isGlass ? AnyShapeStyle(Color.accentColor) : palette.sendFill)
+                                        }
+                                    }
                                     .frame(width: 32, height: 32)
+                                    .opacity(composerIsEmpty ? 0.3 : 1.0)
+                                    .shadow(color: palette.isGlass ? .clear : (palette.sendGlow ?? .clear), radius: 6)
 
-                                Image(systemName: "paperplane.fill")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 14, weight: .medium))
+                                    Image(systemName: "paperplane.fill")
+                                        .foregroundColor(palette.isGlass ? .white : palette.sendGlyphColor)
+                                        .font(.system(size: 14, weight: .medium))
+                                }
                             }
                         }
                         .buttonStyle(PlainButtonStyle())
@@ -383,11 +518,15 @@ struct ChatWindow: View {
                         .background(Color.clear)
                 )
             }
-            // Untinted regular glass: heavy tints flatten the material by
-            // muting its refraction and specular edge highlights — the depth
-            // IS the glass. Legibility comes from the bubbles' materials.
-            .adaptiveGlass(cornerRadius: 18)
+            // Untinted regular glass for the Current theme; the other themes
+            // fill the panel with their gradient + signature pattern instead
+            // (see themedPanelSurface). Legibility comes from the bubbles.
+            .themedPanelSurface(palette, cornerRadius: 18)
         }
+        .environment(\.themePalette, palette)
+        // Terminal → monospaced, Pastel → rounded, others → system (.default,
+        // a no-op). Applies across the whole panel per the design spec.
+        .fontDesign(palette.fontDesign)
         .defaultFocus($isInputFocused, true)
         .onReceive(chatStore.$isHistoryLoaded) { loaded in
             // Welcome message — only after the async history load settled,
@@ -411,6 +550,19 @@ struct ChatWindow: View {
             // UserDefaults before AppSettings' migrations could rewrite the
             // active preset — re-align if they diverged.
             syncConversation()
+        }
+        .onDisappear {
+            // The root view lives as long as the panel, so this normally never
+            // fires — but if the hosting view is ever torn down, leaked
+            // monitors would keep intercepting Space/scroll for a dead view.
+            if let monitor = voiceKeyMonitor {
+                NSEvent.removeMonitor(monitor)
+                voiceKeyMonitor = nil
+            }
+            if let monitor = scrollIntentMonitor {
+                NSEvent.removeMonitor(monitor)
+                scrollIntentMonitor = nil
+            }
         }
         // Isolated preset chats: follow the active preset (panel switcher AND
         // the Settings picker) and react to the isolation toggle itself.
@@ -453,11 +605,11 @@ struct ChatWindow: View {
                 if let audioURL = audioRecorder.recordingURL {
                     await sendVoiceMessage(audioURL: audioURL)
                     _ = await MainActor.run {
-                        chatStore.addMessage(text: "Recording reached the limit of \(limitMinutes) minutes and was sent automatically.", isUser: false, messageType: .system)
+                        chatStore.addMessage(text: String(format: L("panel.recordLimitSent"), limitMinutes), isUser: false, messageType: .system)
                     }
                 } else {
                     _ = await MainActor.run {
-                        chatStore.addMessage(text: "Recording reached the limit of \(limitMinutes) minutes and was stopped.", isUser: false, messageType: .system)
+                        chatStore.addMessage(text: String(format: L("panel.recordLimitStopped"), limitMinutes), isUser: false, messageType: .system)
                     }
                 }
             }
@@ -585,6 +737,14 @@ struct ChatWindow: View {
     }
 
     private func startNewChat() {
+        // A reply still streaming into THIS conversation must not survive the
+        // wipe: without the cancel, its next flush would re-append the answer
+        // into the fresh chat — an orphan reply to a question just erased.
+        if streamingOrigin == chatStore.conversation {
+            streamingTask?.cancel()
+            chatStore.statusText = nil
+            chatStore.setLoading(false)
+        }
         chatStore.clearMessages()
         chatStore.addMessage(text: welcomeText(), isUser: false)
     }
@@ -638,7 +798,69 @@ struct ChatWindow: View {
         chatStore.isLoading && (chatStore.statusText != nil || chatStore.messages.last?.isUser == true)
     }
 
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+    /// Widens the history window by one page and pins the viewport to the
+    /// row that was the oldest on screen — without this the prepended rows
+    /// push the content and the view visibly jumps. Two tiers: first widen
+    /// over the in-memory history; once that is exhausted, page older rows
+    /// in from the store (ChatStore keeps only a suffix window loaded).
+    private func loadOlderMessages(_ proxy: ScrollViewProxy) {
+        guard !isBackfilling else { return }
+        let anchorID = visibleMessages.first?.id
+        if chatStore.messages.count > visibleCount {
+            isBackfilling = true
+            visibleCount = min(visibleCount + Self.historyPageSize, chatStore.messages.count)
+            restoreBackfillAnchor(proxy, anchorID)
+        } else if chatStore.hasOlderMessages {
+            isBackfilling = true
+            chatStore.loadOlderPage(Self.historyPageSize) { added in
+                guard added > 0 else {
+                    isBackfilling = false
+                    return
+                }
+                visibleCount = min(visibleCount + added, chatStore.messages.count)
+                restoreBackfillAnchor(proxy, anchorID)
+            }
+        }
+    }
+
+    /// Stores the probed viewport width; persisted so the next launch's first
+    /// layout starts from the real width instead of the fallback.
+    private func updateContainerWidth(_ width: CGFloat) {
+        guard width > 0, width != bubbleContainerWidth else { return }
+        bubbleContainerWidth = width
+        UserDefaults.standard.set(Double(width), forKey: Self.containerWidthDefaultsKey)
+    }
+
+    /// Re-pins the viewport to the pre-backfill anchor row after the widened
+    /// window has laid out, then re-arms the backfill guard.
+    private func restoreBackfillAnchor(_ proxy: ScrollViewProxy, _ anchorID: UUID?) {
+        DispatchQueue.main.async { // after the widened window is laid out
+            if let anchorID {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(anchorID, anchor: .top)
+                }
+            }
+            DispatchQueue.main.async { isBackfilling = false }
+        }
+    }
+
+    /// How a scroll-to-bottom should move.
+    private enum ScrollPace {
+        /// Large easeOut glide — a message was appended to a visible chat.
+        case glide
+        /// Short linear tween — per-chunk stream following; successive calls
+        /// retarget the animation, so the chat scrolls continuously instead
+        /// of snapping in steps.
+        case follow
+        /// No animation at all — landing on freshly loaded history (launch,
+        /// conversation switch): the view must simply START at the bottom,
+        /// not visibly travel there.
+        case instant
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, pace: ScrollPace = .glide) {
         // The thinking pill sits below the last message — when visible,
         // it is the true bottom of the list.
         let target: AnyHashable? = showThinkingIndicator
@@ -647,15 +869,21 @@ struct ChatWindow: View {
         guard let target else { return }
         lastAutoScroll = Date()
         isNearBottom = true
-        // Always animate: large jumps glide with easeOut, while per-chunk
-        // stream following uses a short linear tween — successive calls
-        // retarget the animation, so the chat scrolls continuously instead
-        // of snapping in steps.
-        let animation: Animation = animated
-            ? .easeOut(duration: 0.3)
-            : .linear(duration: 0.12)
-        withAnimation(animation) {
-            proxy.scrollTo(target, anchor: .bottom)
+        switch pace {
+        case .glide:
+            withAnimation(.easeOut(duration: 0.3)) {
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+        case .follow:
+            withAnimation(.linear(duration: 0.12)) {
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+        case .instant:
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(target, anchor: .bottom)
+            }
         }
     }
 
@@ -667,7 +895,9 @@ struct ChatWindow: View {
             chatStore.addMessage(text: L("panel.noProviderKey"), isUser: false, messageType: .system)
             return false
         }
-        guard settings.selectedModel(for: settings.chatProvider) != nil else {
+        let model = settings.selectedModel(for: settings.chatProvider)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let model, !model.isEmpty else {
             chatStore.addMessage(text: L("panel.noModelSelected"), isUser: false, messageType: .system)
             return false
         }
@@ -743,7 +973,10 @@ struct ChatWindow: View {
             var pendingText = ""
             var lastFlush = ContinuousClock.now
             func syncToStore() {
-                guard let current = reply, isLive, chatStore.isHistoryLoaded else { return }
+                // Cancellation (new chat / preset deleted) must not write the
+                // partial back — the catch path still calls flush() once.
+                guard !Task.isCancelled,
+                      let current = reply, isLive, chatStore.isHistoryLoaded else { return }
                 if chatStore.messages.contains(where: { $0.id == current.id }) {
                     // Full-text replace also covers the return mid-stream:
                     // the store's copy (reloaded from disk) holds only the
@@ -794,7 +1027,7 @@ struct ChatWindow: View {
                         // into the origin chat's file when detached.
                         chatStore.deliver(finished, to: origin)
                     } else if isLive {
-                        chatStore.addMessage(text: "(empty reply)", isUser: false)
+                        chatStore.addMessage(text: L("panel.emptyReply"), isUser: false)
                     }
                 }
             } catch {
@@ -905,12 +1138,16 @@ struct ChatWindow: View {
         return false
     }
 
+    /// Persists the attachment payload as a FILE in Application Support and
+    /// references it from the message (`base64` stays empty). Keeping image
+    /// bytes out of `chat.json` is what stops the history file from growing
+    /// into the tens of megabytes — inline base64 was the root of the
+    /// launch-time decode cost and the re-layout memory blow-up. Written into
+    /// the same `images/` directory the orphan sweep protects, so an attached-
+    /// then-cancelled file is reclaimed. Falls back to inline base64 only if
+    /// the write fails, so attaching never silently drops the image.
     private func attach(data: Data, mime: String, filename: String) {
-        appState.pendingAttachment = ChatAttachment(
-            filename: filename,
-            mimeType: mime,
-            base64: data.base64EncodedString()
-        )
+        appState.pendingAttachment = ChatAttachment.fileBacked(data: data, mimeType: mime, filename: filename)
     }
 
     /// Re-encodes arbitrary image bytes (HEIC, TIFF, …) to PNG.
@@ -939,9 +1176,9 @@ struct ChatWindow: View {
                 // Show the source screenshot in the chat, then the extracted text.
                 chatStore.appendNow(ChatMessage(text: "", isUser: true, attachments: [attachment]))
                 chatStore.addMessage(text: markdown, isUser: false)
-                chatStore.addMessage(text: "Extracted with OCR — structure preserved as Markdown, raw text copied to the clipboard.", isUser: false, messageType: .system)
+                chatStore.addMessage(text: L("panel.ocrDone"), isUser: false, messageType: .system)
             } catch {
-                chatStore.addMessage(text: "OCR failed: \(error.localizedDescription)", isUser: false, messageType: .system)
+                chatStore.addMessage(text: String(format: L("panel.ocrFailed"), error.localizedDescription), isUser: false, messageType: .system)
             }
             isExtractingText = false
         }
@@ -966,7 +1203,7 @@ struct ChatWindow: View {
             let success = await audioRecorder.startRecording()
             if !success {
                 _ = await MainActor.run {
-                    chatStore.addMessage(text: "Failed to start recording. Please check microphone permissions in System Settings.", isUser: false, messageType: .system)
+                    chatStore.addMessage(text: L("panel.recordStartFailed"), isUser: false, messageType: .system)
                 }
             }
         }
@@ -1003,7 +1240,10 @@ struct ChatWindow: View {
     private func installScrollIntentMonitor() {
         guard scrollIntentMonitor == nil else { return }
         scrollIntentMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            if event.window is FloatingPanelWindow, event.scrollingDeltaY > 0 {
+            // Only when the content can actually scroll: over a fitting chat a
+            // wheel-up changes no geometry, so nothing would ever re-arm
+            // auto-follow — it would stay off until the next sent message.
+            if event.window is FloatingPanelWindow, event.scrollingDeltaY > 0, !scrollContentFits {
                 isNearBottom = false // trackNearBottom re-arms it at the bottom
             }
             return event
@@ -1080,7 +1320,7 @@ struct ChatWindow: View {
             let transcript = try await TranscriptionService.transcribe(audioURL: audioURL)
             guard !transcript.isEmpty else {
                 chatStore.setLoading(false)
-                chatStore.addMessage(text: "The recording contained no recognizable speech.", isUser: false, messageType: .system)
+                chatStore.addMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system)
                 return
             }
             let voiceMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
@@ -1088,7 +1328,7 @@ struct ChatWindow: View {
             streamAssistantReply()
         } catch {
             chatStore.setLoading(false)
-            chatStore.addMessage(text: "Transcription failed: \(error.localizedDescription)", isUser: false, messageType: .system)
+            chatStore.addMessage(text: String(format: L("panel.transcriptionFailed"), error.localizedDescription), isUser: false, messageType: .system)
             // The recording file persists — Retry re-runs transcription + send.
             pendingRetry = .transcription(audioURL)
         }
@@ -1103,17 +1343,23 @@ private struct PendingAttachmentPreview: View {
     let canExtractText: Bool
     let removeAction: () -> Void
     let extractTextAction: () -> Void
+    /// Decoded off the main thread (see AttachmentImageCache).
+    @State private var decodedImage: NSImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if attachment.mimeType.hasPrefix("image"),
-               let data = attachment.data,
-               let image = NSImage(data: data) {
+               let image = decodedImage ?? AttachmentImageCache.cachedImage(for: attachment) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(maxHeight: 140)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else if attachment.mimeType.hasPrefix("image") {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(width: 180, height: 120)
+                    .overlay(ProgressView().controlSize(.small))
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.fill")
@@ -1143,6 +1389,13 @@ private struct PendingAttachmentPreview: View {
                 .help(L("tooltip.removeAttachment"))
             }
         }
+        // On the container, not the placeholder: the pending attachment can
+        // be REPLACED while this view lives — the id-keyed task both resets
+        // the stale preview and kicks off the new decode.
+        .task(id: attachment.id) {
+            decodedImage = AttachmentImageCache.cachedImage(for: attachment)
+            decodedImage = await AttachmentImageCache.image(for: attachment)
+        }
     }
 }
 
@@ -1161,6 +1414,25 @@ private extension View {
                     >= geometry.contentSize.height - 80
             } action: { _, nearBottom in
                 onChange(nearBottom)
+            }
+        } else {
+            self
+        }
+    }
+
+    /// Reports whether the content fits the viewport (no scrolling possible).
+    /// The scroll-intent monitor uses it: a wheel-up over content that cannot
+    /// scroll must NOT disable auto-follow — nothing re-arms it afterwards
+    /// (the scroll geometry never changes), so the chat would silently stop
+    /// following until the next sent message. macOS 14 keeps the default
+    /// `true`, matching its always-follow behavior.
+    @ViewBuilder
+    func trackContentFits(_ onChange: @escaping (Bool) -> Void) -> some View {
+        if #available(macOS 15.0, *) {
+            self.onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height <= geometry.containerSize.height + 1
+            } action: { _, fits in
+                onChange(fits)
             }
         } else {
             self

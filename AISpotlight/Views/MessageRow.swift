@@ -12,7 +12,22 @@ struct MessageRow: View {
     @State private var isHovering = false
     @State private var justCopied = false
     @Environment(\.colorScheme) private var colorScheme
-    
+    @Environment(\.themePalette) private var palette
+
+    /// Bubble body text: system `.primary` for glass, else the palette's own
+    /// spec color (Blueprint #eaf6ff/#0c2233, Día #fff0e0/#3d0d20, …) so the
+    /// text reads on the theme's tinted bubbles instead of the system default.
+    private var bubbleTextColor: Color {
+        palette.isGlass ? .primary : palette.primaryText
+    }
+
+    /// In-bubble link/URL color: system accent for glass, the theme's ink
+    /// accent otherwise (Día light uses the deeper #C77800, not the bright
+    /// marigold, for legibility).
+    private var linkTint: Color {
+        palette.isGlass ? .accentColor : palette.ink
+    }
+
     var body: some View {
         HStack {
             if message.messageType == .system {
@@ -38,37 +53,37 @@ struct MessageRow: View {
                 if message.messageType == .voice {
                     if let audioURL = message.audioURL {
                         VoiceMessagePlayer(audioURL: audioURL, isUserMessage: true)
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: 280)
                     }
                     // Show the transcribed text below the player
                     if !message.text.isEmpty {
-                        renderMarkdownText(message.text, linkColor: .accentColor)
-                            .foregroundColor(.primary)
+                        renderMarkdownText(message.text, linkColor: linkTint)
+                            .foregroundColor(bubbleTextColor)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.leading)
                     }
                 } else {
-                    renderMarkdownText(message.text, linkColor: .accentColor)
-                        .foregroundColor(.primary)
+                    renderMarkdownText(message.text, linkColor: linkTint)
+                        .foregroundColor(bubbleTextColor)
                         .textSelection(.enabled)
                         .multilineTextAlignment(.leading)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            // Material keeps text legible over any wallpaper; the accent tint
-            // behind it distinguishes the user bubble (tint is sampled through
-            // the material).
-            .background(.regularMaterial)
-            .background(Color.accentColor.opacity(0.35))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            // Subtle elevation separates content from the glass beneath
+            // Current theme: material + accent tint through glass. Other
+            // themes: solid/gradient fill with their own corners + border.
+            .modifier(ThemedBubble(palette: palette, isUser: true))
+            // Subtle elevation separates content from the surface beneath
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
+            // Synthwave's neon glow on the user bubble; nil → invisible.
+            .shadow(color: palette.userGlow ?? .clear, radius: 7)
             .modifier(CopyableBubble(text: message.text, isHovering: $isHovering, justCopied: $justCopied))
             
             Text(formatTime(message.timestamp))
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
+                .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
+                .foregroundColor(palette.isGlass ? .secondary : palette.timestampColor)
         }
         .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
     }
@@ -80,42 +95,40 @@ struct MessageRow: View {
                 // bubble to the full 75% width — image-only results looked
                 // like a small picture lost in an empty field. The bubble
                 // now hugs its content (long text still fills the width).
-                Image(systemName: "brain")
-                    .foregroundColor(.accentColor)
-                    .font(.caption)
-                
+                assistantIcon
+
                 assistantAttachmentsSection()
 
                 if message.messageType == .voice {
                     // Voice message from assistant (rare case, but supported)
                     if let audioURL = message.audioURL {
                         VoiceMessagePlayer(audioURL: audioURL, isUserMessage: false)
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: 280)
                     }
                     // Also show transcribed text if available
                     if !message.text.isEmpty {
-                        renderMarkdownText(message.text, linkColor: .accentColor)
-                            .foregroundColor(.primary)
+                        renderMarkdownText(message.text, linkColor: linkTint)
+                            .foregroundColor(bubbleTextColor)
                             .textSelection(.enabled)
                             .multilineTextAlignment(.leading)
                     }
                 } else {
-                    renderMarkdownText(message.text, linkColor: .accentColor)
-                        .foregroundColor(.primary)
+                    renderMarkdownText(message.text, linkColor: linkTint)
+                        .foregroundColor(bubbleTextColor)
                         .textSelection(.enabled)
                         .multilineTextAlignment(.leading)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .modifier(ThemedBubble(palette: palette, isUser: false))
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
             .modifier(CopyableBubble(text: message.text, isHovering: $isHovering, justCopied: $justCopied))
             
             Text(formatTime(message.timestamp))
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
+                .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
+                .foregroundColor(palette.isGlass ? .secondary : palette.timestampColor)
         }
         .frame(maxWidth: maxBubbleWidth, alignment: .leading)
     }
@@ -138,18 +151,82 @@ struct MessageRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
             Text(formatTime(message.timestamp))
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
+                .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
+                .foregroundColor(palette.isGlass ? .secondary : palette.timestampColor)
         }
         .frame(maxWidth: maxBubbleWidth, alignment: .center)
     }
     
     // MARK: - Copy affordance
 
+    /// DateFormatter creation is famously expensive — building one per
+    /// `formatTime` call meant one per row per body evaluation. One formatter
+    /// per format string, reused forever (SwiftUI bodies run on the main
+    /// thread, so the unsynchronized dictionary is safe).
+    private static var timeFormatters: [String: DateFormatter] = [:]
+
+    private static func cachedFormatter(_ key: String, make: () -> DateFormatter) -> DateFormatter {
+        if let cached = timeFormatters[key] { return cached }
+        let formatter = make()
+        timeFormatters[key] = formatter
+        return formatter
+    }
+
+    /// POSIX-locale formatter for the themed timestamp formats.
+    private static func posixFormatter(_ format: String) -> DateFormatter {
+        cachedFormatter(format) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = format
+            return formatter
+        }
+    }
+
+    /// The Current theme keeps the localized short time; every other theme has
+    /// a signature timestamp format from the design spec.
     private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        if palette.timestamp == .glass {
+            let formatter = Self.cachedFormatter("glass.short") {
+                let formatter = DateFormatter()
+                formatter.timeStyle = .short
+                return formatter
+            }
+            return formatter.string(from: date)
+        }
+        switch palette.timestamp {
+        case .glass, .plain:
+            return Self.posixFormatter("HH:mm").string(from: date)
+        case .bracketed:
+            return "[\(Self.posixFormatter("HH:mm").string(from: date))]"
+        case .seconds:
+            return Self.posixFormatter("HH:mm:ss").string(from: date)
+        case .uppercaseMeridiem:
+            return Self.posixFormatter("hh:mm a").string(from: date).uppercased()
+        case .flowerSuffix:
+            return "\(Self.posixFormatter("HH:mm").string(from: date)) ✿"
+        case .lowercaseMeridiem:
+            let ampm = Calendar.current.component(.hour, from: date) < 12 ? "a.m." : "p.m."
+            return "\(Self.posixFormatter("hh:mm").string(from: date)) \(ampm)"
+        }
+    }
+
+    /// Assistant bubble icon: the brain for Current, a themed glyph otherwise.
+    @ViewBuilder
+    private var assistantIcon: some View {
+        if palette.isGlass {
+            Image(systemName: "brain")
+                .foregroundColor(.accentColor)
+                .font(.caption)
+        } else if palette.themeID == .diaDeMuertos {
+            SugarSkull(dark: colorScheme == .dark)
+        } else if palette.themeID == .halloween {
+            PumpkinIcon(dark: colorScheme == .dark)
+        } else {
+            Text(palette.assistantGlyph)
+                .foregroundColor(palette.glyphColor)
+                .font(.caption)
+        }
     }
     
     /// Block-level rendering: headings, lists, quotes, code blocks and tables
@@ -284,17 +361,43 @@ struct CopyableBubble: ViewModifier {
 struct MarkdownText: View {
     let text: String
     let linkColor: Color
-    
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+
     init(_ text: String, linkColor: Color = .blue) {
         self.text = text
         self.linkColor = linkColor
     }
-    
+
+    /// Memoizes the rendered AttributedString. `renderMarkdown` (markdown
+    /// parse + URL detection + run styling) used to run on EVERY body
+    /// evaluation — per streamed flush of the growing bubble and per
+    /// re-layout of every visible row. The output depends only on the text
+    /// and the theme context, so it is cached by that key; NSCache evicts
+    /// under pressure and the count cap bounds the streaming case.
+    private final class RenderBox {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+    private static let renderCache: NSCache<NSString, RenderBox> = {
+        let cache = NSCache<NSString, RenderBox>()
+        cache.countLimit = 512
+        return cache
+    }()
+
     var body: some View {
-        Text(renderMarkdown())
+        Text(cachedRender())
             .fixedSize(horizontal: false, vertical: true) // preserve line breaks/height
     }
-    
+
+    private func cachedRender() -> AttributedString {
+        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(text)" as NSString
+        if let boxed = Self.renderCache.object(forKey: key) { return boxed.value }
+        let rendered = renderMarkdown()
+        Self.renderCache.setObject(RenderBox(rendered), forKey: key)
+        return rendered
+    }
+
     private func renderMarkdown() -> AttributedString {
         // Use inline-only parsing that preserves whitespace and newlines
         var attributed: AttributedString
@@ -321,7 +424,14 @@ struct MarkdownText: View {
             let range = run.range
             let codeText = String(attributed[range].characters)
             attributed[range].font = .system(size: 12.5, design: .monospaced)
-            attributed[range].backgroundColor = Color.secondary.opacity(0.08)
+            // Themed chip (Día: pale-gold backing + #FFCE7A/#9a5c00 text);
+            // glass keeps the whisper-of-a-backing default.
+            attributed[range].backgroundColor = palette.isGlass
+                ? Color.secondary.opacity(0.08)
+                : (palette.inlineCodeFill ?? Color.secondary.opacity(0.08))
+            if !palette.isGlass {
+                attributed[range].foregroundColor = palette.inlineCodeText ?? palette.codeText
+            }
             if let url = CopyLink.encode(codeText) {
                 attributed[range].link = url
             }
@@ -365,18 +475,80 @@ struct MarkdownText: View {
     }
 }
 
+/// Decoded-image cache keyed by attachment id. Decoding a multi-megabyte
+/// image is expensive, and it used to run synchronously in `body` on the
+/// FIRST render of every preview (file read + full-resolution decode on the
+/// main thread — a slow first frame that could defeat the open-at-bottom
+/// landing). Now: decode + downsample run off the main thread (`image(for:)`
+/// is async), previews are capped at `maxPreviewPixels` (a Retina screenshot
+/// decoded full-size is a ~50 MB bitmap drawn into a ~300 pt frame), and the
+/// cache carries a real cost limit instead of relying on memory pressure.
+enum AttachmentImageCache {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.totalCostLimit = 128 * 1024 * 1024 // ~128 MB of decoded previews
+        return cache
+    }()
+
+    /// Longest preview side in pixels — plenty for a ~360 pt @2x frame.
+    private static let maxPreviewPixels: CGFloat = 1600
+
+    /// Synchronous fast path: already-decoded previews only. Never decodes.
+    static func cachedImage(for attachment: ChatAttachment) -> NSImage? {
+        cache.object(forKey: attachment.id.uuidString as NSString)
+    }
+
+    /// Decodes (downsampled) off the main thread and caches the result.
+    static func image(for attachment: ChatAttachment) async -> NSImage? {
+        guard attachment.mimeType.hasPrefix("image") else { return nil }
+        if let cached = cachedImage(for: attachment) { return cached }
+        let decoded = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+            guard let data = attachment.data else { return nil }
+            return downsample(data)
+        }.value
+        if let decoded {
+            let cost = Int(decoded.size.width * decoded.size.height * 4)
+            cache.setObject(decoded, forKey: attachment.id.uuidString as NSString, cost: cost)
+        }
+        return decoded
+    }
+
+    /// ImageIO thumbnail decode: never materializes the full-resolution
+    /// bitmap for oversized sources. Falls back to a plain decode for data
+    /// ImageIO cannot open.
+    private static func downsample(_ data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(
+            data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
+        ) else {
+            return NSImage(data: data)
+        }
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true, // bake in EXIF rotation
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPreviewPixels
+        ] as [CFString: Any] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+            return NSImage(data: data)
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+}
+
 private struct AttachmentPreviewBubble: View {
     let attachment: ChatAttachment
     /// Scales with the bubble (see `MessageRow.attachmentPreviewWidth`).
     let maxImageWidth: CGFloat
+    /// Decoded preview; loaded asynchronously so the first render of a row
+    /// never blocks the main thread on a file read + image decode.
+    @State private var decodedImage: NSImage?
 
     var body: some View {
         // The bubble hugs the preview — no `.infinity` stretcher: an
         // image-only message must not blow the bubble up to full width.
         Group {
             if attachment.mimeType.hasPrefix("image"),
-               let data = attachment.data,
-               let image = NSImage(data: data) {
+               let image = decodedImage ?? AttachmentImageCache.cachedImage(for: attachment) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -387,6 +559,16 @@ private struct AttachmentPreviewBubble: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         AttachmentOpener.open(attachment)
+                    }
+            } else if attachment.mimeType.hasPrefix("image") {
+                // Decode in flight — a quiet placeholder keeps the layout
+                // from jumping when the image lands.
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(width: min(maxImageWidth, 220), height: 140)
+                    .overlay(ProgressView().controlSize(.small))
+                    .task(id: attachment.id) {
+                        decodedImage = await AttachmentImageCache.image(for: attachment)
                     }
             } else {
                 HStack(spacing: 8) {

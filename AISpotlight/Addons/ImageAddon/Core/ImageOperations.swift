@@ -68,6 +68,14 @@ enum ImageOperations {
         guard let sourceData = source.data else { return }
         let settings = ImageAddonSettings.shared
 
+        // The conversation this operation belongs to. Image ops take seconds;
+        // if the user switches to another preset chat meanwhile, results and
+        // notes are delivered back HERE (deliver routes them to the dormant
+        // store) instead of landing in whatever chat happens to be open —
+        // same origin discipline as the text-streaming path.
+        let origin = chatStore.conversation
+        func isLive() -> Bool { chatStore.conversation == origin }
+
         if postSourceMessage {
             chatStore.appendNow(ChatMessage(text: "", isUser: true, attachments: [source]))
         }
@@ -107,7 +115,10 @@ enum ImageOperations {
                     return (prepared.data, prepared.mime, prepared.notes, mask)
                 }.value
                 for note in normalized.notes {
-                    chatStore.addMessage(text: noteText(note), isUser: false, messageType: .system)
+                    chatStore.deliver(
+                        ChatMessage(text: noteText(note), isUser: false, messageType: .system),
+                        to: origin
+                    )
                 }
 
                 var params: [String: Any] = [:]
@@ -150,23 +161,33 @@ enum ImageOperations {
 
                 var caption = String(format: IAL(resultKey(for: function)), model.name)
                 if function == .upscale, let factor { caption += " ×\(factor)" }
-                chatStore.appendNow(ChatMessage(text: caption, isUser: false, attachments: [attachment]))
+                chatStore.deliver(ChatMessage(text: caption, isUser: false, attachments: [attachment]), to: origin)
 
                 if settings.autoCopyResult, let image = NSImage(data: outData) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.writeObjects([image])
                 }
             } catch is CancellationError {
-                chatStore.addMessage(text: IAL("ia.status.cancelledMsg"), isUser: false, messageType: .system)
+                chatStore.deliver(
+                    ChatMessage(text: IAL("ia.status.cancelledMsg"), isUser: false, messageType: .system),
+                    to: origin
+                )
                 restoreAttachment(source)
             } catch {
-                chatStore.addMessage(text: error.localizedDescription, isUser: false, messageType: .system)
+                chatStore.deliver(
+                    ChatMessage(text: error.localizedDescription, isUser: false, messageType: .system),
+                    to: origin
+                )
                 // «Повторить»: источник возвращается в композер — повторный
                 // запуск в один клик (плюс авто-ретрай уже внутри раннера).
                 restoreAttachment(source)
             }
-            chatStore.statusText = nil
-            chatStore.setLoading(false)
+            // The pill belongs to the origin chat; after a switch the store's
+            // status/loading were already reset by switchConversation.
+            if isLive() {
+                chatStore.statusText = nil
+                chatStore.setLoading(false)
+            }
         }
     }
 
@@ -228,32 +249,17 @@ enum ImageOperations {
     }
 }
 
-/// Stores oversized results as files under Application Support so chat.json
-/// stays lean (ТЗ §6: > 8 MB → файловая ссылка).
+/// Stores image results as files under Application Support so the chat store
+/// stays lean. Routes through the shared `ChatAttachment.fileBacked` factory —
+/// the same path used for pasted images, file attachments and screenshots — so
+/// every attachment in the app is file-backed. (Previously results under 8 MB
+/// were inlined as base64, which bloated the store and was inconsistent with
+/// the rest of the app.)
 enum ImageResultStore {
-    static let inlineLimit = 8 * 1024 * 1024
-
-    private static var directory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("AISpotlight/images", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
-    }
-
     static func makeAttachment(data: Data, mime: String, filename: String) -> ChatAttachment {
-        guard data.count > inlineLimit else {
-            return ChatAttachment(filename: filename, mimeType: mime, base64: data.base64EncodedString())
-        }
-        let id = UUID()
-        let url = directory.appendingPathComponent("\(id.uuidString)-\(filename)")
-        do {
-            try data.write(to: url, options: .atomic)
-            Diagnostics.log("imageaddon", "result.file bytes=\(data.count) → \(url.lastPathComponent)")
-            return ChatAttachment(filename: filename, mimeType: mime, base64: "", id: id, fileURLString: url.path)
-        } catch {
-            // Disk write failed — fall back to inline rather than losing the result.
-            return ChatAttachment(filename: filename, mimeType: mime, base64: data.base64EncodedString(), id: id)
-        }
+        let attachment = ChatAttachment.fileBacked(data: data, mimeType: mime, filename: filename)
+        Diagnostics.log("imageaddon", "result bytes=\(data.count) fileBacked=\(attachment.fileURLString != nil)")
+        return attachment
     }
 }
 
