@@ -5,7 +5,7 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 ## Features
 
 - **Spotlight-style floating panel** — summoned with a global hotkey from any app, opens on the screen where your cursor is, remembers its position
-- **Multi-provider chat** — OpenAI, Anthropic (Claude), Google Gemini, Mistral and DeepSeek; model lists are fetched live from each provider's API
+- **Multi-provider chat** — OpenAI, Anthropic (Claude), Google Gemini, Mistral, DeepSeek, Kimi (Moonshot) and OpenRouter (any model by slug, with a live capability catalog); model lists are fetched live from each provider's API
 - **Voice input**
   - Speech-to-text via **Mistral (Voxtral)**, **OpenAI** or **Deepgram** — pick the provider in Settings → Voice
   - Voice messages in chat with playback
@@ -20,7 +20,8 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **OCR** — extract text from images and documents (Mistral OCR)
 - **Web search** — augment answers with live results (Brave Search API)
 - **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its **own isolated chat** (separate history, context and rolling summary) via the "Own chat" toggle in Settings → Prompts — switching presets swaps the conversation, and a reply that is still generating keeps streaming into its home chat in the background
-- **Markdown rendering** with code blocks in responses
+- **Artifacts** — ask for an interactive demo, visualization or a document, and the model returns a complete HTML page or Markdown document shown as a compact card in the chat (streaming progress included). Click the card for a preview window (⅔ of the screen): live interactive WKWebView for HTML, Notion-style rendered view for Markdown, a Code tab, copy, save to file and open-in-browser. Ask for changes and the revised document arrives as a new card — earlier versions stay openable in the history
+- **Markdown rendering** with code blocks, tables, task lists (`- [ ]`), numbered lists and dividers in responses
 - **Launch at login**, light/dark/system theme, UI in English, Spanish and Russian
 
 ## Default hotkeys
