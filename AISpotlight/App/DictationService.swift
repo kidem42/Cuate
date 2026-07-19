@@ -434,6 +434,11 @@ private final class NonKeyPanel: NSPanel {
 private struct DictationWidgetView: View {
     @ObservedObject var service: DictationService
     @ObservedObject private var settings = AppSettings.shared
+    @Environment(\.colorScheme) private var scheme
+
+    /// The dictation panel is a separate window; it reads the selected theme
+    /// straight from settings (the panel's appearance drives `colorScheme`).
+    private var palette: ThemePalette { ThemePalette.palette(for: settings.theme, scheme: scheme) }
 
     var body: some View {
         AdaptiveGlassContainer {
@@ -452,10 +457,13 @@ private struct DictationWidgetView: View {
                     } label: {
                         Text(AppSettings.dictationISOCode(for: settings.dictationTargetLanguage))
                             .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(palette.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(palette.ink))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2.5)
-                            .background(Capsule().fill(Color.primary.opacity(0.08)))
+                            .background(Capsule().fill(palette.isGlass ? Color.primary.opacity(0.08) : palette.accent.opacity(0.15)))
+                            .overlay(
+                                Capsule().stroke(palette.isGlass ? Color.clear : palette.accent.opacity(0.4), lineWidth: 1)
+                            )
                     }
                     .menuStyle(.button)
                     .buttonStyle(.plain)
@@ -475,7 +483,21 @@ private struct DictationWidgetView: View {
                     languagePicker
                 }
             }
+            // Themed tint sits between the glass material and the content, so the
+            // pill picks up the theme's color (same panelTint the chat panel uses);
+            // glass themes stay untinted.
+            .background {
+                if !palette.isGlass {
+                    Capsule().fill(palette.panelTint)
+                }
+            }
             .adaptiveGlassCapsule()
+            // Themed pill border over the glass (Día: marigold hairline).
+            .overlay {
+                if !palette.isGlass {
+                    Capsule().stroke(palette.ink.opacity(0.4), lineWidth: 1)
+                }
+            }
         }
         .help("Click or press the dictation hotkey to stop")
     }
@@ -497,6 +519,19 @@ private struct DictationWidgetView: View {
 private struct EqualizerBars: View {
     let level: Float
     private let barCount = 14
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var settings = AppSettings.shared
+
+    /// The dictation panel is a separate window, so it reads the selected theme
+    /// straight from settings (the panel's appearance drives `colorScheme`).
+    /// Themes with a multi-color dictation palette cycle their colors per bar
+    /// (Día: marigold/magenta/teal).
+    private func barColor(_ index: Int) -> Color {
+        let palette = ThemePalette.palette(for: settings.theme, scheme: colorScheme)
+        if palette.isGlass { return Color.primary.opacity(0.75) }
+        let colors = palette.dictationColors.isEmpty ? [palette.accent] : palette.dictationColors
+        return colors[index % colors.count]
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -504,7 +539,7 @@ private struct EqualizerBars: View {
             HStack(spacing: 2.5) {
                 ForEach(0..<barCount, id: \.self) { index in
                     Capsule()
-                        .fill(Color.primary.opacity(0.75))
+                        .fill(barColor(index))
                         .frame(width: 2.5, height: barHeight(index: index, time: time))
                 }
             }

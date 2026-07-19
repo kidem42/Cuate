@@ -45,6 +45,7 @@ enum Localization {
         "tab.keys": [.english: "API Keys", .spanish: "Claves API", .russian: "Ключи API"],
         "tab.voice": [.english: "Voice", .spanish: "Voz", .russian: "Голос"],
         "tab.general": [.english: "General", .spanish: "General", .russian: "Общие"],
+        "tab.appearance": [.english: "Appearance", .spanish: "Apariencia", .russian: "Внешний вид"],
         "tab.prompts": [.english: "Prompts", .spanish: "Prompts", .russian: "Промпты"],
         "sidebar.addons": [.english: "Add-ons", .spanish: "Complementos", .russian: "Аддоны"],
         "prompts.resizeHelp": [.english: "Drag to resize the editor", .spanish: "Arrastra para cambiar el tamaño del editor", .russian: "Потяните, чтобы изменить высоту редактора"],
@@ -63,6 +64,18 @@ enum Localization {
         "params.reasoning.na": [.english: "Not tunable for the selected model", .spanish: "No ajustable para el modelo seleccionado", .russian: "Недоступно для выбранной модели"],
         "params.reasoning.deepseek": [.english: "Pick deepseek-reasoner for reasoning", .spanish: "Elige deepseek-reasoner para razonar", .russian: "Выберите deepseek-reasoner"],
         "params.reasoning.mistral": [.english: "Pick a magistral-* model for reasoning", .spanish: "Elige un modelo magistral-* para razonar", .russian: "Выберите модель magistral-*"],
+        "params.reasoning.openrouter": [.english: "Depends on the model — pick a reasoning-capable one", .spanish: "Depende del modelo — elige uno con razonamiento", .russian: "Зависит от модели — выберите модель с рассуждением"],
+
+        // MARK: OpenRouter manual model entry
+        "or.placeholder": [.english: "e.g. openai/gpt-4o", .spanish: "p. ej. openai/gpt-4o", .russian: "напр. openai/gpt-4o"],
+        "or.browse": [.english: "Browse models on openrouter.ai ↗", .spanish: "Explorar modelos en openrouter.ai ↗", .russian: "Каталог моделей на openrouter.ai ↗"],
+        "or.valid": [.english: "Model found in the OpenRouter catalog", .spanish: "Modelo encontrado en el catálogo de OpenRouter", .russian: "Модель найдена в каталоге OpenRouter"],
+        "or.notFound": [.english: "Not in the OpenRouter catalog — double-check the slug", .spanish: "No está en el catálogo de OpenRouter — revisa el identificador", .russian: "Нет в каталоге OpenRouter — проверьте идентификатор"],
+        "or.recent": [.english: "Recent models", .spanish: "Modelos recientes", .russian: "Недавние модели"],
+        "or.clear": [.english: "Clear history", .spanish: "Borrar historial", .russian: "Очистить историю"],
+        "cap.vision": [.english: "Vision", .spanish: "Visión", .russian: "Картинки"],
+        "cap.tools": [.english: "Tools", .spanish: "Herramientas", .russian: "Инструменты"],
+        "cap.reasoning": [.english: "Reasoning", .spanish: "Razonamiento", .russian: "Рассуждение"],
         "params.maxTokens": [.english: "Max response tokens", .spanish: "Tokens máx. de respuesta", .russian: "Макс. токенов ответа"],
         "params.footer": [.english: "Reasoning maps to each provider's native control. It is shown only for models that support it.", .spanish: "El razonamiento usa el control nativo de cada proveedor. Solo se muestra en modelos compatibles.", .russian: "Рассуждение отображается только для моделей, которые его поддерживают, и использует нативный механизм провайдера."],
         "reasoning.auto": [.english: "Auto", .spanish: "Auto", .russian: "Авто"],
@@ -146,6 +159,14 @@ enum Localization {
         // MARK: Appearance / Language
         "appearance.header": [.english: "Appearance", .spanish: "Apariencia", .russian: "Оформление"],
         "appearance.theme": [.english: "Theme", .spanish: "Tema", .russian: "Тема"],
+        "appearance.themes.header": [.english: "Themes", .spanish: "Temas", .russian: "Темы"],
+        "appearance.holidayThemes": [.english: "Holiday themes", .spanish: "Temas festivos", .russian: "Праздничные темы"],
+        "appearance.holidayThemes.caption": [
+            .english: "Halloween (Oct 31) and Día de Muertos (Nov 1–2) switch on automatically and the previous theme comes back afterwards. A manual change always wins.",
+            .spanish: "Halloween (31 oct) y Día de Muertos (1–2 nov) se activan solos y después vuelve el tema anterior. Un cambio manual siempre gana.",
+            .russian: "Хеллоуин (31 окт) и День мёртвых (1–2 ноя) включаются сами, после праздника возвращается прежняя тема. Ручной выбор всегда в приоритете."
+        ],
+        "appearance.mode": [.english: "Mode", .spanish: "Modo", .russian: "Режим"],
         "appearance.language": [.english: "Language", .spanish: "Idioma", .russian: "Язык"],
         "theme.auto": [.english: "Auto", .spanish: "Auto", .russian: "Авто"],
         "theme.light": [.english: "Light", .spanish: "Claro", .russian: "Светлая"],
@@ -199,6 +220,14 @@ enum Localization {
         "panel.jumpLatest": [.english: "Jump to the latest message", .spanish: "Ir al mensaje más reciente", .russian: "К последнему сообщению"],
         "panel.recordingCancelled": [.english: "Recording cancelled.", .spanish: "Grabación cancelada.", .russian: "Запись отменена."],
         "recording.hint": [.english: "Space to send · ×2 to cancel", .spanish: "Espacio para enviar · ×2 para cancelar", .russian: "Пробел — отправить · ×2 — отмена"],
+        "panel.recordLimitSent": [.english: "Recording reached the limit of %d minutes and was sent automatically.", .spanish: "La grabación alcanzó el límite de %d minutos y se envió automáticamente.", .russian: "Запись достигла лимита в %d минут и была отправлена автоматически."],
+        "panel.recordLimitStopped": [.english: "Recording reached the limit of %d minutes and was stopped.", .spanish: "La grabación alcanzó el límite de %d minutos y se detuvo.", .russian: "Запись достигла лимита в %d минут и была остановлена."],
+        "panel.recordStartFailed": [.english: "Failed to start recording. Please check microphone permissions in System Settings.", .spanish: "No se pudo iniciar la grabación. Revisa los permisos del micrófono en Ajustes del Sistema.", .russian: "Не удалось начать запись. Проверьте доступ к микрофону в Системных настройках."],
+        "panel.noSpeech": [.english: "The recording contained no recognizable speech.", .spanish: "La grabación no contenía voz reconocible.", .russian: "В записи не распознано речи."],
+        "panel.transcriptionFailed": [.english: "Transcription failed: %@", .spanish: "Falló la transcripción: %@", .russian: "Ошибка расшифровки: %@"],
+        "panel.emptyReply": [.english: "(empty reply)", .spanish: "(respuesta vacía)", .russian: "(пустой ответ)"],
+        "panel.ocrDone": [.english: "Extracted with OCR — structure preserved as Markdown, raw text copied to the clipboard.", .spanish: "Extraído con OCR — estructura conservada como Markdown, texto copiado al portapapeles.", .russian: "Распознано через OCR — структура сохранена в Markdown, текст скопирован в буфер обмена."],
+        "panel.ocrFailed": [.english: "OCR failed: %@", .spanish: "Falló el OCR: %@", .russian: "Ошибка OCR: %@"],
 
         // MARK: Tooltips
         "tooltip.input": [.english: "Enter — send, Shift+Enter — new line", .spanish: "Intro — enviar, Mayús+Intro — nueva línea", .russian: "Enter — отправить, Shift+Enter — новая строка"],

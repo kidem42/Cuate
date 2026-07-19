@@ -7,7 +7,9 @@ struct EnhancedVoiceButton: View {
     let cancelRecording: () -> Void
     
     @State private var isPulsing = false
-    
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack(spacing: 8) {
             // Main voice button
@@ -32,12 +34,34 @@ struct EnhancedVoiceButton: View {
                             )
                     }
                     
-                    Circle()
-                        .fill(isRecording ? Color.red : Color.gray.opacity(0.2))
-                        .frame(width: 32, height: 32)
-                    
+                    if !isRecording, !palette.isGlass {
+                        // Shape follows composerButtonRadius: nil → circle (16 on a
+                        // 32pt button), Blueprint → 6, Terminal → 4. micDashed picks
+                        // the dashed (Día) vs solid (Blueprint/Terminal/Synthwave) outline.
+                        let radius = palette.composerButtonRadius ?? 16
+                        let shape = RoundedRectangle(cornerRadius: radius)
+                        let border = palette.micStroke ?? palette.micColor ?? palette.accent
+                        if palette.micDashed {
+                            let fill: Color = colorScheme == .dark ? border.opacity(0.15) : Color.white.opacity(0.5)
+                            shape.fill(fill).frame(width: 32, height: 32)
+                            shape.strokeBorder(border.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [1, 3]))
+                                .frame(width: 32, height: 32)
+                        } else {
+                            // Solid outline: themed fill + input-field border, matching
+                            // the composer's send button.
+                            shape.fill(palette.micFill ?? AnyShapeStyle(Color.white.opacity(0.5)))
+                                .frame(width: 32, height: 32)
+                            shape.strokeBorder(palette.micStroke ?? palette.inputStroke, lineWidth: 1)
+                                .frame(width: 32, height: 32)
+                        }
+                    } else {
+                        Circle()
+                            .fill(isRecording ? Color.red : Color.gray.opacity(0.2))
+                            .frame(width: 32, height: 32)
+                    }
+
                     Image(systemName: isRecording ? "stop.fill" : "mic.fill")
-                        .foregroundColor(isRecording ? .white : .primary)
+                        .foregroundColor(isRecording ? .white : (palette.isGlass ? .primary : (palette.micGlyphColor ?? palette.micColor ?? palette.accent)))
                         .font(.system(size: 14, weight: .medium))
                 }
             }

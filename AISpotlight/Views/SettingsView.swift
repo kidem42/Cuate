@@ -4,7 +4,7 @@ import AVFoundation
 /// App settings: provider API keys (Keychain), chat provider/model,
 /// model parameters, web search, speech-to-text, and system prompt presets.
 enum SettingsTab: String, Hashable {
-    case chat, keys, voice, general, prompts
+    case chat, keys, voice, general, appearance, prompts
     case layoutFix // LayoutFix addon (Addons/LayoutFix)
     case imageAddon // ImageAddon (Addons/ImageAddon)
 }
@@ -78,7 +78,7 @@ struct SettingsView: View {
             refreshPermissions()
         }
         .onChange(of: settings.chatProvider) { _, provider in
-            // Load the newly selected provider's models if not cached yet.
+            // Load the newly selected provider's models (or OpenRouter catalog).
             settings.autoLoadModelsIfNeeded(for: provider)
         }
     }
@@ -98,6 +98,8 @@ struct SettingsView: View {
                 .tag(SettingsTab.voice)
             sidebarRow(L("tab.general"), systemImage: "gearshape.fill", color: .gray)
                 .tag(SettingsTab.general)
+            sidebarRow(L("tab.appearance"), systemImage: "paintbrush.fill", color: .pink)
+                .tag(SettingsTab.appearance)
             sidebarRow(L("tab.prompts"), systemImage: "text.quote", color: .purple)
                 .tag(SettingsTab.prompts)
 
@@ -140,7 +142,8 @@ struct SettingsView: View {
             case .chat: tab { chatSection; parametersSection; ocrSection }
             case .keys: tab { keysSection; speechKeysSection; webSection }
             case .voice: tab { voiceSection; dictationSection }
-            case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; appearanceSection; diagnosticsSection }
+            case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection }
+            case .appearance: tab { appearanceSection }
             case .prompts: tab { switcherSection; promptSection }
             case .layoutFix: LayoutFixSettingsView()   // brings its own Form
             case .imageAddon: ImageAddonSettingsView() // brings its own Form
@@ -186,32 +189,36 @@ struct SettingsView: View {
                 }
             }
 
-            let models = settings.models(for: settings.chatProvider)
-            if models.isEmpty {
-                Text(L("chat.noModels"))
-                    .font(.callout)
-                    .foregroundColor(.secondary)
+            if settings.chatProvider.usesManualModelEntry {
+                OpenRouterModelField(settings: settings)
             } else {
-                Picker(L("chat.model"), selection: Binding(
-                    get: { settings.selectedModel(for: settings.chatProvider) ?? models.first ?? "" },
-                    set: { settings.setSelectedModel($0, for: settings.chatProvider) }
-                )) {
-                    ForEach(models, id: \.self) { model in
-                        Text(model).tag(model)
+                let models = settings.models(for: settings.chatProvider)
+                if models.isEmpty {
+                    Text(L("chat.noModels"))
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker(L("chat.model"), selection: Binding(
+                        get: { settings.selectedModel(for: settings.chatProvider) ?? models.first ?? "" },
+                        set: { settings.setSelectedModel($0, for: settings.chatProvider) }
+                    )) {
+                        ForEach(models, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
                     }
                 }
-            }
 
-            HStack {
-                Button(isLoadingModels ? L("chat.loading") : L("chat.loadModels")) {
-                    loadModels()
-                }
-                .disabled(isLoadingModels || !APIKeyStore.hasKey(for: settings.chatProvider))
+                HStack {
+                    Button(isLoadingModels ? L("chat.loading") : L("chat.loadModels")) {
+                        loadModels()
+                    }
+                    .disabled(isLoadingModels || !APIKeyStore.hasKey(for: settings.chatProvider))
 
-                if !APIKeyStore.hasKey(for: settings.chatProvider) {
-                    Text(L("chat.addKeyFirst"))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if !APIKeyStore.hasKey(for: settings.chatProvider) {
+                        Text(L("chat.addKeyFirst"))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         }
@@ -239,7 +246,7 @@ struct SettingsView: View {
     private var parametersSection: some View {
         Section {
             let model = settings.selectedModel(for: settings.chatProvider) ?? ""
-            if ModelCapabilities.supportsReasoningControl(provider: settings.chatProvider, model: model) {
+            if settings.modelSupportsReasoningControl(provider: settings.chatProvider, model: model) {
                 Picker(L("params.reasoning"), selection: $settings.reasoningMode) {
                     ForEach(ReasoningMode.allCases) { mode in
                         Text(mode.displayName).tag(mode)
@@ -270,6 +277,7 @@ struct SettingsView: View {
         switch settings.chatProvider {
         case .deepseek: return L("params.reasoning.deepseek")
         case .mistral: return L("params.reasoning.mistral")
+        case .openrouter: return L("params.reasoning.openrouter")
         default: return L("params.reasoning.na")
         }
     }
@@ -395,7 +403,9 @@ struct SettingsView: View {
                 guard let key = APIKeyStore.key(for: provider) else {
                     throw ProviderError.missingAPIKey(provider)
                 }
-                _ = try await ProviderRegistry.provider(for: provider).fetchModels(apiKey: key)
+                try await ProviderRegistry.provider(for: provider).validateKey(apiKey: key)
+                // Keep the OpenRouter catalog fresh so slug validation works.
+                if provider == .openrouter { try? await settings.refreshOpenRouterCatalog() }
                 keyTests[provider.rawValue] = .ok
             } catch {
                 keyTests[provider.rawValue] = .failed(error.localizedDescription)
@@ -428,7 +438,18 @@ struct SettingsView: View {
         keyTests[provider.rawValue] = .testing
         Task {
             do {
-                try await settings.refreshModels(for: provider)
+                if provider == .openrouter {
+                    // OpenRouter models are user-typed, so there is no list to
+                    // auto-select from: validate the key and load the catalog
+                    // (for slug validation) instead.
+                    guard let key = APIKeyStore.key(for: provider) else {
+                        throw ProviderError.missingAPIKey(provider)
+                    }
+                    try await ProviderRegistry.provider(for: provider).validateKey(apiKey: key)
+                    try? await settings.refreshOpenRouterCatalog()
+                } else {
+                    try await settings.refreshModels(for: provider)
+                }
                 keyTests[provider.rawValue] = .ok
             } catch {
                 keyTests[provider.rawValue] = .failed(error.localizedDescription)
@@ -736,6 +757,7 @@ struct SettingsView: View {
 
     // MARK: - Appearance & language
 
+    @ViewBuilder
     private var appearanceSection: some View {
         Section(L("appearance.header")) {
             Picker(L("appearance.language"), selection: $settings.language) {
@@ -743,7 +765,7 @@ struct SettingsView: View {
                     Text(lang.displayName).tag(lang)
                 }
             }
-            Picker(L("appearance.theme"), selection: $settings.appearanceMode) {
+            Picker(L("appearance.mode"), selection: $settings.appearanceMode) {
                 ForEach(AppearanceMode.allCases) { mode in
                     Text(mode.displayName).tag(mode)
                 }
@@ -752,6 +774,18 @@ struct SettingsView: View {
 
             Button(L("ob.showTour")) {
                 NotificationCenter.default.post(name: .showOnboarding, object: nil)
+            }
+        }
+        // Chat-panel visual theme (Blueprint, Terminal, Synthwave, …) —
+        // a grid of clickable mini-previews in its own block.
+        Section(L("appearance.themes.header")) {
+            ThemeGridPicker(selection: $settings.theme)
+            VStack(alignment: .leading, spacing: 3) {
+                Toggle(L("appearance.holidayThemes"), isOn: $settings.holidayThemes)
+                Text(L("appearance.holidayThemes.caption"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -1140,5 +1174,182 @@ private struct EmojiCaptureField: NSViewRepresentable {
             field.stringValue = ""
             field.window?.makeFirstResponder(nil)
         }
+    }
+}
+
+/// Free-text model chooser for OpenRouter: the user pastes a `vendor/model`
+/// slug (there are 300+ models, so no dropdown). The slug is validated against
+/// the cached `/models` catalog, previously used slugs are offered as
+/// suggestions on focus, and the current value is kept as the selected model.
+private struct OpenRouterModelField: View {
+    @ObservedObject var settings: AppSettings
+    @State private var text: String = ""
+    @State private var hoveringSuggestions = false
+    @FocusState private var focused: Bool
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Recent slugs, filtered by the current text (excluding an exact match).
+    private var suggestions: [String] {
+        let q = trimmed.lowercased()
+        let history = settings.openRouterModelHistory
+        guard !q.isEmpty else { return history }
+        return history.filter { $0.lowercased().contains(q) && $0.lowercased() != q }
+    }
+
+    private var showSuggestions: Bool {
+        (focused || hoveringSuggestions) && !suggestions.isEmpty
+    }
+
+    private var info: ModelInfo? { settings.openRouterModelInfo(for: trimmed) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent {
+                HStack(spacing: 6) {
+                    TextField(L("or.placeholder"), text: $text)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.callout, design: .monospaced))
+                        .autocorrectionDisabled(true)
+                        .focused($focused)
+                        .onSubmit { commit(trimmed) }
+                    validationIndicator
+                }
+            } label: {
+                Text(L("chat.model"))
+            }
+
+            // Capabilities of a recognized model, or a "not found" caption.
+            if let info {
+                capabilityChips(info)
+            } else if !trimmed.isEmpty, settings.isOpenRouterCatalogLoaded {
+                Text(L("or.notFound"))
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            HStack {
+                if let url = settings.chatProvider.modelCatalogURL {
+                    Link(destination: url) {
+                        Text(L("or.browse")).font(.caption)
+                    }
+                    .help(url.absoluteString)
+                }
+                Spacer()
+                if !APIKeyStore.hasKey(for: .openrouter) {
+                    Text(L("chat.addKeyFirst"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if showSuggestions {
+                suggestionsBox
+            }
+        }
+        .onAppear {
+            text = settings.selectedModel(for: .openrouter) ?? ""
+            settings.autoLoadOpenRouterCatalogIfNeeded()
+        }
+        // Keep the selected model in sync as the user types (history is only
+        // appended on an explicit commit — Enter or picking a suggestion).
+        .onChange(of: text) { _, newValue in
+            settings.setSelectedModel(newValue.trimmingCharacters(in: .whitespacesAndNewlines), for: .openrouter)
+        }
+    }
+
+    @ViewBuilder
+    private var validationIndicator: some View {
+        if trimmed.isEmpty {
+            EmptyView()
+        } else if !settings.isOpenRouterCatalogLoaded {
+            ProgressView().controlSize(.small)
+        } else if info != nil {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .help(L("or.valid"))
+        } else {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+                .help(L("or.notFound"))
+        }
+    }
+
+    @ViewBuilder
+    private func capabilityChips(_ info: ModelInfo) -> some View {
+        HStack(spacing: 6) {
+            if info.supportsVision { chip(L("cap.vision")) }
+            if info.supportsTools { chip(L("cap.tools")) }
+            if info.supportsReasoning { chip(L("cap.reasoning")) }
+        }
+    }
+
+    private func chip(_ label: String) -> some View {
+        Text(label)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.15), in: Capsule())
+            .foregroundColor(.secondary)
+    }
+
+    private var suggestionsBox: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("or.recent"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+            ForEach(suggestions, id: \.self) { slug in
+                Button {
+                    commit(slug)
+                } label: {
+                    HStack {
+                        Text(slug)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+            }
+            Divider()
+            Button {
+                settings.clearOpenRouterModelHistory()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                    Text(L("or.clear"))
+                }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+        // Keep the list up while the pointer is over it, so clicking a row
+        // isn't cut off by the field losing focus first.
+        .onHover { hoveringSuggestions = $0 }
+    }
+
+    private func commit(_ slug: String) {
+        let s = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return }
+        text = s
+        settings.recordOpenRouterModel(s)
+        focused = false
+        hoveringSuggestions = false
     }
 }

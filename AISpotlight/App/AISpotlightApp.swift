@@ -40,6 +40,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Apply the saved appearance override (Auto/Light/Dark)
         AppSettings.shared.applyAppearance()
 
+        // Seasonal auto-themes (Halloween, Día de Muertos) — checks today's
+        // date and watches for day rollovers / manual overrides.
+        HolidayThemeManager.shared.start()
+
         // Drop TCC entries stuck on an older build's signature (one shot per
         // version) so macOS can re-ask instead of silently failing.
         PermissionHealer.healIfNeeded()

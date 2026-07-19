@@ -72,11 +72,14 @@ struct VoiceMessagePlayer: View {
     @State private var duration: TimeInterval = 0
     @State private var waveformLevels: [Float]?
     @Environment(\.colorScheme) private var colorScheme
-    
+    @Environment(\.themePalette) private var palette
+
     private let playButtonSize: CGFloat = 32
     private let waveformHorizontalInset: CGFloat = 44 // reserve space for play button (left) and balance on the right
-    
-    // Dynamic colors for light/dark themes to ensure sufficient contrast
+
+    // Voice-message waveform: the thin-line equalizer pattern is kept across
+    // all themes; colors follow the default light/dark contrast unless the
+    // palette overrides the played portion (Día dark: marigold, spec §3b).
     private var baseTrackColor: Color {
         if isUserMessage {
             return colorScheme == .dark ? Color.white.opacity(0.35) : Color.black.opacity(0.25)
@@ -86,6 +89,9 @@ struct VoiceMessagePlayer: View {
     }
 
     private var fillWaveColor: Color {
+        if !palette.isGlass, isUserMessage, let themed = palette.voiceProgress {
+            return themed
+        }
         if isUserMessage {
             return colorScheme == .dark ? Color.white : Color.black.opacity(0.8)
         } else {
@@ -94,6 +100,9 @@ struct VoiceMessagePlayer: View {
     }
 
     private var playButtonColor: Color {
+        guard palette.isGlass else {
+            return isUserMessage ? palette.userText : palette.accent
+        }
         if isUserMessage {
             return colorScheme == .dark ? .white : .primary
         } else {
@@ -102,6 +111,9 @@ struct VoiceMessagePlayer: View {
     }
 
     private var timeLabelColor: Color {
+        guard palette.isGlass else {
+            return isUserMessage ? palette.userText.opacity(0.8) : palette.secondaryText
+        }
         if isUserMessage {
             return colorScheme == .dark ? Color.white.opacity(0.8) : .secondary
         } else {

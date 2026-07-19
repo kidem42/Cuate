@@ -16,8 +16,99 @@ final class QuoteComposerTextView: NSTextView {
         super.paste(sender)
     }
 
+    // MARK: - Terminal block caret
+
+    /// Set → the system insertion point is hidden and a terminal-style
+    /// blinking block is drawn at the caret instead (Terminal theme's
+    /// signature). nil → the regular caret.
+    var blockCaretColor: NSColor? {
+        didSet {
+            guard blockCaretColor != oldValue else { return }
+            // TextKit 2 (macOS 14+) draws the caret via NSTextInsertionIndicator;
+            // a clear insertionPointColor hides it on every macOS we target.
+            insertionPointColor = blockCaretColor == nil ? .labelColor : .clear
+            configureCaretBlink()
+            needsDisplay = true
+        }
+    }
+    private var caretBlinkTimer: Timer?
+    private var caretOn = true
+
+    private func configureCaretBlink() {
+        caretBlinkTimer?.invalidate()
+        caretBlinkTimer = nil
+        caretOn = true
+        guard blockCaretColor != nil else { return }
+        // Hard on/off blink, matching the design's `blink 1.1s step-end`.
+        let timer = Timer(timeInterval: 0.55, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.caretOn.toggle()
+            self.needsDisplay = true
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        caretBlinkTimer = timer
+    }
+
+    /// Keep the block solid while the caret moves/types (like real terminals).
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if blockCaretColor != nil {
+            caretOn = true
+            configureCaretBlink()
+            needsDisplay = true
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok, blockCaretColor != nil { configureCaretBlink(); needsDisplay = true }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { caretBlinkTimer?.invalidate(); caretBlinkTimer = nil; needsDisplay = true }
+        return ok
+    }
+
+    /// The caret's frame in view coordinates (zero-length selection only).
+    private var blockCaretRect: NSRect? {
+        let sel = selectedRange()
+        guard sel.length == 0 else { return nil }
+        var frame: NSRect?
+        if let tlm = textLayoutManager, let cm = tlm.textContentManager,
+           let loc = cm.location(cm.documentRange.location, offsetBy: sel.location) {
+            tlm.enumerateTextSegments(in: NSTextRange(location: loc), type: .selection,
+                                      options: [.rangeNotRequired]) { _, rect, _, _ in
+                frame = rect
+                return false
+            }
+        }
+        guard var r = frame else { return nil }
+        // One monospace character cell, like a real terminal cursor (terminals
+        // are a grid of fixed-width cells; SF Mono's cell ≈ 0.6em). The
+        // composer font is proportional, so measure the mono font's advance.
+        let size = (self.font ?? .systemFont(ofSize: 13)).pointSize
+        let mono = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        r.size.width = ("0" as NSString).size(withAttributes: [.font: mono]).width
+        r.origin.x += textContainerInset.width
+        r.origin.y += textContainerInset.height
+        return r
+    }
+
+    private func drawBlockCaret() {
+        guard let color = blockCaretColor, caretOn,
+              window?.firstResponder === self,
+              let rect = blockCaretRect else { return }
+        // Translucent block UNDER the glyphs (drawn before super) — the
+        // character stays readable inside the cursor, terminal-style.
+        color.withAlphaComponent(0.55).setFill()
+        rect.fill()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawQuoteBar()
+        drawBlockCaret()
         super.draw(dirtyRect)
     }
 
@@ -82,6 +173,8 @@ struct CustomTextEditor: NSViewRepresentable {
     /// Called on ⌘V when the pasteboard may hold an image. Return true to
     /// consume the paste (the image became an attachment).
     var onPasteImage: ((NSPasteboard) -> Bool)? = nil
+    /// Terminal theme's block caret color; nil keeps the system caret.
+    var blockCaretColor: NSColor? = nil
 
     static let minHeight: CGFloat = 27
     static let maxHeight: CGFloat = 27 + 17 * 4 // ~5 lines, then scroll
@@ -177,6 +270,7 @@ struct CustomTextEditor: NSViewRepresentable {
             coordinator?.parent.onPasteImage?(pasteboard) ?? false
         }
         textView.isRichText = false
+        textView.blockCaretColor = blockCaretColor
         textView.font = .systemFont(ofSize: 13)
         textView.backgroundColor = .clear
         textView.drawsBackground = false
@@ -215,6 +309,7 @@ struct CustomTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.parent = self
+        (textView as? QuoteComposerTextView)?.blockCaretColor = blockCaretColor
 
         if let pending = quoteToInsert {
             // A captured selection arrives: (re)build the document with the
