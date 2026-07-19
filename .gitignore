@@ -101,3 +101,7 @@ xcshareddata/
 
 # Distributable disk images (published via GitHub Releases)
 *.dmg
+
+# Local build artifacts
+AISpotlight_Debug.zip
+*.dmg
