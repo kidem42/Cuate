@@ -65,6 +65,27 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(cachedModels, forKey: "cachedModels") }
     }
 
+    // MARK: - OpenRouter model catalog & history
+
+    /// Full OpenRouter model catalog (keyed by slug) with per-model capabilities,
+    /// fetched from the public `/models` endpoint. Drives slug validation and
+    /// per-model vision/tools/reasoning gating. Persisted as JSON.
+    @Published private(set) var openRouterCatalog: [String: ModelInfo] {
+        didSet {
+            if let data = try? JSONEncoder().encode(openRouterCatalog) {
+                defaults.set(data, forKey: "openRouterCatalog")
+            }
+        }
+    }
+
+    /// Slugs the user has entered, most-recent-first — shown as suggestions
+    /// under the manual model field. Capped to `maxModelHistory`.
+    @Published private(set) var openRouterModelHistory: [String] {
+        didSet { defaults.set(openRouterModelHistory, forKey: "openRouterModelHistory") }
+    }
+
+    private static let maxModelHistory = 20
+
     // MARK: - Speech to text
 
     @Published var sttProvider: STTProviderID {
@@ -284,6 +305,18 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Chat-panel visual theme (Settings → Appearance). Purely presentational;
+    /// read reactively by the panel via the theme palette.
+    @Published var theme: AppTheme {
+        didSet { defaults.set(theme.rawValue, forKey: "appTheme") }
+    }
+
+    /// Auto-switch to the Halloween / Día de Muertos themes on their dates and
+    /// back afterwards (HolidayThemeManager). Settings → Appearance → Themes.
+    @Published var holidayThemes: Bool {
+        didSet { defaults.set(holidayThemes, forKey: "holidayThemes") }
+    }
+
     // MARK: - System prompt & presets
 
     struct PromptPreset: Identifiable {
@@ -398,6 +431,9 @@ In USER messages, lines starting with "> " are quoted external text the user cap
         chatProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
         selectedModels = defaults.dictionary(forKey: "selectedModels") as? [String: String] ?? [:]
         cachedModels = defaults.dictionary(forKey: "cachedModels") as? [String: [String]] ?? [:]
+        openRouterCatalog = (defaults.data(forKey: "openRouterCatalog")
+            .flatMap { try? JSONDecoder().decode([String: ModelInfo].self, from: $0) }) ?? [:]
+        openRouterModelHistory = defaults.stringArray(forKey: "openRouterModelHistory") ?? []
         sttProvider = STTProviderID(rawValue: defaults.string(forKey: "sttProvider") ?? "") ?? .mistral
         sttModels = defaults.dictionary(forKey: "sttModels") as? [String: String] ?? [:]
         ocrModel = defaults.string(forKey: "ocrModel") ?? Self.defaultOCRModel
@@ -405,6 +441,8 @@ In USER messages, lines starting with "> " are quoted external text the user cap
         maxTokens = defaults.object(forKey: "maxTokens") as? Int ?? 8192
         webSearchEnabled = defaults.object(forKey: "webSearchEnabled") as? Bool ?? true
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
+        theme = AppTheme(rawValue: defaults.string(forKey: "appTheme") ?? "") ?? .current
+        holidayThemes = defaults.object(forKey: "holidayThemes") as? Bool ?? true
         panelFollowsMouse = defaults.object(forKey: "panelFollowsMouse") as? Bool ?? true
         prefillFromSelection = defaults.object(forKey: "prefillFromSelection") as? Bool ?? true
         diagnosticsEnabled = defaults.bool(forKey: Diagnostics.defaultsKey)
@@ -627,8 +665,99 @@ In USER messages, lines starting with "> " are quoted external text the user cap
     /// it hasn't been loaded yet, so the saved selection is shown and validated
     /// without the user pressing "Load Models". Best-effort — silent on failure.
     func autoLoadModelsIfNeeded(for provider: ProviderID) {
+        // Manual-entry providers (OpenRouter) have no list to auto-select from;
+        // loading their list here would clobber the user-typed slug. Route them
+        // to the capability catalog instead.
+        if provider.usesManualModelEntry {
+            autoLoadOpenRouterCatalogIfNeeded()
+            return
+        }
         guard models(for: provider).isEmpty, APIKeyStore.hasKey(for: provider) else { return }
         Task { try? await refreshModels(for: provider) }
+    }
+
+    // MARK: - OpenRouter catalog & manual model entry
+
+    /// Fetches OpenRouter's full model catalog (public endpoint; the key is
+    /// sent when present but not required) and caches it for slug validation
+    /// and per-model capability gating.
+    func refreshOpenRouterCatalog() async throws {
+        let key = APIKeyStore.key(for: .openrouter)
+        let catalog = try await OpenAICompatibleProvider.openRouter.fetchModelCatalog(apiKey: key)
+        var dict: [String: ModelInfo] = [:]
+        for info in catalog { dict[info.id] = info }
+        openRouterCatalog = dict
+    }
+
+    /// Loads the OpenRouter catalog in the background if it hasn't been fetched
+    /// yet, so the manual model field can validate slugs. Best-effort, silent.
+    func autoLoadOpenRouterCatalogIfNeeded() {
+        guard openRouterCatalog.isEmpty else { return }
+        Task { try? await refreshOpenRouterCatalog() }
+    }
+
+    var isOpenRouterCatalogLoaded: Bool { !openRouterCatalog.isEmpty }
+
+    func openRouterModelInfo(for slug: String) -> ModelInfo? {
+        openRouterCatalog[slug.trimmingCharacters(in: .whitespacesAndNewlines)]
+    }
+
+    /// Whether a slug is present in the fetched catalog. Only meaningful once
+    /// the catalog is loaded (`isOpenRouterCatalogLoaded`).
+    func isKnownOpenRouterModel(_ slug: String) -> Bool {
+        openRouterModelInfo(for: slug) != nil
+    }
+
+    /// Records a chosen OpenRouter slug: selects it and moves it to the front
+    /// of the usage history (deduped, capped).
+    func recordOpenRouterModel(_ slug: String) {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        setSelectedModel(trimmed, for: .openrouter)
+        var history = openRouterModelHistory.filter { $0 != trimmed }
+        history.insert(trimmed, at: 0)
+        if history.count > Self.maxModelHistory {
+            history = Array(history.prefix(Self.maxModelHistory))
+        }
+        openRouterModelHistory = history
+    }
+
+    func removeOpenRouterModelFromHistory(_ slug: String) {
+        openRouterModelHistory.removeAll { $0 == slug }
+    }
+
+    func clearOpenRouterModelHistory() {
+        openRouterModelHistory = []
+    }
+
+    // MARK: - Per-model capability resolution
+
+    /// Whether the model accepts image input. Per-provider for most; per-model
+    /// (from the catalog) for OpenRouter. Unknown OpenRouter slugs are treated
+    /// optimistically as vision-capable (most flagship models are).
+    func modelSupportsVision(provider: ProviderID, model: String) -> Bool {
+        if provider == .openrouter {
+            return openRouterModelInfo(for: model)?.supportsVision ?? true
+        }
+        return provider.supportsVision
+    }
+
+    /// Whether the model supports function tools (web search). Per-model for
+    /// OpenRouter; the dedicated providers all support tools.
+    func modelSupportsTools(provider: ProviderID, model: String) -> Bool {
+        if provider == .openrouter {
+            return openRouterModelInfo(for: model)?.supportsTools ?? true
+        }
+        return true
+    }
+
+    /// Whether the reasoning selector has any effect. Catalog-driven for
+    /// OpenRouter, heuristic for the dedicated providers.
+    func modelSupportsReasoningControl(provider: ProviderID, model: String) -> Bool {
+        if provider == .openrouter {
+            return openRouterModelInfo(for: model)?.supportsReasoning ?? false
+        }
+        return ModelCapabilities.supportsReasoningControl(provider: provider, model: model)
     }
 }
 
@@ -641,6 +770,7 @@ enum ProviderRegistry {
         case .mistral: return OpenAICompatibleProvider.mistral
         case .deepseek: return OpenAICompatibleProvider.deepSeek
         case .gemini: return GeminiProvider()
+        case .openrouter: return OpenAICompatibleProvider.openRouter
         }
     }
 }

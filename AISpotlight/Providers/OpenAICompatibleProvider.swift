@@ -19,6 +19,21 @@ struct OpenAICompatibleProvider: LLMProvider {
         providerID: .deepseek,
         baseURL: URL(string: "https://api.deepseek.com/v1")!
     )
+    static let openRouter = OpenAICompatibleProvider(
+        providerID: .openrouter,
+        baseURL: URL(string: "https://openrouter.ai/api/v1")!
+    )
+
+    /// Builds a request with the Bearer key and any provider-specific headers.
+    /// OpenRouter gets an `X-Title` attribution header for its app rankings.
+    private func makeRequest(path: String, apiKey: String) -> URLRequest {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if providerID == .openrouter {
+            request.setValue("AISpotlight", forHTTPHeaderField: "X-Title")
+        }
+        return request
+    }
 
     // MARK: - Chat
 
@@ -41,10 +56,9 @@ struct OpenAICompatibleProvider: LLMProvider {
                 apiKey: apiKey
             )
         }
-        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        var request = makeRequest(path: "chat/completions", apiKey: apiKey)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
         var apiMessages: [[String: Any]] = []
         if let systemPrompt, !systemPrompt.isEmpty {
@@ -108,6 +122,14 @@ struct OpenAICompatibleProvider: LLMProvider {
                 ]
             }
         }
+        // OpenRouter accepts a reasoning-effort knob directly on chat/completions
+        // (Mistral/DeepSeek do not). Only sent for models the catalog says
+        // support it, so it never reaches a model that would reject it.
+        if providerID == .openrouter,
+           options.reasoning != .auto,
+           options.modelSupportsReasoning {
+            body["reasoning"] = ["effort": options.reasoning == .fast ? "low" : "high"]
+        }
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         } catch {
@@ -122,8 +144,16 @@ struct OpenAICompatibleProvider: LLMProvider {
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
-                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let choices = json["choices"] as? [[String: Any]],
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                        // OpenRouter (and some gateways) can surface a mid-stream
+                        // error inside a data frame instead of a non-2xx status.
+                        if let error = json["error"] as? [String: Any],
+                           let message = error["message"] as? String {
+                            throw ProviderError.http(status: (error["code"] as? Int) ?? 200, message: message)
+                        }
+
+                        guard let choices = json["choices"] as? [[String: Any]],
                               let choice = choices.first else { continue }
 
                         if let delta = choice["delta"] as? [String: Any] {
@@ -309,8 +339,7 @@ struct OpenAICompatibleProvider: LLMProvider {
     // MARK: - Models
 
     func fetchModels(apiKey: String) async throws -> [String] {
-        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let request = makeRequest(path: "models", apiKey: apiKey)
 
         let data = try await HTTPClient.json(request)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -342,5 +371,56 @@ struct OpenAICompatibleProvider: LLMProvider {
             "babbage", "codestral-embed"
         ]
         return !excluded.contains { lower.contains($0) }
+    }
+
+    // MARK: - Model catalog (OpenRouter)
+
+    /// Fetches the full model catalog with per-model capabilities, parsed from
+    /// OpenRouter's richer `/models` payload (`architecture.input_modalities`,
+    /// `supported_parameters`). Unfiltered on purpose: the catalog is used to
+    /// validate whatever slug the user types, so it must accept every model
+    /// OpenRouter serves. The key is optional (the endpoint is public).
+    func fetchModelCatalog(apiKey: String?) async throws -> [ModelInfo] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
+        if let apiKey { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        if providerID == .openrouter {
+            request.setValue("AISpotlight", forHTTPHeaderField: "X-Title")
+        }
+
+        let data = try await HTTPClient.json(request)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = json["data"] as? [[String: Any]] else {
+            throw ProviderError.decoding("unexpected /models payload")
+        }
+
+        var catalog: [ModelInfo] = []
+        for item in items {
+            guard let id = item["id"] as? String else { continue }
+
+            let inputModalities = (item["architecture"] as? [String: Any])?["input_modalities"] as? [String] ?? []
+            let params = item["supported_parameters"] as? [String] ?? []
+            catalog.append(ModelInfo(
+                id: id,
+                supportsVision: inputModalities.contains("image"),
+                supportsTools: params.contains("tools"),
+                supportsReasoning: params.contains("reasoning"),
+                supportedParameters: params
+            ))
+        }
+        return catalog
+    }
+
+    // MARK: - Key validation
+
+    /// Verifies the API key with a cheap authenticated call. OpenRouter's
+    /// `/models` is public, so a key check there would pass even with a bad key;
+    /// `/api/v1/key` requires a valid key and returns its limits/usage.
+    func validateKey(apiKey: String) async throws {
+        if providerID == .openrouter {
+            let request = makeRequest(path: "key", apiKey: apiKey)
+            _ = try await HTTPClient.json(request)
+        } else {
+            _ = try await fetchModels(apiKey: apiKey)
+        }
     }
 }

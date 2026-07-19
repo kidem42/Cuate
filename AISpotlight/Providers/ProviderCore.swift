@@ -8,6 +8,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case gemini
     case mistral
     case deepseek
+    case openrouter
 
     var id: String { rawValue }
 
@@ -18,10 +19,18 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .gemini: return "Google Gemini"
         case .mistral: return "Mistral"
         case .deepseek: return "DeepSeek"
+        case .openrouter: return "OpenRouter"
         }
     }
 
-    /// Whether the provider's chat API accepts image content blocks.
+    /// Whether the user types a model slug freely (OpenRouter aggregates 300+
+    /// models from many vendors) instead of picking from a fetched dropdown.
+    var usesManualModelEntry: Bool {
+        self == .openrouter
+    }
+
+    /// Coarse per-provider vision default. For OpenRouter, vision is decided
+    /// per-model from the `/models` catalog (see `ModelInfo`), not here.
     var supportsVision: Bool {
         switch self {
         case .deepseek: return false
@@ -37,6 +46,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .gemini: return "G"
         case .mistral: return "M"
         case .deepseek: return "DS"
+        case .openrouter: return "OR"
         }
     }
 
@@ -48,6 +58,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .gemini: return 0x4285F4    // Google blue
         case .mistral: return 0xFA520F   // Mistral orange
         case .deepseek: return 0x4D6BFE  // DeepSeek blue
+        case .openrouter: return 0x6467F2 // OpenRouter indigo
         }
     }
 
@@ -59,6 +70,16 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .gemini: return URL(string: "https://aistudio.google.com/apikey")!
         case .mistral: return URL(string: "https://console.mistral.ai/api-keys")!
         case .deepseek: return URL(string: "https://platform.deepseek.com/api_keys")!
+        case .openrouter: return URL(string: "https://openrouter.ai/keys")!
+        }
+    }
+
+    /// Catalog page where the user browses model slugs to paste into the field
+    /// (OpenRouter only — the others use a fetched dropdown).
+    var modelCatalogURL: URL? {
+        switch self {
+        case .openrouter: return URL(string: "https://openrouter.ai/models")!
+        default: return nil
         }
     }
 
@@ -81,8 +102,30 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
             return ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"]
         case .deepseek:
             return ["deepseek-chat", "deepseek-reasoner"]
+        case .openrouter:
+            // OpenRouter's model set is user-typed (see `usesManualModelEntry`),
+            // so there is no auto-selected default from a fetched list.
+            return []
         }
     }
+}
+
+// MARK: - Model catalog metadata
+
+/// Per-model capabilities, parsed from a provider's model catalog. Used for
+/// aggregators (OpenRouter) where capabilities vary model-to-model and cannot
+/// be inferred from the `ProviderID` alone.
+///
+/// `supportedParameters` keeps the provider's raw tunable-parameter list (e.g.
+/// "temperature", "top_p", "reasoning", "tools") so a future capability-aware
+/// "advanced parameters" UI can be built from the cache without re-fetching.
+/// The three booleans are the subset the app acts on today.
+struct ModelInfo: Codable, Equatable {
+    let id: String
+    var supportsVision: Bool
+    var supportsTools: Bool
+    var supportsReasoning: Bool
+    var supportedParameters: [String] = []
 }
 
 /// Providers that can transcribe audio.
@@ -218,6 +261,10 @@ struct ChatRequestOptions {
     var maxTokens: Int = 8192
     var reasoning: ReasoningMode = .auto
     var tools: [ToolSpec] = []
+    /// Whether the selected model honors a reasoning-effort control. Resolved
+    /// by the caller (on the main actor, where the model catalog lives) so the
+    /// provider layer never has to reach into app state.
+    var modelSupportsReasoning: Bool = false
 }
 
 // MARK: - Protocols
@@ -236,12 +283,26 @@ protocol LLMProvider {
 
     /// Fetches the list of available chat model identifiers.
     func fetchModels(apiKey: String) async throws -> [String]
+
+    /// Verifies an API key with a cheap authenticated call, throwing on failure.
+    func validateKey(apiKey: String) async throws
+}
+
+extension LLMProvider {
+    /// Default: a valid key can list models. Providers whose `/models` is public
+    /// (OpenRouter) override this with an endpoint that actually requires a key.
+    func validateKey(apiKey: String) async throws {
+        _ = try await fetchModels(apiKey: apiKey)
+    }
 }
 
 // MARK: - Model capabilities
 
 enum ModelCapabilities {
     /// Whether the reasoning selector has any effect for this provider+model.
+    /// For OpenRouter the answer comes from the fetched model catalog, not from
+    /// the slug, so callers there consult `AppSettings.openRouterModelInfo`
+    /// instead of this string-based heuristic (which returns false).
     static func supportsReasoningControl(provider: ProviderID, model: String) -> Bool {
         let m = model.lowercased()
         switch provider {
@@ -253,7 +314,7 @@ enum ModelCapabilities {
                 || m.contains("fable") || m.contains("mythos")
         case .gemini:
             return m.contains("2.5") || m.contains("gemini-3")
-        case .mistral, .deepseek:
+        case .mistral, .deepseek, .openrouter:
             return false
         }
     }
