@@ -11,14 +11,12 @@ final class AppState: ObservableObject {
     @Published var pendingInputText: String?
 
     func setScreenshot(data: Data) {
-        let base64 = data.base64EncodedString()
+        // File-backed (like every other attach path) so screenshots never bloat
+        // the chat store with inline base64 — the store keeps only a reference.
         let timestamp = Int(Date().timeIntervalSince1970)
-        let attachment = ChatAttachment(
-            filename: "screenshot-\(timestamp).png",
-            mimeType: "image/png",
-            base64: base64
+        pendingAttachment = ChatAttachment.fileBacked(
+            data: data, mimeType: "image/png", filename: "screenshot-\(timestamp).png"
         )
-        pendingAttachment = attachment
     }
 
     func clearPendingAttachment() {

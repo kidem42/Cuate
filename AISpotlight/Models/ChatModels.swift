@@ -1,17 +1,21 @@
 import Foundation
 import SwiftUI
+import AppKit
 import Combine
 import CryptoKit
+import UniformTypeIdentifiers
 
 // MARK: - ChatAttachment Model
-struct ChatAttachment: Identifiable, Codable {
+nonisolated struct ChatAttachment: Identifiable, Codable {
     let id: UUID
     let filename: String
     let mimeType: String
     /// Inline payload. Empty when the attachment lives as a file on disk
     /// (`fileURLString`) — large results would bloat chat.json otherwise.
     let base64: String
-    /// Absolute path of a file-backed payload (Application Support). The
+    /// Path of a file-backed payload. New rows store it RELATIVE to the
+    /// Application Support base directory (survives a container move/rename);
+    /// legacy rows hold absolute paths — `resolveURL` accepts both. The
     /// optional decodes as nil for chats saved by older versions.
     var fileURLString: String?
 
@@ -23,8 +27,16 @@ struct ChatAttachment: Identifiable, Codable {
         self.fileURLString = fileURLString
     }
 
+    /// Resolves a stored payload path: absolute (legacy rows) is used as-is,
+    /// relative (the norm now) resolves against Application Support.
+    static func resolveURL(_ path: String) -> URL {
+        path.hasPrefix("/")
+            ? URL(fileURLWithPath: path)
+            : ChatStore.baseDirectory.appendingPathComponent(path)
+    }
+
     var fileURL: URL? {
-        fileURLString.map { URL(fileURLWithPath: $0) }
+        fileURLString.map { Self.resolveURL($0) }
     }
 
     var data: Data? {
@@ -38,10 +50,43 @@ struct ChatAttachment: Identifiable, Codable {
         if !base64.isEmpty { return base64 }
         return data?.base64EncodedString() ?? ""
     }
+
+    /// Persists the payload as a FILE under Application Support (`images/`) and
+    /// returns a file-backed attachment (`base64` empty). Keeping image bytes
+    /// out of the chat store is what stops it bloating — every UI entry point
+    /// (paste, file dialog, screenshot capture) must route through here. Falls
+    /// back to inline base64 only if the write fails, so an attachment is never
+    /// silently dropped.
+    static func fileBacked(data: Data, mimeType: String, filename: String) -> ChatAttachment {
+        let id = UUID()
+        let ext = fileExtension(mimeType: mimeType, filename: filename)
+        // Stored relative to Application Support (see fileURLString docs).
+        let relativePath = "images/\(id.uuidString).\(ext)"
+        let fileURL = ChatStore.baseDirectory.appendingPathComponent(relativePath)
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try data.write(to: fileURL, options: .atomic)
+            return ChatAttachment(filename: filename, mimeType: mimeType, base64: "", id: id, fileURLString: relativePath)
+        } catch {
+            return ChatAttachment(filename: filename, mimeType: mimeType, base64: data.base64EncodedString(), id: id)
+        }
+    }
+
+    /// Extension for a written attachment: the source filename's extension,
+    /// else one derived from the MIME type, else "bin". (Also used by the
+    /// inline-media externalization migration in ChatPersistence.)
+    static func fileExtension(mimeType: String, filename: String) -> String {
+        let nameExt = (filename as NSString).pathExtension
+        if !nameExt.isEmpty { return nameExt.lowercased() }
+        if let ext = UTType(mimeType: mimeType)?.preferredFilenameExtension { return ext }
+        return "bin"
+    }
 }
 
 // MARK: - ChatMessage Model
-struct ChatMessage: Identifiable, Codable {
+nonisolated struct ChatMessage: Identifiable, Codable {
     let id: UUID
     var text: String
     let isUser: Bool
@@ -66,6 +111,18 @@ struct ChatMessage: Identifiable, Codable {
         self.attachments = attachments
     }
     
+    /// Reconstructs a message with explicit identity and timestamp — used by
+    /// persistence (SwiftData rows) and the legacy-JSON migration.
+    init(id: UUID, text: String, isUser: Bool, timestamp: Date, messageType: MessageType, audioURL: URL?, attachments: [ChatAttachment]) {
+        self.id = id
+        self.text = text
+        self.isUser = isUser
+        self.timestamp = timestamp
+        self.messageType = messageType
+        self.audioURL = audioURL
+        self.attachments = attachments
+    }
+
     // Custom coding keys to handle URL encoding
     enum CodingKeys: String, CodingKey {
         case id, text, isUser, timestamp, messageType, audioURLString, attachments
@@ -109,7 +166,7 @@ class ChatStore: ObservableObject {
 
     /// Identifies which persisted conversation the store is showing: the
     /// shared chat, or a preset's own isolated chat (Settings → Prompts).
-    enum ConversationID: Equatable {
+    nonisolated enum ConversationID: Equatable {
         case general
         case preset(String)
 
@@ -119,6 +176,16 @@ class ChatStore: ObservableObject {
                 return ChatStore.baseDirectory.appendingPathComponent("chat.json")
             case .preset(let name):
                 return ChatStore.baseDirectory.appendingPathComponent("chat-\(Self.fileHash(name)).json")
+            }
+        }
+
+        /// Stable storage identity — matches the old filename stem, so the
+        /// migration maps a file to its conversation without recovering the
+        /// preset name from its hash.
+        var storageKey: String {
+            switch self {
+            case .general: return "general"
+            case .preset(let name): return Self.fileHash(name)
             }
         }
 
@@ -145,6 +212,11 @@ class ChatStore: ObservableObject {
 
     /// Which persisted conversation is currently loaded (main-thread confined).
     private(set) var conversation: ConversationID
+    /// Absolute index of `messages.first` within the stored conversation.
+    /// `messages` is a contiguous SUFFIX of the conversation — older rows
+    /// stay in the store and are paged in by `loadOlderPage`. 0 = everything
+    /// is loaded. Main-thread confined.
+    private(set) var windowStart = 0
     /// Invalidates async load completions that finish after a later switch.
     private var loadGeneration = 0
     /// Replies delivered to the current conversation while its load is still
@@ -152,11 +224,6 @@ class ChatStore: ObservableObject {
     private var pendingDeliveries: [(message: ChatMessage, target: ConversationID)] = []
 
     private var saveWorkItem: DispatchWorkItem?
-
-    /// Serial queue for ALL chat-file disk I/O. Ordering matters: a switch
-    /// flushes conversation A and then loads conversation B; a preset delete
-    /// must run after the flush that may have just recreated the file.
-    private static let diskQueue = DispatchQueue(label: "AISpotlight.ChatStore.disk", qos: .utility)
 
     init() {
         // Resolve the initial conversation straight from UserDefaults: the
@@ -171,37 +238,75 @@ class ChatStore: ObservableObject {
         } else {
             conversation = .general
         }
+        // Enqueued in order on ChatPersistence's serial queue: migrate any
+        // legacy JSON first, then externalize inline base64 payloads to files,
+        // so the initial load sees the imported, slimmed-down data; then
+        // sweep orphaned media against the now-populated store.
+        ChatPersistence.migrateFromJSONIfNeeded()
+        ChatPersistence.externalizeInlineMediaIfNeeded()
         loadConversation(conversation)
-        Self.startupMediaSweep()
+        ChatPersistence.sweepOrphanedMedia()
+        // Quit-time flush: without it, ⌘Q within the debounce window (or
+        // mid-stream, where the max-latency cap still leaves a gap) drops the
+        // last mutations. willTerminate is posted on the main thread; queue:
+        // nil delivers synchronously there, and the drain blocks termination
+        // until the persistence queue has actually written everything out.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.flushPendingSave()
+            ChatPersistence.waitUntilDrained()
+        }
     }
 
     // MARK: Context window accessors
 
-    /// Messages that should be sent verbatim (the summarized prefix is skipped).
+    /// Total number of messages in the conversation (loaded window + older
+    /// rows still in the store).
+    var totalMessageCount: Int { windowStart + messages.count }
+
+    /// Whether older messages exist in the store beyond the loaded window.
+    var hasOlderMessages: Bool { windowStart > 0 }
+
+    /// Messages that should be sent verbatim (the summarized prefix is
+    /// skipped). `summaryCoversCount` is an ABSOLUTE index; the loaded window
+    /// always extends at least back to it (guaranteed by the windowed load),
+    /// so the verbatim tail is always in memory.
     var activeContextMessages: [ChatMessage] {
-        let start = min(summaryCoversCount, messages.count)
+        let start = min(max(0, summaryCoversCount - windowStart), messages.count)
         return Array(messages[start...])
     }
 
-    func setSummary(_ summary: String, coversCount: Int) {
+    /// Applies a freshly generated rolling summary — but only to the
+    /// conversation it was generated FOR. Summarization is an LLM call that
+    /// takes seconds; if the user switched conversations meanwhile, applying
+    /// it to the store would stamp chat A's summary onto chat B. In that case
+    /// it is written straight to the dormant conversation's rows instead.
+    func setSummary(_ summary: String, coversCount: Int, for target: ConversationID) {
         DispatchQueue.main.async {
+            guard self.conversation == target else {
+                ChatPersistence.updateSummary(summary, coversCount: coversCount, forKey: target.storageKey)
+                return
+            }
             self.conversationSummary = summary
-            self.summaryCoversCount = min(coversCount, self.messages.count)
+            self.summaryCoversCount = min(coversCount, self.totalMessageCount)
             self.scheduleSave()
         }
     }
 
     // MARK: Persistence
 
-    nonisolated private struct PersistedChat: Codable {
-        var messages: [ChatMessage]
-        var conversationSummary: String?
-        var summaryCoversCount: Int
-    }
-
-    static var baseDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("AISpotlight", isDirectory: true)
+    nonisolated static var baseDirectory: URL {
+        let base: URL
+        if let override = ProcessInfo.processInfo.environment["AISPOTLIGHT_DATA_DIR"], !override.isEmpty {
+            // Test hook: e2e harnesses point the whole persistence layer at a
+            // sandbox directory (HOME overrides do NOT redirect
+            // applicationSupportDirectory — it resolves via the passwd entry).
+            base = URL(fileURLWithPath: override, isDirectory: true)
+        } else {
+            base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("AISpotlight", isDirectory: true)
+        }
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }
@@ -214,7 +319,16 @@ class ChatStore: ObservableObject {
     /// background and is handed back via `deliver(_:to:)`. Main thread only.
     func switchConversation(to id: ConversationID) {
         guard id != conversation else { return }
-        flushPendingSave() // commit the outgoing conversation to its own file
+        if isHistoryLoaded {
+            flushPendingSave() // commit the outgoing conversation to its own file
+        } else if !messages.isEmpty {
+            // The outgoing conversation's history never finished loading: a
+            // full sync would reconcile its store down to these few early
+            // messages and wipe the history. Merge them row-by-row instead.
+            for message in messages {
+                Self.mergeMessage(message, into: conversation)
+            }
+        }
         // Deliveries the outgoing conversation never got to apply (its load
         // was still in flight) go straight to its file instead.
         for delivery in pendingDeliveries {
@@ -227,11 +341,12 @@ class ChatStore: ObservableObject {
         // until the new history has actually loaded.
         isHistoryLoaded = false
         messages = []
+        windowStart = 0
         conversationSummary = nil
         summaryCoversCount = 0
         statusText = nil
         isLoading = false
-        Diagnostics.log("store", "switch → \(id.fileURL.lastPathComponent)")
+        Diagnostics.log("store", "switch → \(id.storageKey)")
         loadConversation(id)
     }
 
@@ -267,230 +382,132 @@ class ChatStore: ObservableObject {
     /// message with the same id, or append it. Runs entirely within one
     /// disk-queue block so no flush/load can interleave.
     nonisolated private static func mergeMessage(_ message: ChatMessage, into target: ConversationID) {
-        let url = target.fileURL
-        diskQueue.async {
-            var persisted: PersistedChat
-            if let data = try? Data(contentsOf: url),
-               let decoded = try? JSONDecoder().decode(PersistedChat.self, from: data) {
-                persisted = decoded
-            } else {
-                persisted = PersistedChat(messages: [], conversationSummary: nil, summaryCoversCount: 0)
-            }
-            if let index = persisted.messages.firstIndex(where: { $0.id == message.id }) {
-                persisted.messages[index] = message
-            } else {
-                persisted.messages.append(message)
-            }
-            if let data = try? JSONEncoder().encode(persisted) {
-                try? data.write(to: url, options: .atomic)
-                Diagnostics.log("store", "merge reply → \(url.lastPathComponent) messages=\(persisted.messages.count)")
-            }
-        }
+        ChatPersistence.merge(message, intoKey: target.storageKey)
     }
 
     /// Deletes a preset's dormant chat file and its media without loading it
     /// into the UI (used when a custom preset is deleted).
     nonisolated static func deleteConversationData(presetNamed name: String) {
-        let url = ConversationID.preset(name).fileURL
-        diskQueue.async {
-            if let data = try? Data(contentsOf: url),
-               let persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) {
-                for message in persisted.messages {
-                    if let audioURL = message.audioURL {
-                        try? FileManager.default.removeItem(at: audioURL)
-                    }
-                    for attachment in message.attachments {
-                        if let fileURL = attachment.fileURL {
-                            try? FileManager.default.removeItem(at: fileURL)
-                        }
-                    }
-                }
-            }
-            try? FileManager.default.removeItem(at: url)
-            Diagnostics.log("store", "deleted conversation \(url.lastPathComponent)")
-        }
+        ChatPersistence.deleteConversation(key: ConversationID.preset(name).storageKey)
     }
 
-    /// Loads a persisted conversation off the main thread: attachments make
-    /// the JSON multi-megabyte (images → base64), and decoding it synchronously
-    /// in init stalled the app at launch. Also applies media retention.
-    /// Runs on the serial disk queue so it is ordered after the flush of the
+    /// Loads a persisted conversation off the main thread (ChatPersistence maps
+    /// SwiftData rows to value types there) and applies media retention.
+    /// Ordered on the persistence serial queue after the flush of the
     /// previously active conversation (relevant for rapid A→B→A switches).
     private func loadConversation(_ id: ConversationID) {
-        let url = id.fileURL
         let generation = loadGeneration
-        Self.diskQueue.async { [weak self] in
-            let start = DispatchTime.now()
-            var loaded: PersistedChat?
-            var prunedMedia = false
-            if let data = try? Data(contentsOf: url),
-               var persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) {
-                // Media retention: attachments and recordings older than the
-                // window are dropped — files deleted, references stripped,
-                // the message text stays (image-only messages get a stub).
-                let cutoff = Date().addingTimeInterval(-Double(Config.mediaRetentionDays) * 86400)
-                persisted.messages = persisted.messages.map { message in
-                    var message = message
-                    if message.timestamp < cutoff {
-                        if let audioURL = message.audioURL {
-                            try? FileManager.default.removeItem(at: audioURL)
-                            message.audioURL = nil
-                            prunedMedia = true
-                        }
-                        if !message.attachments.isEmpty {
-                            for attachment in message.attachments {
-                                if let fileURL = attachment.fileURL {
-                                    try? FileManager.default.removeItem(at: fileURL)
-                                }
-                            }
-                            message.attachments = []
-                            prunedMedia = true
-                            if message.text.isEmpty {
-                                message.text = L("chat.mediaExpired")
-                            }
-                        }
-                    }
-                    // Drop dangling voice-file references (recordings are session-scoped).
-                    if let audioURL = message.audioURL, !FileManager.default.fileExists(atPath: audioURL.path) {
-                        message.audioURL = nil
-                    }
-                    return message
-                }
-                let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
-                Diagnostics.log("store", "load \(url.lastPathComponent) bytes=\(data.count) messages=\(persisted.messages.count) prunedMedia=\(prunedMedia) ms=\(ms)")
-                loaded = persisted
-            }
+        ChatPersistence.load(key: id.storageKey, mediaExpiredText: L("chat.mediaExpired")) { [weak self] loaded in
             DispatchQueue.main.async {
                 guard let self else { return }
                 // A later switchConversation invalidated this load — drop it.
-                // (Media pruned above is expired in any conversation; harmless.)
                 guard self.loadGeneration == generation else { return }
-                if let loaded {
+                // Messages sent before the load settled: they must be
+                // persisted below — their own scheduleSave was suppressed
+                // (saving a load-less snapshot would have wiped the history).
+                let hadEarlyMessages = !self.messages.isEmpty
+                if loaded.existed {
                     // Anything sent before the load finished stays after the history.
                     self.messages = loaded.messages + self.messages
-                    self.conversationSummary = loaded.conversationSummary
-                    self.summaryCoversCount = min(loaded.summaryCoversCount, loaded.messages.count)
-                    if prunedMedia {
-                        self.scheduleSave() // persist the stripped references
-                    }
+                    self.windowStart = loaded.windowStart
+                    self.conversationSummary = loaded.summary
+                    self.summaryCoversCount = min(loaded.summaryCoversCount, self.totalMessageCount)
                 }
                 // Replies that finished for this conversation while the load
                 // was in flight (all queued entries target it by construction
-                // — switchConversation drains foreign ones to disk).
-                if !self.pendingDeliveries.isEmpty {
-                    for delivery in self.pendingDeliveries {
-                        self.upsert(delivery.message)
-                    }
-                    self.pendingDeliveries = []
+                // — switchConversation drains foreign ones to the store).
+                let hadDeliveries = !self.pendingDeliveries.isEmpty
+                for delivery in self.pendingDeliveries {
+                    self.upsert(delivery.message)
+                }
+                self.pendingDeliveries = []
+                // BEFORE scheduling saves — scheduleSave is gated on it.
+                self.isHistoryLoaded = true
+                if hadEarlyMessages || hadDeliveries || loaded.prunedMedia {
                     self.scheduleSave()
                 }
-                self.isHistoryLoaded = true
             }
         }
     }
 
-    /// Startup-only orphan sweep across ALL persisted conversations (the
-    /// shared chat plus every isolated preset chat, dormant ones included) —
-    /// sweeping against a single conversation's references would delete the
-    /// other chats' media. Runs on the serial disk queue, so it is ordered
-    /// after the initial load enqueued by init.
-    nonisolated private static func startupMediaSweep() {
-        diskQueue.async {
-            var allMessages: [ChatMessage] = []
-            let files = (try? FileManager.default.contentsOfDirectory(at: baseDirectory, includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.pathExtension == "json"
-                && (file.lastPathComponent == "chat.json" || file.lastPathComponent.hasPrefix("chat-")) {
-                if let data = try? Data(contentsOf: file),
-                   let persisted = try? JSONDecoder().decode(PersistedChat.self, from: data) {
-                    allMessages += persisted.messages
+    /// Pages one more chunk of older messages in from the store and prepends
+    /// it to the loaded window (main thread only). `completion` receives how
+    /// many messages were added (0 when nothing older exists or the
+    /// conversation switched while the fetch was in flight).
+    func loadOlderPage(_ pageSize: Int, completion: @escaping (Int) -> Void) {
+        guard windowStart > 0 else { completion(0); return }
+        let generation = loadGeneration
+        ChatPersistence.loadOlderMessages(
+            key: conversation.storageKey, before: windowStart, limit: pageSize
+        ) { [weak self] older in
+            DispatchQueue.main.async {
+                guard let self, self.loadGeneration == generation else { completion(0); return }
+                guard !older.isEmpty else {
+                    // The store disagrees about older rows — stop asking.
+                    self.windowStart = 0
+                    completion(0)
+                    return
                 }
+                self.messages.insert(contentsOf: older, at: 0)
+                self.windowStart = max(0, self.windowStart - older.count)
+                completion(older.count)
             }
-            sweepOrphanedMedia(referencedBy: allMessages)
         }
     }
 
-    /// Deletes media files no message references anymore. Covers crash
-    /// windows (a result file written, chat.json's debounced save never
-    /// landed) and recordings that never became a message. A 1-hour age
-    /// grace protects files of operations racing this startup sweep.
-    nonisolated private static func sweepOrphanedMedia(referencedBy messages: [ChatMessage]) {
-        var referenced = Set<String>()
-        for message in messages {
-            if let audioURL = message.audioURL { referenced.insert(audioURL.path) }
-            for attachment in message.attachments {
-                if let fileURL = attachment.fileURL { referenced.insert(fileURL.path) }
-            }
-        }
+    /// Debounce interval for persists.
+    private static let saveDebounce: TimeInterval = 1.0
+    /// The debounce coalesces bursts, but a steady mutation stream (streamed
+    /// reply flushes every ~120 ms) re-schedules forever — nothing would hit
+    /// disk for the whole answer, the user's message included. When a save
+    /// has been pending longer than this, it fires even mid-burst.
+    private static let saveMaxLatency: TimeInterval = 5.0
+    /// When the oldest not-yet-persisted mutation was scheduled.
+    private var oldestPendingSave: Date?
 
-        let base = baseDirectory
-        let gracePeriod: TimeInterval = 3600
-        var removed = 0
-        for subdir in ["Recordings", "images"] {
-            let dir = base.appendingPathComponent(subdir, isDirectory: true)
-            let files = (try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
-            )) ?? []
-            for file in files where !referenced.contains(file.path) {
-                let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate ?? .distantPast
-                if Date().timeIntervalSince(modified) > gracePeriod {
-                    try? FileManager.default.removeItem(at: file)
-                    removed += 1
-                }
-            }
-        }
-        if removed > 0 {
-            Diagnostics.log("store", "sweep removed \(removed) orphaned media file(s)")
-        }
-    }
-
-    /// Debounced write of the conversation to Application Support.
-    /// The snapshot (cheap copy-on-write) AND its target URL are captured at
-    /// schedule time — every mutation re-schedules, so the pending snapshot
-    /// is always the latest state, and a conversation switch can never leak
-    /// the old chat's messages into the new chat's file. Encoding + disk I/O
-    /// run on the background disk queue: attachments make the JSON
-    /// multi-megabyte (image data → base64), and encoding it on the main
-    /// thread froze the UI for noticeable stretches. Main thread only.
+    /// Debounced persist of the current conversation. The snapshot (cheap
+    /// copy-on-write) AND its conversation key are captured at schedule time —
+    /// every mutation re-schedules, so the pending snapshot is always the
+    /// latest state, and a conversation switch can never leak the old chat's
+    /// messages into the new chat's store. The row reconcile + write run on the
+    /// persistence queue (SwiftData), off the main thread. Main thread only.
     func scheduleSave() {
+        // Never persist before the history load settles: the snapshot would
+        // hold only the post-switch messages, and sync() would reconcile the
+        // stored conversation down to it — wiping the history on disk. The
+        // load completion re-schedules on behalf of anything suppressed here.
+        guard isHistoryLoaded else { return }
         saveWorkItem?.cancel()
-        let persisted = PersistedChat(
-            messages: messages,
-            conversationSummary: conversationSummary,
-            summaryCoversCount: summaryCoversCount
-        )
-        let url = conversation.fileURL
+        let now = Date()
+        let pendingSince = oldestPendingSave ?? now
+        oldestPendingSave = pendingSince
+        // Shrinks as the pending save ages; hits zero at the latency cap.
+        let delay = min(Self.saveDebounce,
+                        max(0, Self.saveMaxLatency - now.timeIntervalSince(pendingSince)))
+        let messagesSnapshot = messages
+        let summarySnapshot = conversationSummary
+        let coversSnapshot = summaryCoversCount
+        let windowSnapshot = windowStart
+        let key = conversation.storageKey
         let item = DispatchWorkItem { [weak self] in
             self?.saveWorkItem = nil
-            Self.write(persisted, to: url)
+            self?.oldestPendingSave = nil
+            ChatPersistence.sync(key: key, messages: messagesSnapshot, summary: summarySnapshot,
+                                 summaryCoversCount: coversSnapshot, windowStart: windowSnapshot)
         }
         saveWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// Commits a pending debounced save immediately (main thread only).
     /// No-op when nothing is pending.
     func flushPendingSave() {
-        guard saveWorkItem != nil else { return }
+        guard saveWorkItem != nil, isHistoryLoaded else { return }
         saveWorkItem?.cancel()
         saveWorkItem = nil
-        let persisted = PersistedChat(
-            messages: messages,
-            conversationSummary: conversationSummary,
-            summaryCoversCount: summaryCoversCount
-        )
-        Self.write(persisted, to: conversation.fileURL)
-    }
-
-    nonisolated private static func write(_ persisted: PersistedChat, to url: URL) {
-        diskQueue.async {
-            let start = DispatchTime.now()
-            if let data = try? JSONEncoder().encode(persisted) {
-                try? data.write(to: url, options: .atomic)
-                let ms = Int(Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e6)
-                Diagnostics.log("store", "save \(url.lastPathComponent) bytes=\(data.count) messages=\(persisted.messages.count) ms=\(ms)")
-            }
-        }
+        oldestPendingSave = nil
+        ChatPersistence.sync(key: conversation.storageKey, messages: messages, summary: conversationSummary,
+                             summaryCoversCount: summaryCoversCount, windowStart: windowStart)
     }
 
     @discardableResult
@@ -517,15 +534,6 @@ class ChatStore: ObservableObject {
         }
     }
 
-    /// Appends a streamed chunk to an existing message (used for live assistant replies).
-    func appendChunk(_ chunk: String, to messageID: UUID) {
-        DispatchQueue.main.async {
-            guard let index = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
-            self.messages[index].text += chunk
-            self.scheduleSave()
-        }
-    }
-
     /// Replaces the text of an existing message.
     func setText(_ text: String, for messageID: UUID) {
         DispatchQueue.main.async {
@@ -539,7 +547,7 @@ class ChatStore: ObservableObject {
     func removeMessage(id messageID: UUID) {
         DispatchQueue.main.async {
             self.messages.removeAll { $0.id == messageID }
-            self.summaryCoversCount = min(self.summaryCoversCount, self.messages.count)
+            self.summaryCoversCount = min(self.summaryCoversCount, self.totalMessageCount)
             self.scheduleSave()
         }
     }
@@ -559,7 +567,15 @@ class ChatStore: ObservableObject {
                     }
                 }
             }
+            // Media referenced by rows BELOW the loaded window never made it
+            // into memory — delete their files store-side. The rows themselves
+            // are reconciled away by the scheduleSave below (windowStart 0 +
+            // empty list = wipe, which is exactly what "new chat" means).
+            if self.windowStart > 0 {
+                ChatPersistence.deleteAllMediaFiles(key: self.conversation.storageKey)
+            }
             self.messages.removeAll()
+            self.windowStart = 0
             self.conversationSummary = nil
             self.summaryCoversCount = 0
             self.scheduleSave()

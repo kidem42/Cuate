@@ -14,5 +14,5 @@ enum Config {
     /// than this is dropped at launch: files deleted, references stripped —
     /// message TEXT stays. Keeps chat.json and Application Support from
     /// growing without bound when the user never clears the chat.
-    static let mediaRetentionDays = 15
+    nonisolated static let mediaRetentionDays = 15
 }

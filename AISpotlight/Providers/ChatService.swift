@@ -49,7 +49,12 @@ enum ChatService {
             maxTokens: settings.maxTokens,
             reasoning: settings.reasoningMode
         )
-        if settings.webSearchEnabled, BraveSearchService.isAvailable {
+        options.modelSupportsReasoning = settings.modelSupportsReasoningControl(provider: providerID, model: model)
+        // Attach the web-search tool only when the model can actually call tools
+        // (OpenRouter hosts models that can't) — otherwise the request errors.
+        if settings.webSearchEnabled,
+           BraveSearchService.isAvailable,
+           settings.modelSupportsTools(provider: providerID, model: model) {
             options.tools = [BraveSearchService.toolSpec]
             // Usage hint appended at request time — the user's editable prompt
             // stays clean; the tool's schema/description travels via the API.
@@ -60,7 +65,12 @@ You have a web_search tool. Use it when the answer depends on current events, li
 """
         }
 
-        let initialMessages = try await buildMessages(from: history, providerID: providerID)
+        let supportsVision = settings.modelSupportsVision(provider: providerID, model: model)
+        let initialMessages = try await buildMessages(
+            from: history,
+            providerID: providerID,
+            supportsVision: supportsVision
+        )
         let provider = ProviderRegistry.provider(for: providerID)
         Diagnostics.log("chat", "turn.start provider=\(providerID.rawValue) model=\(model) history=\(history.count) tools=\(options.tools.count)")
 
@@ -139,12 +149,14 @@ You have a web_search tool. Use it when the answer depends on current events, li
     /// Converts chat history into provider messages.
     ///
     /// Images are attached only for the most recent user message (older turns
-    /// keep a textual note instead) to bound token cost. If the provider does
-    /// not support vision (DeepSeek), the image is run through Mistral OCR and
-    /// injected as text.
+    /// keep a textual note instead) to bound token cost. When the selected
+    /// model does not support vision (DeepSeek, or a text-only OpenRouter
+    /// model), the image is run through Mistral OCR and injected as text.
+    /// `supportsVision` is resolved per-model by the caller.
     private static func buildMessages(
         from history: [ChatMessage],
-        providerID: ProviderID
+        providerID: ProviderID,
+        supportsVision: Bool
     ) async throws -> [LLMMessage] {
         let conversational = history.filter { $0.messageType != .system }
         let lastUserID = conversational.last(where: { $0.isUser })?.id
@@ -157,7 +169,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
 
             if !message.attachments.isEmpty {
                 if message.id == lastUserID {
-                    if providerID.supportsVision {
+                    if supportsVision {
                         images = message.attachments.map {
                             LLMImage(mimeType: $0.mimeType, base64: $0.contentBase64)
                         }
@@ -188,7 +200,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
     // MARK: - Context compression (rolling summary)
 
     /// Character-based token estimate (≈ 4 chars per token).
-    private static func estimatedTokens(_ messages: ArraySlice<ChatMessage>) -> Int {
+    private static func estimatedTokens(_ messages: [ChatMessage]) -> Int {
         messages.reduce(0) { $0 + $1.text.count } / 4
     }
 
@@ -207,15 +219,22 @@ You have a web_search tool. Use it when the answer depends on current events, li
         guard let apiKey = APIKeyStore.key(for: settings.chatProvider),
               let model = settings.selectedModel(for: settings.chatProvider) else { return }
 
-        let start = min(store.summaryCoversCount, store.messages.count)
-        let active = store.messages[start...]
+        // Captured BEFORE the summarization call: it takes seconds, and the
+        // user may switch conversations meanwhile — the result must land in
+        // the conversation it was computed for (see ChatStore.setSummary).
+        let target = store.conversation
+        // Window-aware: activeContextMessages already skips the summarized
+        // prefix, and coversCount is an ABSOLUTE index into the conversation
+        // (the store's window is a suffix — plain messages.count would
+        // undercount and shift the summary boundary onto the wrong turns).
+        let active = store.activeContextMessages
         guard active.count > keepRecentCount + 4,
               estimatedTokens(active) > compressionTokenThreshold else { return }
 
         let toSummarize = active.dropLast(keepRecentCount).filter { $0.messageType != .system }
         guard !toSummarize.isEmpty else { return }
         Diagnostics.log("chat", "compress.start messages=\(toSummarize.count)")
-        let newCoversCount = store.messages.count - keepRecentCount
+        let newCoversCount = store.totalMessageCount - keepRecentCount
 
         var transcript = ""
         if let existing = store.conversationSummary {
@@ -253,6 +272,6 @@ context notes, not prose.
         let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         Diagnostics.log("chat", "compress.done chars=\(trimmed.count) covers=\(newCoversCount)")
-        store.setSummary(trimmed, coversCount: newCoversCount)
+        store.setSummary(trimmed, coversCount: newCoversCount, for: target)
     }
 }
