@@ -336,6 +336,7 @@ struct ImageModelRow: View {
 
     private var badgeColor: Color {
         switch model.tier {
+        case .onDevice: return .mint
         case .budget: return .green
         case .standard: return .blue
         case .quality: return .teal

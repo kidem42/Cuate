@@ -706,20 +706,27 @@ struct SettingsView: View {
 
     private var ocrSection: some View {
         Section {
-            LabeledContent(L("ocr.provider")) {
-                HStack(spacing: 6) {
-                    ProviderLogo(provider: .mistral, size: 14)
-                    Text("Mistral OCR")
+            Picker(L("ocr.provider"), selection: $settings.ocrProvider) {
+                ForEach(OCRProviderID.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
                 }
             }
 
-            TextField(L("ocr.model"), text: $settings.ocrModel, prompt: Text(AppSettings.defaultOCRModel))
-                .textFieldStyle(.roundedBorder)
-
-            if !APIKeyStore.hasKey(for: .mistral) {
-                Text(L("ocr.needKey"))
+            switch settings.ocrProvider {
+            case .apple:
+                Text(L("ocr.apple.note"))
                     .font(.caption)
-                    .foregroundColor(.orange)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .mistral:
+                TextField(L("ocr.model"), text: $settings.ocrModel, prompt: Text(AppSettings.defaultOCRModel))
+                    .textFieldStyle(.roundedBorder)
+
+                if !APIKeyStore.hasKey(for: .mistral) {
+                    Text(L("ocr.needKey"))
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
         } header: {
             Text(L("ocr.header"))

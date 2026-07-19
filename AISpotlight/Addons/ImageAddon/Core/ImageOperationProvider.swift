@@ -11,16 +11,28 @@ enum ImageFunction: String, CaseIterable, Codable {
     case generate
 }
 
-/// Backends that can run image operations. P1 ships fal.ai only; direct
-/// OpenAI/Gemini image providers arrive with generation (P2).
+/// Backends that can run image operations. `apple` is native and on-device
+/// (background removal only); `fal` is the cloud API for everything else.
+/// Declared apple-first so it leads the background-removal picker.
 enum ImageProviderID: String, CaseIterable, Codable, Identifiable {
+    case apple
     case fal
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
+        case .apple: return "Apple"
         case .fal: return "fal.ai"
+        }
+    }
+
+    /// Whether this backend needs an API key in the Keychain. On-device
+    /// providers run without one, so the UI must not gate them behind a key.
+    var requiresKey: Bool {
+        switch self {
+        case .apple: return false
+        case .fal: return true
         }
     }
 }
@@ -29,7 +41,7 @@ enum ImageProviderID: String, CaseIterable, Codable, Identifiable {
 
 /// Fixed model-class badge shown next to each model in pickers (ТЗ §3.1a).
 enum ImageModelTier: String, Codable {
-    case budget, standard, quality, premium, smart, freedom
+    case onDevice, budget, standard, quality, premium, smart, freedom
 
     /// Localized badge label.
     var label: String { IAL("ia.tier.\(rawValue)") }
@@ -145,6 +157,7 @@ protocol ImageOperationProvider {
 enum ImageProviderRegistry {
     static func provider(for id: ImageProviderID) -> ImageOperationProvider {
         switch id {
+        case .apple: return AppleImageProvider.shared
         case .fal: return FalImageProvider.shared
         }
     }

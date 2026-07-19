@@ -125,9 +125,14 @@ final class ImageAddonSettings: ObservableObject {
     // MARK: - Init
 
     private init() {
-        enabled = defaults.bool(forKey: "imageAddon.enabled")
-        upscaleModel = defaults.string(forKey: "imageAddon.upscaleModel") ?? FalImageProvider.recraftCrispID
-        backgroundModel = defaults.string(forKey: "imageAddon.backgroundModel") ?? FalImageProvider.briaRMBGID
+        // Enabled by default: background removal works out of the box on-device
+        // (no key). Existing users who explicitly toggled it keep their choice
+        // (the key is only present once they've flipped the switch).
+        enabled = defaults.object(forKey: "imageAddon.enabled") as? Bool ?? true
+        // Default models are the free on-device ones; cloud models stay
+        // available for anyone who picks them (needs a fal.ai key).
+        upscaleModel = defaults.string(forKey: "imageAddon.upscaleModel") ?? AppleImageProvider.upscaleID
+        backgroundModel = defaults.string(forKey: "imageAddon.backgroundModel") ?? AppleImageProvider.backgroundID
         cleanupModel = defaults.string(forKey: "imageAddon.cleanupModel") ?? FalImageProvider.briaEraserID
         outputFormat = defaults.string(forKey: "imageAddon.outputFormat")
             .flatMap(ImageOutputFormat.init(rawValue:)) ?? .png

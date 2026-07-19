@@ -98,7 +98,12 @@ final class AppSettings: ObservableObject {
 
     // MARK: - OCR (document/image text extraction)
 
-    /// OCR is Mistral-only for now; the model is configurable.
+    /// OCR backend: Apple Vision (on-device, free — default) or Mistral (cloud).
+    @Published var ocrProvider: OCRProviderID {
+        didSet { defaults.set(ocrProvider.rawValue, forKey: "ocrProvider") }
+    }
+
+    /// Mistral OCR model (used only when the Mistral provider is selected).
     @Published var ocrModel: String {
         didSet { defaults.set(ocrModel, forKey: "ocrModel") }
     }
@@ -439,6 +444,17 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         openRouterModelHistory = defaults.stringArray(forKey: "openRouterModelHistory") ?? []
         sttProvider = STTProviderID(rawValue: defaults.string(forKey: "sttProvider") ?? "") ?? .mistral
         sttModels = defaults.dictionary(forKey: "sttModels") as? [String: String] ?? [:]
+        // OCR provider: honor a saved choice. On the first launch of this
+        // version there is no saved value — and OCR used to be Mistral-only, so
+        // a user with a Mistral key was already using Mistral. Keep them on it
+        // (don't silently flip established setups); only genuinely fresh users
+        // (no Mistral key) get the free on-device Apple default.
+        if let storedOCR = defaults.string(forKey: "ocrProvider"),
+           let provider = OCRProviderID(rawValue: storedOCR) {
+            ocrProvider = provider
+        } else {
+            ocrProvider = APIKeyStore.hasKey(for: .mistral) ? .mistral : .apple
+        }
         ocrModel = defaults.string(forKey: "ocrModel") ?? Self.defaultOCRModel
         reasoningMode = ReasoningMode(rawValue: defaults.string(forKey: "reasoningMode") ?? "") ?? .auto
         // 16k default: artifacts (full HTML pages) regularly exceed 8k output

@@ -124,7 +124,12 @@ enum Localization {
         "ocr.provider": [.english: "Provider", .spanish: "Proveedor", .russian: "Провайдер"],
         "ocr.model": [.english: "OCR model", .spanish: "Modelo OCR", .russian: "Модель OCR"],
         "ocr.needKey": [.english: "Add a Mistral API key (in the API Keys tab) to enable OCR.", .spanish: "Añade una clave de Mistral (pestaña Claves API) para activar OCR.", .russian: "Добавьте ключ Mistral (вкладка «Ключи API»), чтобы включить OCR."],
-        "ocr.footer": [.english: "Used by “Extract Text” on screenshots and as a fallback that lets non-vision chat models read images. Uses the Mistral key.", .spanish: "Se usa en “Extraer texto” de capturas y como respaldo para que modelos sin visión lean imágenes. Usa la clave de Mistral.", .russian: "Используется кнопкой «Извлечь текст» на скриншотах и как запасной путь, чтобы модели без зрения могли читать изображения. Использует ключ Mistral."],
+        "ocr.apple.note": [
+            .english: "Runs on-device — free, private, no key, works offline. Recognizes plain text well (screenshots, photos) in many languages including Cyrillic. It does not reconstruct complex layout: tables, columns and Markdown structure come out as flat lines. For documents with layout, switch to Mistral OCR.",
+            .spanish: "Se ejecuta en el dispositivo — gratis, privado, sin clave y sin conexión. Reconoce bien el texto plano (capturas, fotos) en muchos idiomas, incluido el cirílico. No reconstruye el diseño complejo: tablas, columnas y estructura Markdown salen como líneas planas. Para documentos con maquetación, usa Mistral OCR.",
+            .russian: "Работает на устройстве — бесплатно, приватно, без ключа, офлайн. Хорошо распознаёт обычный текст (скриншоты, фото) на многих языках, включая кириллицу. Сложную вёрстку не восстанавливает: таблицы, колонки и Markdown-структура выйдут плоским текстом. Для документов с вёрсткой выберите Mistral OCR."
+        ],
+        "ocr.footer": [.english: "Used by “Extract Text” on screenshots and as a fallback that lets non-vision chat models read images.", .spanish: "Se usa en “Extraer texto” de capturas y como respaldo para que modelos sin visión lean imágenes.", .russian: "Используется кнопкой «Извлечь текст» на скриншотах и как запасной путь, чтобы модели без зрения могли читать изображения."],
         "dictation.header": [.english: "Dictation", .spanish: "Dictado", .russian: "Диктовка"],
         "dictation.enable": [.english: "System-wide dictation", .spanish: "Dictado en todo el sistema", .russian: "Диктовка во всей системе"],
         "dictation.cleanup": [.english: "Clean up fillers & punctuation", .spanish: "Limpiar muletillas y puntuación", .russian: "Убирать слова-паразиты и пунктуацию"],
@@ -240,7 +245,7 @@ enum Localization {
         "panel.noSpeech": [.english: "The recording contained no recognizable speech.", .spanish: "La grabación no contenía voz reconocible.", .russian: "В записи не распознано речи."],
         "panel.transcriptionFailed": [.english: "Transcription failed: %@", .spanish: "Falló la transcripción: %@", .russian: "Ошибка расшифровки: %@"],
         "panel.emptyReply": [.english: "(empty reply)", .spanish: "(respuesta vacía)", .russian: "(пустой ответ)"],
-        "panel.ocrDone": [.english: "Extracted with OCR — structure preserved as Markdown, raw text copied to the clipboard.", .spanish: "Extraído con OCR — estructura conservada como Markdown, texto copiado al portapapeles.", .russian: "Распознано через OCR — структура сохранена в Markdown, текст скопирован в буфер обмена."],
+        "panel.ocrDone": [.english: "Extracted with OCR — text copied to the clipboard.", .spanish: "Extraído con OCR — texto copiado al portapapeles.", .russian: "Распознано через OCR — текст скопирован в буфер обмена."],
         "panel.ocrFailed": [.english: "OCR failed: %@", .spanish: "Falló el OCR: %@", .russian: "Ошибка OCR: %@"],
 
         // MARK: Tooltips

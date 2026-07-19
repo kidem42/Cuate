@@ -20,17 +20,17 @@ enum ImageAddonStrings {
             .russian: "Инструменты изображений (бета)"
         ],
         "ia.general.enable.caption": [
-            .english: "Process attached images with cloud AI models: one-click upscale now, background and object removal next. Requires a fal.ai key — configure in the Images tab.",
-            .spanish: "Procesa las imágenes adjuntas con modelos de IA en la nube: escalado en un clic ahora, y pronto eliminación de fondo y objetos. Requiere una clave de fal.ai — se configura en la pestaña Imágenes.",
-            .russian: "Обработка прикреплённых картинок облачными AI-моделями: апскейл в один клик уже сейчас, удаление фона и объектов — далее. Нужен ключ fal.ai — настраивается во вкладке «Изображения»."
+            .english: "Process attached images in one click. Background removal and basic upscale run on-device — free and private, no key needed. Higher-quality upscale and object removal use cloud AI models (a fal.ai key, set in the Images tab).",
+            .spanish: "Procesa las imágenes adjuntas en un clic. La eliminación de fondo y el escalado básico se ejecutan en el dispositivo — gratis y privados, sin clave. El escalado de mayor calidad y la eliminación de objetos usan modelos de IA en la nube (una clave de fal.ai, en la pestaña Imágenes).",
+            .russian: "Обработка прикреплённых картинок в один клик. Удаление фона и базовый апскейл работают на устройстве — бесплатно и приватно, без ключа. Апскейл выше качеством и удаление объектов — облачные AI-модели (ключ fal.ai во вкладке «Изображения»)."
         ],
 
         // Settings tab intro
         "ia.header": [.english: "Image Tools", .spanish: "Herramientas de imagen", .russian: "Инструменты изображений"],
         "ia.footer": [
-            .english: "Attach an image to the panel (paperclip button or ⌘V) and process it in one click. Operations run through the fal.ai cloud API — one key covers everything; images are sent directly to the provider and never stored elsewhere.",
-            .spanish: "Adjunta una imagen al panel (botón de clip o ⌘V) y procésala en un clic. Las operaciones usan la API en la nube de fal.ai: una sola clave lo cubre todo; las imágenes van directas al proveedor y no se guardan en ningún otro sitio.",
-            .russian: "Прикрепите картинку в панель (кнопка-скрепка или ⌘V) и обработайте её в один клик. Операции идут через облачный API fal.ai — один ключ закрывает всё; изображения отправляются напрямую провайдеру и нигде больше не хранятся."
+            .english: "Attach an image to the panel (paperclip button or ⌘V) and process it in one click. Background removal and basic (Lanczos) upscale run fully on-device — free and private. Higher-quality upscale, object removal, and the cloud background models use the fal.ai API — one key covers them; images are sent directly to the provider and never stored elsewhere.",
+            .spanish: "Adjunta una imagen al panel (botón de clip o ⌘V) y procésala en un clic. La eliminación de fondo y el escalado básico (Lanczos) se ejecutan por completo en el dispositivo — gratis y privados. El escalado de mayor calidad, la eliminación de objetos y los modelos de fondo en la nube usan la API de fal.ai — una clave los cubre; las imágenes van directas al proveedor y no se guardan en ningún otro sitio.",
+            .russian: "Прикрепите картинку в панель (кнопка-скрепка или ⌘V) и обработайте её в один клик. Удаление фона и базовый апскейл (Lanczos) работают полностью на устройстве — бесплатно и приватно. Апскейл выше качеством, удаление объектов и облачные модели фона идут через API fal.ai — один ключ закрывает их; изображения отправляются напрямую провайдеру и нигде больше не хранятся."
         ],
 
         // API key section
@@ -83,6 +83,16 @@ enum ImageAddonStrings {
             .spanish: "Modelo SOTA abierto, casi gratis",
             .russian: "Открытая SOTA-модель, почти бесплатно"
         ],
+        "ia.model.appleBg.caption": [
+            .english: "On-device and free — no key, nothing leaves your Mac. Great for people, pets and clear subjects",
+            .spanish: "En el dispositivo y gratis — sin clave, nada sale de tu Mac. Ideal para personas, mascotas y sujetos nítidos",
+            .russian: "На устройстве и бесплатно — без ключа, ничего не покидает Mac. Отлично для людей, животных и чётких объектов"
+        ],
+        "ia.model.appleUpscale.caption": [
+            .english: "On-device and free. Fast Lanczos resampling — sharper edges, but no AI-invented detail. For photo-quality, pick a cloud model",
+            .spanish: "En el dispositivo y gratis. Reescalado Lanczos rápido — bordes más nítidos, pero sin detalle inventado por IA. Para calidad fotográfica, elige un modelo en la nube",
+            .russian: "На устройстве и бесплатно. Быстрый ресемплинг (Lanczos) — края чётче, но новых деталей не появляется. Для фото-качества выберите облачную модель"
+        ],
         "ia.model.briaEraser.caption": [
             .english: "Careful removal by selection (brush mask)",
             .spanish: "Eliminación cuidadosa por selección (máscara de pincel)",
@@ -95,12 +105,14 @@ enum ImageAddonStrings {
         ],
 
         // Model tier badges (fixed enum, ТЗ §3.1a)
+        "ia.tier.onDevice": [.english: "On-device", .spanish: "En el dispositivo", .russian: "На устройстве"],
         "ia.tier.budget": [.english: "Budget", .spanish: "Económico", .russian: "Бюджет"],
         "ia.tier.standard": [.english: "Standard", .spanish: "Estándar", .russian: "Стандарт"],
         "ia.tier.quality": [.english: "Quality", .spanish: "Calidad", .russian: "Качество"],
         "ia.tier.premium": [.english: "Premium", .spanish: "Premium", .russian: "Премиум"],
         "ia.tier.smart": [.english: "Smart", .spanish: "Inteligente", .russian: "Умный"],
         "ia.tier.freedom": [.english: "Freedom", .spanish: "Libertad", .russian: "Свобода"],
+        "ia.price.free": [.english: "Free", .spanish: "Gratis", .russian: "Бесплатно"],
 
         // Saving
         "ia.save.header": [.english: "Saving", .spanish: "Guardado", .russian: "Сохранение"],
@@ -331,6 +343,11 @@ enum ImageAddonStrings {
             .english: "Unexpected response from the image service.",
             .spanish: "Respuesta inesperada del servicio de imágenes.",
             .russian: "Неожиданный ответ сервиса изображений."
+        ],
+        "ia.error.noSubject": [
+            .english: "No clear subject found to separate from the background. For tricky images, pick a cloud model (Bria / BiRefNet) under Background Removal in Settings → Images.",
+            .spanish: "No se encontró un sujeto claro para separar del fondo. Para imágenes difíciles, elige un modelo en la nube (Bria / BiRefNet) en Ajustes → Imágenes.",
+            .russian: "Не найден чёткий объект для отделения от фона. Для сложных изображений выберите облачную модель (Bria / BiRefNet) в разделе «Удаление фона» в Настройках → «Изображения»."
         ],
         "ia.error.saveFailed": [
             .english: "Couldn't save the file: %@",

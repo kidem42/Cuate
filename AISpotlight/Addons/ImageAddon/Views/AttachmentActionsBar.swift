@@ -33,7 +33,7 @@ struct ImageAttachmentActionsBar: View {
                                    icon: "person.and.background.dotted",
                                    role: .removeBg,
                                    help: functionHelp("ia.help.removeBg", model: settings.backgroundModelInfo)) {
-                        runIfKeyed {
+                        runIfKeyed(settings.backgroundModelInfo) {
                             guard let model = settings.backgroundModelInfo else { return }
                             start(function: .removeBackground, model: model)
                         }
@@ -86,7 +86,7 @@ struct ImageAttachmentActionsBar: View {
             Menu {
                 ForEach(factors, id: \.self) { factor in
                     Button("×\(factor)\(factor == model.maxUpscaleFactor ? " (\(IAL("ia.action.factorMax")))" : "")") {
-                        runIfKeyed {
+                        runIfKeyed(model) {
                             start(function: .upscale, model: model, factor: factor)
                         }
                     }
@@ -99,7 +99,7 @@ struct ImageAttachmentActionsBar: View {
                 Label(IAL("ia.action.upscale"), systemImage: "arrow.up.backward.and.arrow.down.forward.rectangle")
                     .font(.caption)
             } primaryAction: {
-                runIfKeyed {
+                runIfKeyed(model) {
                     start(function: .upscale, model: model, factor: factors.first)
                 }
             }
@@ -113,7 +113,7 @@ struct ImageAttachmentActionsBar: View {
                            icon: "arrow.up.backward.and.arrow.down.forward.rectangle",
                            role: .upscale,
                            help: functionHelp("ia.help.upscale", model: model)) {
-                runIfKeyed {
+                runIfKeyed(model) {
                     guard let model else { return }
                     start(function: .upscale, model: model)
                 }
@@ -197,8 +197,14 @@ struct ImageAttachmentActionsBar: View {
         return String(format: IAL(key), model.name, model.priceLabel)
     }
 
-    /// ТЗ §6: кнопки видны и без ключа; клик объясняет, куда идти.
-    private func runIfKeyed(_ body: () -> Void) {
+    /// ТЗ §6: кнопки видны и без ключа; клик объясняет, куда идти. On-device
+    /// providers (Apple) need no key, so the check is skipped when the target
+    /// model runs locally — background removal works with no key configured.
+    private func runIfKeyed(_ model: ImageModelInfo?, _ body: () -> Void) {
+        if let model, !model.provider.requiresKey {
+            body()
+            return
+        }
         guard APIKeyStore.hasKey(aux: .fal) else {
             showingKeyHint = true
             return

@@ -205,7 +205,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
                         }
                     } else {
                         // Non-vision provider: OCR the attachments into text.
-                        guard MistralOCRService.isAvailable else {
+                        guard OCRService.isAvailable else {
                             throw ProviderError.visionUnsupported(providerID)
                         }
                         for attachment in message.attachments where attachment.mimeType.hasPrefix("image") {
@@ -217,7 +217,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
                     var extractedAny = false
                     for attachment in message.attachments where attachment.mimeType.hasPrefix("image") {
                         var extracted = attachment.ocrText
-                        if extracted == nil, lazyOCRBudget > 0, MistralOCRService.isAvailable {
+                        if extracted == nil, lazyOCRBudget > 0, OCRService.isAvailable {
                             lazyOCRBudget -= 1
                             extracted = try? await cachedOCRText(for: attachment, of: message, store: store)
                         }
@@ -253,7 +253,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
         store: ChatStore
     ) async throws -> String {
         if let cached = attachment.ocrText, !cached.isEmpty { return cached }
-        let text = try await MistralOCRService.extractText(
+        let text = try await OCRService.extractText(
             imageBase64: attachment.contentBase64,
             mimeType: attachment.mimeType
         )

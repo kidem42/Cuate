@@ -14,10 +14,10 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
   - Optional LLM cleanup of transcribed text (punctuation, filler words)
 - **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
 - **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default
-- **Image tools addon** — process an attached image with cloud AI models (one fal.ai key): **upscale** (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), **background removal** (Bria RMBG-2.0 / BiRefNet v2), **object removal** with an inline brush-mask editor or a text description (Bria Eraser / Object Removal). Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; off by default
+- **Image tools addon** — process an attached image in one click. **Background removal** and **upscale** run **on-device for free** by default (Apple Vision / Core Image — no key), with higher-quality cloud models optional (one fal.ai key): upscale (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), background removal (Bria RMBG-2.0 / BiRefNet v2). **Object removal** uses fal.ai (Bria Eraser / Object Removal) via an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; on by default
 - **Attach images** — paperclip button or paste with ⌘V (files, screenshots, browser images; HEIC/TIFF converted automatically)
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
-- **OCR** — extract text from images and documents (Mistral OCR)
+- **OCR** — extract text from images **on-device for free** by default (Apple Vision; many languages incl. Cyrillic), or via **Mistral OCR** for layout-aware Markdown (tables/columns)
 - **Web search** — augment answers with live results (Brave Search API)
 - **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its **own isolated chat** (separate history, context and rolling summary) via the "Own chat" toggle in Settings → Prompts — switching presets swaps the conversation, and a reply that is still generating keeps streaming into its home chat in the background
 - **Artifacts** — ask for an interactive demo, visualization or a document, and the model returns a complete HTML page or Markdown document shown as a compact card in the chat (streaming progress included). Click the card for a preview window (⅔ of the screen): live interactive WKWebView for HTML, Notion-style rendered view for Markdown, a Code tab, copy, save to file and open-in-browser. Ask for changes and the revised document arrives as a new card — earlier versions stay openable in the history
@@ -99,4 +99,15 @@ scripts/
 
 ## License
 
-[MIT](LICENSE) © Pavel Kravets
+AISpotlight is licensed under the **[GNU AGPL-3.0](LICENSE)** © 2026 Pavel Kravets.
+
+You may use, study, modify and share it — **including commercially — only if** any
+distributed or network-deployed version is also released as open source under the
+AGPL-3.0, with full corresponding source. This keeps the app and every
+improvement to it open.
+
+- **Contributions** are welcome under the [Contributor License Agreement](CLA.md);
+  see [CONTRIBUTING](CONTRIBUTING.md).
+- **Commercial / proprietary license** — to use AISpotlight without the AGPL's
+  source-disclosure obligations, a commercial license is available from the
+  author: kravec42@gmail.com.

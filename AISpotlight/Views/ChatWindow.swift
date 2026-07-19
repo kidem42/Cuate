@@ -385,7 +385,7 @@ struct ChatWindow: View {
                         PendingAttachmentPreview(
                             attachment: attachment,
                             isExtractingText: isExtractingText,
-                            canExtractText: MistralOCRService.isAvailable && attachment.mimeType.hasPrefix("image"),
+                            canExtractText: OCRService.isAvailable && attachment.mimeType.hasPrefix("image"),
                             removeAction: clearCurrentAttachment,
                             extractTextAction: { extractText(from: attachment) }
                         )
@@ -1167,17 +1167,17 @@ struct ChatWindow: View {
         return rep.representation(using: .png, properties: [:])
     }
 
-    /// Runs Mistral OCR on the pending image. The result is structured
-    /// markdown (headings, lists, tables mirror the original layout): it is
-    /// shown rendered in the chat and the raw markdown is copied to the
-    /// clipboard for pasting into editors.
+    /// Runs OCR on the pending image via the selected provider. Apple Vision
+    /// (default) returns plain text; Mistral returns layout-aware markdown
+    /// (headings, lists, tables). The result is shown in the chat and the raw
+    /// text is copied to the clipboard for pasting into editors.
     private func extractText(from attachment: ChatAttachment) {
         guard !isExtractingText else { return }
         isExtractingText = true
 
         Task { @MainActor in
             do {
-                let markdown = try await MistralOCRService.extractText(
+                let markdown = try await OCRService.extractText(
                     imageBase64: attachment.contentBase64,
                     mimeType: attachment.mimeType
                 )

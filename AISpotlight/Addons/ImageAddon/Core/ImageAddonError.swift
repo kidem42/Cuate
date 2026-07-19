@@ -17,6 +17,8 @@ enum ImageAddonError: LocalizedError {
     case timeout
     /// Anything that doesn't decode the way the provider documented.
     case badResponse
+    /// On-device Vision found no foreground subject to lift from the background.
+    case noSubjectFound
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +36,8 @@ enum ImageAddonError: LocalizedError {
             return IAL("ia.error.timeout")
         case .badResponse:
             return IAL("ia.error.badResponse")
+        case .noSubjectFound:
+            return IAL("ia.error.noSubject")
         }
     }
 

@@ -136,6 +136,22 @@ struct ModelInfo: Codable, Equatable {
 }
 
 /// Providers that can transcribe audio.
+/// OCR backends. `apple` is native on-device (Vision, no key); `mistral` is
+/// the cloud document model (layout-aware Markdown).
+enum OCRProviderID: String, CaseIterable, Codable, Identifiable {
+    case apple
+    case mistral
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .apple: return "Apple (on-device)"
+        case .mistral: return "Mistral OCR"
+        }
+    }
+}
+
 enum STTProviderID: String, CaseIterable, Codable, Identifiable {
     case mistral
     case openai
