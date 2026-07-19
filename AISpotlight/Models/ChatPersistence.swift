@@ -40,12 +40,15 @@ final class SDMessage {
     /// Explicit order within the conversation — SwiftData relationships are
     /// unordered, and two messages can share a timestamp during fast streaming.
     var sortIndex: Int
+    /// Web-search digest an assistant reply was grounded on (optional column —
+    /// nil on rows written by older versions; lightweight migration covers it).
+    var toolContext: String?
     var conversation: SDConversation?
     @Relationship(deleteRule: .cascade, inverse: \SDAttachment.message)
     var attachments: [SDAttachment]
 
     init(id: UUID, text: String, isUser: Bool, timestamp: Date,
-         typeRaw: String, audioURLString: String?, sortIndex: Int) {
+         typeRaw: String, audioURLString: String?, sortIndex: Int, toolContext: String? = nil) {
         self.id = id
         self.text = text
         self.isUser = isUser
@@ -53,6 +56,7 @@ final class SDMessage {
         self.typeRaw = typeRaw
         self.audioURLString = audioURLString
         self.sortIndex = sortIndex
+        self.toolContext = toolContext
         self.attachments = []
     }
 }
@@ -66,16 +70,19 @@ final class SDAttachment {
     var base64: String
     var fileURLString: String?
     var sortIndex: Int
+    /// Cached OCR extraction of the payload (optional column — see ChatAttachment.ocrText).
+    var ocrText: String?
     var message: SDMessage?
 
     init(id: UUID, filename: String, mimeType: String, base64: String,
-         fileURLString: String?, sortIndex: Int) {
+         fileURLString: String?, sortIndex: Int, ocrText: String? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.base64 = base64
         self.fileURLString = fileURLString
         self.sortIndex = sortIndex
+        self.ocrText = ocrText
     }
 }
 
@@ -88,12 +95,13 @@ extension ChatMessage {
         let row = SDMessage(
             id: id, text: text, isUser: isUser, timestamp: timestamp,
             typeRaw: messageType.rawValue, audioURLString: audioURL?.absoluteString,
-            sortIndex: sortIndex
+            sortIndex: sortIndex, toolContext: toolContext
         )
         row.attachments = attachments.enumerated().map { index, attachment in
             SDAttachment(
                 id: attachment.id, filename: attachment.filename, mimeType: attachment.mimeType,
-                base64: attachment.base64, fileURLString: attachment.fileURLString, sortIndex: index
+                base64: attachment.base64, fileURLString: attachment.fileURLString, sortIndex: index,
+                ocrText: attachment.ocrText
             )
         }
         return row
@@ -104,12 +112,13 @@ extension SDMessage {
     func toStruct() -> ChatMessage {
         let atts = attachments
             .sorted { $0.sortIndex < $1.sortIndex }
-            .map { ChatAttachment(filename: $0.filename, mimeType: $0.mimeType, base64: $0.base64, id: $0.id, fileURLString: $0.fileURLString) }
+            .map { ChatAttachment(filename: $0.filename, mimeType: $0.mimeType, base64: $0.base64, id: $0.id, fileURLString: $0.fileURLString, ocrText: $0.ocrText) }
         return ChatMessage(
             id: id, text: text, isUser: isUser, timestamp: timestamp,
             messageType: ChatMessage.MessageType(rawValue: typeRaw) ?? .text,
             audioURL: audioURLString.flatMap { URL(string: $0) },
-            attachments: atts
+            attachments: atts,
+            toolContext: toolContext
         )
     }
 }
@@ -291,6 +300,7 @@ nonisolated enum ChatPersistence {
                     // re-prune/re-save on every open.
                     let audioString = message.audioURL?.absoluteString
                     if row.audioURLString != audioString { row.audioURLString = audioString }
+                    if row.toolContext != message.toolContext { row.toolContext = message.toolContext }
                     reconcileAttachments(of: row, with: message, in: ctx)
                 } else {
                     let row = message.toSDMessage(sortIndex: index)
@@ -306,14 +316,17 @@ nonisolated enum ChatPersistence {
     }
 
     private static func reconcileAttachments(of row: SDMessage, with message: ChatMessage, in ctx: ModelContext) {
-        let rowIDs = Set(row.attachments.map { $0.id })
-        let msgIDs = Set(message.attachments.map { $0.id })
-        guard rowIDs != msgIDs else { return }
+        // Identity AND ocrText: a lazily cached OCR extraction mutates an
+        // attachment in place — an ID-only comparison would never persist it.
+        let rowState = Set(row.attachments.map { "\($0.id.uuidString)|\($0.ocrText ?? "")" })
+        let msgState = Set(message.attachments.map { "\($0.id.uuidString)|\($0.ocrText ?? "")" })
+        guard rowState != msgState else { return }
         for attachment in row.attachments { ctx.delete(attachment) }
         row.attachments = message.attachments.enumerated().map { index, attachment in
             SDAttachment(
                 id: attachment.id, filename: attachment.filename, mimeType: attachment.mimeType,
-                base64: attachment.base64, fileURLString: attachment.fileURLString, sortIndex: index
+                base64: attachment.base64, fileURLString: attachment.fileURLString, sortIndex: index,
+                ocrText: attachment.ocrText
             )
         }
     }
@@ -349,6 +362,7 @@ nonisolated enum ChatPersistence {
             let convo = fetchOrCreateConversation(key: key, in: ctx)
             if let row = convo.messages.first(where: { $0.id == message.id }) {
                 row.text = message.text
+                row.toolContext = message.toolContext
                 // Text-only updates were enough for streamed replies, but a
                 // delivered message may also carry attachments/audio (image
                 // results) — dropping them here would lose them silently.

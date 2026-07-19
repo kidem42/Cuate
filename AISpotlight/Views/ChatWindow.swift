@@ -998,7 +998,7 @@ struct ChatWindow: View {
                 syncToStore()
             }
             do {
-                let stream = try await ChatService.streamReply(history: history, summary: summary)
+                let stream = try await ChatService.streamReply(history: history, summary: summary, store: chatStore)
                 for try await event in stream {
                     switch event {
                     case .text(let chunk):
@@ -1017,6 +1017,15 @@ struct ChatWindow: View {
                     case .status(let status):
                         flush() // keep text/status ordering intact
                         if isLive { chatStore.statusText = status }
+                    case .toolContext(let context):
+                        // Arrives once, at the end of the turn. Stored on the
+                        // reply (never rendered) so follow-up turns keep the
+                        // search results as grounding.
+                        flush() // materialize `reply` if text is still pending
+                        if var current = reply {
+                            current.toolContext = context
+                            reply = current
+                        }
                     }
                 }
                 flush()

@@ -18,13 +18,20 @@ nonisolated struct ChatAttachment: Identifiable, Codable {
     /// legacy rows hold absolute paths — `resolveURL` accepts both. The
     /// optional decodes as nil for chats saved by older versions.
     var fileURLString: String?
+    /// Cached OCR extraction of an image payload, filled the first time the
+    /// content is needed as text (non-vision provider, or the message aged out
+    /// of the "attach pixels" window). Persisting it means retries and later
+    /// turns never re-pay the OCR call, and older turns keep their image
+    /// content as grounding instead of a content-free "[attached earlier]" note.
+    var ocrText: String?
 
-    init(filename: String, mimeType: String, base64: String, id: UUID = UUID(), fileURLString: String? = nil) {
+    init(filename: String, mimeType: String, base64: String, id: UUID = UUID(), fileURLString: String? = nil, ocrText: String? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.base64 = base64
         self.fileURLString = fileURLString
+        self.ocrText = ocrText
     }
 
     /// Resolves a stored payload path: absolute (legacy rows) is used as-is,
@@ -94,13 +101,18 @@ nonisolated struct ChatMessage: Identifiable, Codable {
     let messageType: MessageType
     var audioURL: URL? // For voice messages
     var attachments: [ChatAttachment]
-    
+    /// Compact digest of the web-search results an assistant reply was based
+    /// on. Not rendered in the UI; re-attached to the API context for the most
+    /// recent reply that has one, so follow-up questions ("what did the second
+    /// source say?") keep their grounding across turns.
+    var toolContext: String?
+
     enum MessageType: String, Codable {
         case text
         case voice
         case system
     }
-    
+
     init(text: String, isUser: Bool, messageType: MessageType = .text, audioURL: URL? = nil, attachments: [ChatAttachment] = []) {
         self.id = UUID()
         self.text = text
@@ -109,11 +121,12 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         self.messageType = messageType
         self.audioURL = audioURL
         self.attachments = attachments
+        self.toolContext = nil
     }
-    
+
     /// Reconstructs a message with explicit identity and timestamp — used by
     /// persistence (SwiftData rows) and the legacy-JSON migration.
-    init(id: UUID, text: String, isUser: Bool, timestamp: Date, messageType: MessageType, audioURL: URL?, attachments: [ChatAttachment]) {
+    init(id: UUID, text: String, isUser: Bool, timestamp: Date, messageType: MessageType, audioURL: URL?, attachments: [ChatAttachment], toolContext: String? = nil) {
         self.id = id
         self.text = text
         self.isUser = isUser
@@ -121,13 +134,14 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         self.messageType = messageType
         self.audioURL = audioURL
         self.attachments = attachments
+        self.toolContext = toolContext
     }
 
     // Custom coding keys to handle URL encoding
     enum CodingKeys: String, CodingKey {
-        case id, text, isUser, timestamp, messageType, audioURLString, attachments
+        case id, text, isUser, timestamp, messageType, audioURLString, attachments, toolContext
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -136,14 +150,15 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         messageType = try container.decode(MessageType.self, forKey: .messageType)
         attachments = (try? container.decode([ChatAttachment].self, forKey: .attachments)) ?? []
-        
+        toolContext = try container.decodeIfPresent(String.self, forKey: .toolContext)
+
         if let urlString = try container.decodeIfPresent(String.self, forKey: .audioURLString) {
             audioURL = URL(string: urlString)
         } else {
             audioURL = nil
         }
     }
-    
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -154,7 +169,8 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         if !attachments.isEmpty {
             try container.encode(attachments, forKey: .attachments)
         }
-        
+        try container.encodeIfPresent(toolContext, forKey: .toolContext)
+
         if let audioURL = audioURL {
             try container.encode(audioURL.absoluteString, forKey: .audioURLString)
         }
@@ -539,6 +555,19 @@ class ChatStore: ObservableObject {
         DispatchQueue.main.async {
             guard let index = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
             self.messages[index].text = text
+            self.scheduleSave()
+        }
+    }
+
+    /// Persists a lazily computed OCR extraction onto its attachment (the
+    /// message may have scrolled out of the API context by the time OCR
+    /// finishes — matching by IDs keeps the write exact).
+    func setAttachmentOCRText(_ text: String, messageID: UUID, attachmentID: UUID) {
+        DispatchQueue.main.async {
+            guard let messageIndex = self.messages.firstIndex(where: { $0.id == messageID }),
+                  let attachmentIndex = self.messages[messageIndex].attachments
+                      .firstIndex(where: { $0.id == attachmentID }) else { return }
+            self.messages[messageIndex].attachments[attachmentIndex].ocrText = text
             self.scheduleSave()
         }
     }

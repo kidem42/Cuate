@@ -71,6 +71,27 @@ struct AnthropicProvider: LLMProvider {
             }
         }
 
+        // Anthropic has no implicit prompt cache — without explicit
+        // breakpoints every turn re-pays the full input price. Two markers:
+        // the system prompt (stable within a day per preset) and the last
+        // content block, which caches the entire conversation prefix so the
+        // next turn re-reads it at ~10% of the input price. Prompts below the
+        // model's cacheable minimum are simply not cached — never an error.
+        if var last = apiMessages.last {
+            var blocks: [[String: Any]]
+            if let text = last["content"] as? String {
+                blocks = [["type": "text", "text": text]]
+            } else {
+                blocks = last["content"] as? [[String: Any]] ?? []
+            }
+            if var tail = blocks.last {
+                tail["cache_control"] = ["type": "ephemeral"]
+                blocks[blocks.count - 1] = tail
+                last["content"] = blocks
+                apiMessages[apiMessages.count - 1] = last
+            }
+        }
+
         var body: [String: Any] = [
             "model": model,
             "max_tokens": min(options.maxTokens, Self.maxTokensCap(for: model)),
@@ -78,16 +99,11 @@ struct AnthropicProvider: LLMProvider {
             "stream": true
         ]
         if let systemPrompt, !systemPrompt.isEmpty {
-            // Long system prompts (summaries, memory) benefit from prompt caching.
-            if systemPrompt.count > 8000 {
-                body["system"] = [[
-                    "type": "text",
-                    "text": systemPrompt,
-                    "cache_control": ["type": "ephemeral"]
-                ]]
-            } else {
-                body["system"] = systemPrompt
-            }
+            body["system"] = [[
+                "type": "text",
+                "text": systemPrompt,
+                "cache_control": ["type": "ephemeral"]
+            ]]
         }
         if !options.tools.isEmpty {
             body["tools"] = options.tools.map { tool in
