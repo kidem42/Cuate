@@ -1,6 +1,7 @@
 import Foundation
 
-/// Chat provider for OpenAI-compatible APIs: OpenAI, Mistral, DeepSeek.
+/// Chat provider for OpenAI-compatible APIs: OpenAI, Mistral, DeepSeek,
+/// OpenRouter, Kimi (Moonshot).
 /// Uses `POST {base}/chat/completions` with SSE streaming, function calling,
 /// and `GET {base}/models`.
 struct OpenAICompatibleProvider: LLMProvider {
@@ -22,6 +23,10 @@ struct OpenAICompatibleProvider: LLMProvider {
     static let openRouter = OpenAICompatibleProvider(
         providerID: .openrouter,
         baseURL: URL(string: "https://openrouter.ai/api/v1")!
+    )
+    static let kimi = OpenAICompatibleProvider(
+        providerID: .kimi,
+        baseURL: URL(string: "https://api.moonshot.ai/v1")!
     )
 
     /// Builds a request with the Bearer key and any provider-specific headers.

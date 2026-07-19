@@ -9,6 +9,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case mistral
     case deepseek
     case openrouter
+    case kimi
 
     var id: String { rawValue }
 
@@ -20,6 +21,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return "Mistral"
         case .deepseek: return "DeepSeek"
         case .openrouter: return "OpenRouter"
+        case .kimi: return "Kimi (Moonshot)"
         }
     }
 
@@ -47,6 +49,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return "M"
         case .deepseek: return "DS"
         case .openrouter: return "OR"
+        case .kimi: return "K"
         }
     }
 
@@ -59,6 +62,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return 0xFA520F   // Mistral orange
         case .deepseek: return 0x4D6BFE  // DeepSeek blue
         case .openrouter: return 0x6467F2 // OpenRouter indigo
+        case .kimi: return 0x16191E      // Kimi charcoal
         }
     }
 
@@ -71,6 +75,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return URL(string: "https://console.mistral.ai/api-keys")!
         case .deepseek: return URL(string: "https://platform.deepseek.com/api_keys")!
         case .openrouter: return URL(string: "https://openrouter.ai/keys")!
+        case .kimi: return URL(string: "https://platform.moonshot.ai/console/api-keys")!
         }
     }
 
@@ -106,6 +111,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
             // OpenRouter's model set is user-typed (see `usesManualModelEntry`),
             // so there is no auto-selected default from a fetched list.
             return []
+        case .kimi:
+            return ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"]
         }
     }
 }
@@ -314,7 +321,7 @@ enum ModelCapabilities {
                 || m.contains("fable") || m.contains("mythos")
         case .gemini:
             return m.contains("2.5") || m.contains("gemini-3")
-        case .mistral, .deepseek, .openrouter:
+        case .mistral, .deepseek, .openrouter, .kimi:
             return false
         }
     }

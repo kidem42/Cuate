@@ -100,7 +100,7 @@ struct OnboardingIllustration: View {
     private var keysScene: some View {
         VStack(spacing: 10) {
             HStack(spacing: 14) {
-                ForEach([ProviderID.openai, .anthropic, .gemini, .mistral, .deepseek, .openrouter], id: \.self) { p in
+                ForEach([ProviderID.openai, .anthropic, .gemini, .mistral, .deepseek, .openrouter, .kimi], id: \.self) { p in
                     ProviderLogo(provider: p, size: 22)
                 }
             }

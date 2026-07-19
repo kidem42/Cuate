@@ -771,6 +771,7 @@ enum ProviderRegistry {
         case .deepseek: return OpenAICompatibleProvider.deepSeek
         case .gemini: return GeminiProvider()
         case .openrouter: return OpenAICompatibleProvider.openRouter
+        case .kimi: return OpenAICompatibleProvider.kimi
         }
     }
 }

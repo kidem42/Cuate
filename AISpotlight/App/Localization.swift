@@ -65,6 +65,7 @@ enum Localization {
         "params.reasoning.deepseek": [.english: "Pick deepseek-reasoner for reasoning", .spanish: "Elige deepseek-reasoner para razonar", .russian: "Выберите deepseek-reasoner"],
         "params.reasoning.mistral": [.english: "Pick a magistral-* model for reasoning", .spanish: "Elige un modelo magistral-* para razonar", .russian: "Выберите модель magistral-*"],
         "params.reasoning.openrouter": [.english: "Depends on the model — pick a reasoning-capable one", .spanish: "Depende del modelo — elige uno con razonamiento", .russian: "Зависит от модели — выберите модель с рассуждением"],
+        "params.reasoning.kimi": [.english: "Kimi models manage thinking depth automatically", .spanish: "Los modelos Kimi gestionan el razonamiento automáticamente", .russian: "Модели Kimi управляют глубиной рассуждения автоматически"],
 
         // MARK: OpenRouter manual model entry
         "or.placeholder": [.english: "e.g. openai/gpt-4o", .spanish: "p. ej. openai/gpt-4o", .russian: "напр. openai/gpt-4o"],

@@ -278,6 +278,7 @@ struct SettingsView: View {
         case .deepseek: return L("params.reasoning.deepseek")
         case .mistral: return L("params.reasoning.mistral")
         case .openrouter: return L("params.reasoning.openrouter")
+        case .kimi: return L("params.reasoning.kimi")
         default: return L("params.reasoning.na")
         }
     }
