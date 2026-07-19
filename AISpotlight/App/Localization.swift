@@ -74,6 +74,18 @@ enum Localization {
         "or.notFound": [.english: "Not in the OpenRouter catalog — double-check the slug", .spanish: "No está en el catálogo de OpenRouter — revisa el identificador", .russian: "Нет в каталоге OpenRouter — проверьте идентификатор"],
         "or.recent": [.english: "Recent models", .spanish: "Modelos recientes", .russian: "Недавние модели"],
         "or.clear": [.english: "Clear history", .spanish: "Borrar historial", .russian: "Очистить историю"],
+        // MARK: HTML artifacts
+        "artifact.untitled": [.english: "Interactive page", .spanish: "Página interactiva", .russian: "Интерактивная страница"],
+        "artifact.generating": [.english: "Generating page…", .spanish: "Generando página…", .russian: "Страница создаётся…"],
+        "artifact.interactive": [.english: "Interactive page", .spanish: "Página interactiva", .russian: "Интерактивная страница"],
+        "artifact.mdDoc": [.english: "Markdown document", .spanish: "Documento Markdown", .russian: "Markdown-документ"],
+        "artifact.open": [.english: "Open preview", .spanish: "Abrir vista previa", .russian: "Открыть превью"],
+        "artifact.preview": [.english: "Preview", .spanish: "Vista previa", .russian: "Превью"],
+        "artifact.code": [.english: "Code", .spanish: "Código", .russian: "Код"],
+        "artifact.copy": [.english: "Copy code", .spanish: "Copiar código", .russian: "Копировать код"],
+        "artifact.save": [.english: "Save…", .spanish: "Guardar…", .russian: "Сохранить…"],
+        "artifact.openBrowser": [.english: "Open in Browser", .spanish: "Abrir en el navegador", .russian: "Открыть в браузере"],
+
         "cap.vision": [.english: "Vision", .spanish: "Visión", .russian: "Картинки"],
         "cap.tools": [.english: "Tools", .spanish: "Herramientas", .russian: "Инструменты"],
         "cap.reasoning": [.english: "Reasoning", .spanish: "Razonamiento", .russian: "Рассуждение"],

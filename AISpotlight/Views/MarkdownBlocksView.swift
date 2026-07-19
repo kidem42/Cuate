@@ -8,24 +8,42 @@ import SwiftUI
 struct MarkdownBlocksView: View {
     let text: String
     let linkColor: Color
+    /// `.chat` keeps the compact bubble typography; `.document` uses larger,
+    /// Notion-like typography for the artifact preview window.
+    var style: Style = .chat
     @Environment(\.themePalette) private var palette
+
+    enum Style {
+        case chat
+        case document
+    }
 
     enum Block {
         case paragraph(String)
         case heading(level: Int, text: String)
         case bullets([String])
+        case numbered([String])
+        case tasks([(checked: Bool, text: String)])
         case quote(String)
         case code(String)
+        case divider
         case table(rows: [[String]])
+        /// A deliverable document (```html or ```markdown fence) rendered as an
+        /// artifact card with a preview instead of a wall of code.
+        /// `complete` is false while the fence is still streaming in.
+        case artifact(kind: ArtifactKind, content: String, complete: Bool)
     }
+
+    private var isDocument: Bool { style == .document }
 
     var body: some View {
         let blocks = Self.parse(text)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: isDocument ? 10 : 6) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 render(block)
             }
         }
+        .font(isDocument ? .system(size: 14) : nil)
     }
 
     // MARK: - Block rendering
@@ -39,10 +57,10 @@ struct MarkdownBlocksView: View {
         case .heading(let level, let content):
             MarkdownText(content, linkColor: linkColor)
                 .font(headingFont(level))
-                .padding(.top, 2)
+                .padding(.top, isDocument ? 8 : 2)
 
         case .bullets(let items):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .top, spacing: 6) {
                         Text(palette.isGlass ? "•" : palette.bulletGlyph)
@@ -53,11 +71,51 @@ struct MarkdownBlocksView: View {
                 }
             }
 
+        case .numbered(let items):
+            VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("\(index + 1).")
+                            .font(.system(size: isDocument ? 13.5 : 12.5))
+                            .foregroundColor(palette.isGlass ? .secondary : palette.secondaryText)
+                            .frame(minWidth: 18, alignment: .trailing)
+                        MarkdownText(item, linkColor: linkColor)
+                    }
+                }
+            }
+
+        case .tasks(let items):
+            VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 7) {
+                        Image(systemName: item.checked ? "checkmark.square.fill" : "square")
+                            .font(.system(size: isDocument ? 13 : 12))
+                            .foregroundColor(item.checked
+                                ? (palette.isGlass ? .accentColor : palette.accent)
+                                : (palette.isGlass ? .secondary : palette.secondaryText))
+                            .padding(.top, 1.5)
+                        MarkdownText(item.text, linkColor: linkColor)
+                            .foregroundColor(item.checked
+                                ? (palette.isGlass ? .secondary : palette.secondaryText)
+                                : nil)
+                    }
+                }
+            }
+
+        case .divider:
+            Rectangle()
+                .fill((palette.isGlass ? Color.secondary : palette.ink).opacity(0.18))
+                .frame(height: 1)
+                .padding(.vertical, isDocument ? 8 : 3)
+
         case .quote(let content):
             QuoteBlockView(content: content, linkColor: linkColor)
 
         case .code(let content):
             CodeBlockView(content: content)
+
+        case .artifact(let kind, let content, let complete):
+            ArtifactCardView(kind: kind, content: content, complete: complete)
 
         case .table(let rows):
             tableView(rows)
@@ -65,6 +123,13 @@ struct MarkdownBlocksView: View {
     }
 
     private func headingFont(_ level: Int) -> Font {
+        if isDocument {
+            switch level {
+            case 1: return .system(size: 23, weight: .bold)
+            case 2: return .system(size: 18, weight: .bold)
+            default: return .system(size: 15.5, weight: .semibold)
+            }
+        }
         switch level {
         case 1: return .system(size: 16, weight: .bold)
         case 2: return .system(size: 14.5, weight: .bold)
@@ -204,10 +269,29 @@ struct MarkdownBlocksView: View {
         var blocks: [Block] = []
         var paragraphLines: [String] = []
         var bulletItems: [String] = []
+        var numberedItems: [String] = []
+        var taskItems: [(checked: Bool, text: String)] = []
         var quoteLines: [String] = []
         var tableLines: [String] = []
         var codeLines: [String] = []
         var inCodeFence = false
+        var codeFenceLanguage = ""
+        var codeFenceTicks = 3
+
+        // ```html / ```markdown fences (and unlabeled fences that carry a full
+        // HTML document) become artifact cards; everything else stays a plain
+        // code block.
+        func codeOrArtifact(_ content: String, complete: Bool) -> Block {
+            let lower = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let looksLikeDocument = lower.hasPrefix("<!doctype") || lower.hasPrefix("<html")
+            if codeFenceLanguage == "html" || looksLikeDocument {
+                return .artifact(kind: .html, content: content, complete: complete)
+            }
+            if codeFenceLanguage == "markdown" || codeFenceLanguage == "md" {
+                return .artifact(kind: .markdown, content: content, complete: complete)
+            }
+            return .code(content)
+        }
 
         func flushParagraph() {
             if !paragraphLines.isEmpty {
@@ -219,6 +303,18 @@ struct MarkdownBlocksView: View {
             if !bulletItems.isEmpty {
                 blocks.append(.bullets(bulletItems))
                 bulletItems = []
+            }
+        }
+        func flushNumbered() {
+            if !numberedItems.isEmpty {
+                blocks.append(.numbered(numberedItems))
+                numberedItems = []
+            }
+        }
+        func flushTasks() {
+            if !taskItems.isEmpty {
+                blocks.append(.tasks(taskItems))
+                taskItems = []
             }
         }
         func flushQuote() {
@@ -248,16 +344,43 @@ struct MarkdownBlocksView: View {
         func flushAllText() {
             flushParagraph()
             flushBullets()
+            flushNumbered()
+            flushTasks()
             flushQuote()
             flushTable()
+        }
+
+        // "- [ ] item" / "- [x] item" (also "* [...]") → task-list item.
+        func taskItem(_ line: String) -> (checked: Bool, text: String)? {
+            guard line.hasPrefix("- [") || line.hasPrefix("* [") else { return nil }
+            let rest = line.dropFirst(2)
+            guard rest.count > 4 else { return nil }
+            switch rest.prefix(4).lowercased() {
+            case "[ ] ": return (false, String(rest.dropFirst(4)))
+            case "[x] ": return (true, String(rest.dropFirst(4)))
+            default: return nil
+            }
+        }
+
+        // "1. item" / "12) item" → ordered-list item.
+        func numberedItem(_ line: String) -> String? {
+            let digits = line.prefix(while: { $0.isNumber })
+            guard !digits.isEmpty, digits.count <= 3 else { return nil }
+            let rest = line.dropFirst(digits.count)
+            guard rest.hasPrefix(". ") || rest.hasPrefix(") ") else { return nil }
+            return String(rest.dropFirst(2))
         }
 
         for rawLine in text.components(separatedBy: "\n") {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
 
             if inCodeFence {
-                if trimmed.hasPrefix("```") {
-                    blocks.append(.code(codeLines.joined(separator: "\n")))
+                // A closing fence is backticks-only, at least as long as the
+                // opening one (CommonMark). Anything else — including inner
+                // ``` fences of a ````markdown document — is content.
+                let ticks = trimmed.prefix(while: { $0 == "`" }).count
+                if ticks >= codeFenceTicks, trimmed.drop(while: { $0 == "`" }).isEmpty {
+                    blocks.append(codeOrArtifact(codeLines.joined(separator: "\n"), complete: true))
                     codeLines = []
                     inCodeFence = false
                 } else {
@@ -269,6 +392,9 @@ struct MarkdownBlocksView: View {
             if trimmed.hasPrefix("```") {
                 flushAllText()
                 inCodeFence = true
+                codeFenceTicks = trimmed.prefix(while: { $0 == "`" }).count
+                codeFenceLanguage = String(trimmed.drop(while: { $0 == "`" }))
+                    .trimmingCharacters(in: .whitespaces).lowercased()
                 continue
             }
 
@@ -279,6 +405,14 @@ struct MarkdownBlocksView: View {
                 continue
             } else {
                 flushTable()
+            }
+
+            // Horizontal rule: a line of only --- / *** / ___
+            if trimmed.count >= 3, let first = trimmed.first,
+               "-*_".contains(first), trimmed.allSatisfy({ $0 == first }) {
+                flushAllText()
+                blocks.append(.divider)
+                continue
             }
 
             // Heading
@@ -301,13 +435,31 @@ struct MarkdownBlocksView: View {
                 flushQuote()
             }
 
+            // Task list — checked before bullets ("- [ ]" also matches "- ")
+            if let task = taskItem(trimmed) {
+                flushParagraph(); flushBullets(); flushNumbered()
+                taskItems.append(task)
+                continue
+            } else {
+                flushTasks()
+            }
+
             // Bullet list
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
-                flushParagraph()
+                flushParagraph(); flushNumbered()
                 bulletItems.append(String(trimmed.dropFirst(2)))
                 continue
             } else {
                 flushBullets()
+            }
+
+            // Ordered list
+            if let item = numberedItem(trimmed) {
+                flushParagraph()
+                numberedItems.append(item)
+                continue
+            } else {
+                flushNumbered()
             }
 
             // Blank line separates paragraphs
@@ -318,9 +470,9 @@ struct MarkdownBlocksView: View {
             }
         }
 
-        // Unterminated code fence — render what we have
+        // Unterminated code fence (still streaming) — render what we have
         if inCodeFence, !codeLines.isEmpty {
-            blocks.append(.code(codeLines.joined(separator: "\n")))
+            blocks.append(codeOrArtifact(codeLines.joined(separator: "\n"), complete: false))
         }
         flushAllText()
         parseCache.setObject(BlockBox(blocks), forKey: cacheKey)
