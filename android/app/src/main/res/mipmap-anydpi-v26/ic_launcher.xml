@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The desktop app's eclipse-sphere artwork as the launcher icon: bitmap
+     foreground (per-density mipmaps cropped from the 1024px mac asset) over
+     a black background. The sparkle vector stays as the monochrome layer for
+     Android 13+ themed icons (and as the Quick Settings tile icon, which the
+     system tints via alpha — a photographic bitmap can't serve there). -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
