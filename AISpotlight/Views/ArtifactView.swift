@@ -8,11 +8,13 @@ import UniformTypeIdentifiers
 enum ArtifactKind {
     case html
     case markdown
+    case mermaid
 
     var icon: String {
         switch self {
         case .html: return "globe"
         case .markdown: return "doc.text"
+        case .mermaid: return "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -20,6 +22,7 @@ enum ArtifactKind {
         switch self {
         case .html: return "html"
         case .markdown: return "md"
+        case .mermaid: return "svg"
         }
     }
 
@@ -27,6 +30,7 @@ enum ArtifactKind {
         switch self {
         case .html: return .html
         case .markdown: return UTType(filenameExtension: "md") ?? .plainText
+        case .mermaid: return .svg
         }
     }
 
@@ -35,6 +39,7 @@ enum ArtifactKind {
         switch self {
         case .html: return L("artifact.interactive")
         case .markdown: return L("artifact.mdDoc")
+        case .mermaid: return L("artifact.diagram")
         }
     }
 
@@ -43,6 +48,15 @@ enum ArtifactKind {
         switch self {
         case .html: return L("artifact.untitled")
         case .markdown: return L("artifact.mdDoc")
+        case .mermaid: return L("artifact.diagram")
+        }
+    }
+
+    /// Card title while the fence is still streaming in.
+    var generatingLabel: String {
+        switch self {
+        case .html, .markdown: return L("artifact.generating")
+        case .mermaid: return L("artifact.diagramGenerating")
         }
     }
 
@@ -67,6 +81,19 @@ enum ArtifactKind {
                 let heading = trimmed.drop(while: { $0 == "#" })
                     .trimmingCharacters(in: .whitespaces)
                 return heading.isEmpty ? nil : heading
+            }
+            return nil
+        case .mermaid:
+            // Frontmatter "title: X" or directive "title X" (gantt/pie).
+            for line in content.components(separatedBy: "\n").prefix(20) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("title:") {
+                    let value = trimmed.dropFirst("title:".count).trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { return value }
+                } else if trimmed.hasPrefix("title ") {
+                    let value = trimmed.dropFirst("title ".count).trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { return value }
+                }
             }
             return nil
         }
@@ -125,7 +152,7 @@ struct ArtifactCardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(complete ? title : L("artifact.generating"))
+                    Text(complete ? title : kind.generatingLabel)
                         .font(.system(size: 12.5, weight: .semibold, design: palette.fontDesign))
                         .foregroundColor(palette.isGlass ? .primary : palette.primaryText)
                         .lineLimit(1)
@@ -163,7 +190,7 @@ struct ArtifactCardView: View {
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering }
         }
-        .help(complete ? L("artifact.open") : L("artifact.generating"))
+        .help(complete ? L("artifact.open") : kind.generatingLabel)
     }
 
     private var subtitle: String {
@@ -238,6 +265,13 @@ private struct ArtifactPreviewView: View {
     let title: String
     @State private var showCode = false
     @State private var justCopied = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Diagram theme for the preview window. The window lives outside the chat
+    /// panel's theme environment, so it uses the system accent + appearance.
+    private var mermaidTheme: MermaidTheme {
+        MermaidTheme.make(accent: .accentColor, dark: colorScheme == .dark)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -265,6 +299,13 @@ private struct ArtifactPreviewView: View {
                     .help(L("artifact.openBrowser"))
                 }
 
+                if kind == .mermaid {
+                    Button(action: exportMermaidPNG) {
+                        Image(systemName: "photo")
+                    }
+                    .help(L("artifact.savePng"))
+                }
+
                 Button(action: save) {
                     Image(systemName: "square.and.arrow.down")
                 }
@@ -288,6 +329,11 @@ private struct ArtifactPreviewView: View {
                 switch kind {
                 case .html:
                     ArtifactWebView(html: content)
+                case .mermaid:
+                    // Live SVG with the same config as the inline snapshot;
+                    // pinch-zoom comes from the webview's allowsMagnification.
+                    ArtifactWebView(html: MermaidRenderer.previewHTML(code: content, theme: mermaidTheme))
+                        .id(mermaidTheme.key)
                 case .markdown:
                     // Notion-like reading column: document typography, capped
                     // line length, generous margins.
@@ -320,11 +366,65 @@ private struct ArtifactPreviewView: View {
         panel.nameFieldStringValue = ArtifactPreview.fileStem(for: title) + "." + kind.fileExtension
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        if kind == .mermaid {
+            // Export the rendered SVG, not the mermaid source. Always the
+            // light theme: exported files land in docs/browsers that assume
+            // a light background, regardless of the app's appearance.
+            Task { @MainActor in
+                let exportTheme = MermaidTheme.make(accent: .accentColor, dark: false)
+                let result = await MermaidRenderer.shared.render(code: content, theme: exportTheme)
+                switch result {
+                case .success(let rendered):
+                    do {
+                        try rendered.svg.write(to: url, atomically: true, encoding: .utf8)
+                    } catch {
+                        NSSound.beep()
+                        Diagnostics.log("artifact", "save.failed \(error.localizedDescription)")
+                    }
+                case .failure(let error):
+                    NSSound.beep()
+                    Diagnostics.log("artifact", "save.mermaid failed \(error.message)")
+                }
+            }
+            return
+        }
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
         } catch {
             NSSound.beep()
             Diagnostics.log("artifact", "save.failed \(error.localizedDescription)")
+        }
+    }
+
+    /// PNG export for diagrams: what you see (current appearance/theme) at 3x
+    /// for print-grade sharpness.
+    private func exportMermaidPNG() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = ArtifactPreview.fileStem(for: title) + ".png"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let theme = mermaidTheme
+        Task { @MainActor in
+            let result = await MermaidRenderer.shared.render(code: content, theme: theme, scale: 3)
+            switch result {
+            case .success(let rendered):
+                guard let tiff = rendered.image.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiff),
+                      let png = bitmap.representation(using: .png, properties: [:]) else {
+                    NSSound.beep()
+                    return
+                }
+                do {
+                    try png.write(to: url)
+                } catch {
+                    NSSound.beep()
+                    Diagnostics.log("artifact", "export.png failed \(error.localizedDescription)")
+                }
+            case .failure(let error):
+                NSSound.beep()
+                Diagnostics.log("artifact", "export.png failed \(error.message)")
+            }
         }
     }
 
@@ -357,6 +457,8 @@ private struct ArtifactWebView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        // Trackpad pinch-zoom in previews — most valuable for large diagrams.
+        webView.allowsMagnification = true
         webView.loadHTMLString(html, baseURL: nil)
         context.coordinator.lastHTML = html
         return webView

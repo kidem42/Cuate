@@ -36,6 +36,8 @@ struct MarkdownBlocksView: View {
         /// artifact card with a preview instead of a wall of code.
         /// `complete` is false while the fence is still streaming in.
         case artifact(kind: ArtifactKind, content: String, complete: Bool)
+        /// A ```mermaid fence rendered inline as a native-looking diagram.
+        case mermaid(code: String, complete: Bool)
     }
 
     private var isDocument: Bool { style == .document }
@@ -126,6 +128,11 @@ struct MarkdownBlocksView: View {
                 truncated: !complete && !isStreaming
             )
 
+        case .mermaid(let code, let complete):
+            // Once the stream is over an unterminated fence still gets a render
+            // attempt; the parser decides whether it degrades to source.
+            MermaidBlockView(code: code, complete: complete || !isStreaming)
+
         case .table(let rows):
             tableView(rows)
         }
@@ -190,7 +197,9 @@ struct MarkdownBlocksView: View {
 
     /// Fenced-code card: click anywhere on it to copy the whole block
     /// (Telegram-style), with a brief checkmark confirmation.
-    private struct CodeBlockView: View {
+    /// Internal (not private): MermaidBlockView reuses it as the source
+    /// fallback when a diagram fails to parse.
+    struct CodeBlockView: View {
         let content: String
         @State private var justCopied = false
         @Environment(\.themePalette) private var palette
@@ -298,6 +307,9 @@ struct MarkdownBlocksView: View {
             }
             if codeFenceLanguage == "markdown" || codeFenceLanguage == "md" {
                 return .artifact(kind: .markdown, content: content, complete: complete)
+            }
+            if codeFenceLanguage == "mermaid" {
+                return .mermaid(code: content, complete: complete)
             }
             return .code(content)
         }
