@@ -5,6 +5,7 @@ import AVFoundation
 /// model parameters, web search, speech-to-text, and system prompt presets.
 enum SettingsTab: String, Hashable {
     case chat, keys, voice, general, appearance, prompts
+    case costs // spend analytics (Views/CostsSettingsView)
     case layoutFix // LayoutFix addon (Addons/LayoutFix)
     case imageAddon // ImageAddon (Addons/ImageAddon)
 }
@@ -102,6 +103,8 @@ struct SettingsView: View {
                 .tag(SettingsTab.appearance)
             sidebarRow(L("tab.prompts"), systemImage: "text.quote", color: .purple)
                 .tag(SettingsTab.prompts)
+            sidebarRow(L("tab.costs"), systemImage: "chart.bar.fill", color: .teal)
+                .tag(SettingsTab.costs)
 
             // Addon rows appear only while the addon is enabled
             // (master switches live in the General section).
@@ -145,6 +148,7 @@ struct SettingsView: View {
             case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection }
             case .appearance: tab { appearanceSection }
             case .prompts: tab { switcherSection; promptSection }
+            case .costs: CostsSettingsView()           // brings its own Form
             case .layoutFix: LayoutFixSettingsView()   // brings its own Form
             case .imageAddon: ImageAddonSettingsView() // brings its own Form
             }
