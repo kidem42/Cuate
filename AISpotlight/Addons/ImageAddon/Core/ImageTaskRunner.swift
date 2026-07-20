@@ -48,6 +48,13 @@ final class ImageTaskRunner: ObservableObject {
             Diagnostics.log("imageaddon", "op.done fn=\(request.function.rawValue) model=\(request.model) outBytes=\(result.image.count) ms=\(ms) cost=\(result.costUSD.map { String($0) } ?? "?")")
             if let cost = result.costUSD {
                 ImageAddonSettings.shared.addSpent(cost)
+                // Mirror into the unified spend ledger so the Costs tab's
+                // charts include image operations (addon counters stay
+                // untouched — their own UI keeps working as before).
+                SpendStore.shared.record(
+                    kind: .image, provider: "fal", model: request.model,
+                    units: 1, costUSD: cost
+                )
             }
             return result
         } catch {

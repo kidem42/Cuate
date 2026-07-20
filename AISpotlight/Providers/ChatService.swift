@@ -93,6 +93,10 @@ You have a web_search tool. Use it when the answer depends on current events, li
                 // Search results gathered this turn — handed to the UI at the
                 // end so they persist on the reply message as grounding.
                 var toolDigest = ""
+                // Token usage summed across the agent loop's model calls; text
+                // accumulated for the estimate fallback on interrupted streams.
+                var turnUsage = TokenUsage()
+                var receivedChars = 0
                 do {
                     while true {
                         iteration += 1
@@ -115,8 +119,11 @@ You have a web_search tool. Use it when the answer depends on current events, li
                                 continuation.yield(.text(chunk))
                             case .toolCalls(let calls):
                                 toolCalls = calls
+                            case .usage(let usage):
+                                turnUsage = turnUsage.merged(with: usage)
                             }
                         }
+                        receivedChars += turnText.count
 
                         guard !toolCalls.isEmpty, iteration <= maxToolIterations else { break }
 
@@ -154,14 +161,74 @@ You have a web_search tool. Use it when the answer depends on current events, li
                         continuation.yield(.toolContext(String(toolDigest.prefix(6000))))
                     }
                     Diagnostics.log("chat", "turn.end iterations=\(iteration) chunks=\(chunkCount) chars=\(totalChars)")
+                    if let warning = recordSpend(kind: .chat, providerID: providerID, model: model,
+                                                 usage: turnUsage, sentMessages: messages,
+                                                 receivedChars: receivedChars) {
+                        // Soft budget alert — one system line, never a block.
+                        store.addMessage(text: warning, isUser: false, messageType: .system)
+                    }
                     continuation.finish()
                 } catch {
                     Diagnostics.log("chat", "turn.error \(String(error.localizedDescription.prefix(200)))")
+                    // The turn still consumed tokens (cancelled streams bill
+                    // whatever was generated) — record what we know.
+                    recordSpend(kind: .chat, providerID: providerID, model: model,
+                                usage: turnUsage, sentMessages: messages,
+                                receivedChars: receivedChars)
                     continuation.finish(throwing: error)
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    // MARK: - Spend recording
+
+    /// Records one model call (or agent-loop turn) into the spend ledger.
+    /// When the provider reported no usage (cancelled/failed stream), falls
+    /// back to the script-aware character estimate and flags the record.
+    /// Returns a budget-warning message when a threshold was crossed.
+    @MainActor
+    @discardableResult
+    private static func recordSpend(
+        kind: SpendKind,
+        providerID: ProviderID,
+        model: String,
+        usage: TokenUsage,
+        sentMessages: [LLMMessage],
+        receivedChars: Int
+    ) -> String? {
+        var usage = usage
+        var isEstimate = false
+        if usage.isEmpty {
+            guard receivedChars > 0 || !sentMessages.isEmpty else { return nil }
+            // Interrupted before the usage frame: estimate. Input from the
+            // last request's messages, output from streamed characters at a
+            // blended ~3 chars/token (between ASCII /4 and Cyrillic ×2/5).
+            usage.inputTokens = sentMessages.reduce(0) { $0 + estimatedTokens($1.text) }
+            usage.outputTokens = receivedChars / 3
+            isEstimate = true
+            guard !usage.isEmpty else { return nil }
+        }
+
+        // Price: the local catalog; for OpenRouter, the live per-model price
+        // from its /models catalog is exact and wins. Cache-read there is
+        // billed at full input rate (conservative — OpenRouter's per-model
+        // cache discounts aren't in the catalog payload).
+        var pricing = PricingCatalog.pricing(provider: providerID, model: model)
+        if providerID == .openrouter,
+           let info = AppSettings.shared.openRouterModelInfo(for: model),
+           let prompt = info.promptPricePerToken,
+           let completion = info.completionPricePerToken {
+            pricing = ModelPricing(
+                inputPerToken: prompt, outputPerToken: completion,
+                cacheReadPerToken: prompt, cacheWritePerToken: prompt
+            )
+        }
+        return SpendStore.shared.record(
+            kind: kind, provider: providerID.rawValue, model: model,
+            usage: usage, costUSD: pricing?.cost(for: usage), isEstimate: isEstimate
+        )
     }
 
     // MARK: - History → provider messages
@@ -358,9 +425,11 @@ superseded — merging must never lose established facts, names, numbers or pref
 
         let provider = ProviderRegistry.provider(for: settings.chatProvider)
         var summary = ""
+        var usage = TokenUsage()
+        let summarizeMessages = [LLMMessage(role: .user, text: prompt)]
         do {
             let stream = provider.streamChat(
-                messages: [LLMMessage(role: .user, text: prompt)],
+                messages: summarizeMessages,
                 model: model,
                 systemPrompt: nil,
                 options: ChatRequestOptions(maxTokens: 2048, reasoning: .fast),
@@ -368,10 +437,16 @@ superseded — merging must never lose established facts, names, numbers or pref
             )
             for try await event in stream {
                 if case .text(let chunk) = event { summary += chunk }
+                if case .usage(let u) = event { usage = usage.merged(with: u) }
             }
         } catch {
             return // compression is best-effort; try again next turn
         }
+        // Summarization is a real paid call — account for it (no budget
+        // warning here; the visible chat turn already surfaces those).
+        recordSpend(kind: .summary, providerID: settings.chatProvider, model: model,
+                    usage: usage, sentMessages: summarizeMessages,
+                    receivedChars: summary.count)
 
         let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

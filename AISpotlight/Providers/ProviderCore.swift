@@ -133,6 +133,11 @@ struct ModelInfo: Codable, Equatable {
     var supportsTools: Bool
     var supportsReasoning: Bool
     var supportedParameters: [String] = []
+    /// USD per ONE token (OpenRouter reports prices in that unit), captured
+    /// from the catalog so aggregator models get exact per-model pricing.
+    /// nil for catalogs that don't carry prices (or older cached entries).
+    var promptPricePerToken: Double?
+    var completionPricePerToken: Double?
 }
 
 /// Providers that can transcribe audio.
@@ -255,11 +260,46 @@ struct ToolCall {
     }
 }
 
+/// Token counts reported by a provider for one model turn. Field semantics
+/// are normalized across providers (each provider maps its own names here):
+/// `inputTokens` is the UNCACHED input; cache traffic is split out because it
+/// bills at different rates (Anthropic: write ×1.25, read ×0.1; DeepSeek:
+/// hit ≈ 1/50 of miss). `reasoningTokens` are informational — providers that
+/// report them (OpenAI, Gemini) already include them in `outputTokens`.
+struct TokenUsage {
+    var inputTokens = 0
+    var outputTokens = 0
+    var cacheReadTokens = 0
+    var cacheWriteTokens = 0
+    var reasoningTokens = 0
+
+    var isEmpty: Bool {
+        inputTokens == 0 && outputTokens == 0 && cacheReadTokens == 0
+            && cacheWriteTokens == 0 && reasoningTokens == 0
+    }
+
+    /// Sums two turns — used when an agentic loop makes several model calls
+    /// within one user-visible turn.
+    func merged(with other: TokenUsage) -> TokenUsage {
+        TokenUsage(
+            inputTokens: inputTokens + other.inputTokens,
+            outputTokens: outputTokens + other.outputTokens,
+            cacheReadTokens: cacheReadTokens + other.cacheReadTokens,
+            cacheWriteTokens: cacheWriteTokens + other.cacheWriteTokens,
+            reasoningTokens: reasoningTokens + other.reasoningTokens
+        )
+    }
+}
+
 /// Events produced while streaming a single model turn.
 enum LLMStreamEvent {
     case text(String)
     /// Emitted once at the end of the turn when the model requested tools.
     case toolCalls([ToolCall])
+    /// Emitted once per model call, right before the stream finishes, when the
+    /// provider reported token usage. Absent on interrupted streams — callers
+    /// fall back to an estimate.
+    case usage(TokenUsage)
 }
 
 /// Reasoning depth preference, mapped to provider-specific parameters.

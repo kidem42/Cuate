@@ -119,11 +119,26 @@ struct GeminiProvider: LLMProvider {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var pendingCalls: [ToolCall] = []
+                var usage = TokenUsage()
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
-                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let candidates = json["candidates"] as? [[String: Any]],
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                        // usageMetadata is cumulative and rides on stream chunks;
+                        // the final one can be usage-only (no candidates/parts),
+                        // so it must be read BEFORE the content guard skips it.
+                        if let meta = json["usageMetadata"] as? [String: Any] {
+                            let prompt = meta["promptTokenCount"] as? Int ?? 0
+                            let cached = meta["cachedContentTokenCount"] as? Int ?? 0
+                            usage.inputTokens = max(0, prompt - cached)
+                            usage.cacheReadTokens = cached
+                            let thoughts = meta["thoughtsTokenCount"] as? Int ?? 0
+                            // Gemini API bills thinking at the output rate but
+                            // reports it separately from candidatesTokenCount.
+                            usage.outputTokens = (meta["candidatesTokenCount"] as? Int ?? 0) + thoughts
+                            usage.reasoningTokens = thoughts
+                        }
+                        guard let candidates = json["candidates"] as? [[String: Any]],
                               let content = candidates.first?["content"] as? [String: Any],
                               let parts = content["parts"] as? [[String: Any]] else { continue }
                         for part in parts {
@@ -145,6 +160,9 @@ struct GeminiProvider: LLMProvider {
                     }
                     if !pendingCalls.isEmpty {
                         continuation.yield(.toolCalls(pendingCalls))
+                    }
+                    if !usage.isEmpty {
+                        continuation.yield(.usage(usage))
                     }
                     continuation.finish()
                 } catch {

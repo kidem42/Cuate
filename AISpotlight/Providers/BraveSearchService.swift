@@ -36,6 +36,12 @@ enum BraveSearchService {
     /// On Base AI / Pro AI plans, `extra_snippets` enriches each result with up
     /// to 5 additional page excerpts; on plans without it we retry without the flag.
     static func search(query: String, count: Int = 5) async throws -> String {
+        // Costs tab: count the query and price it at the Base AI plan rate
+        // ($0.005/query). Free-tier users pay nothing — the figure is an
+        // upper-bound estimate, marked as such in the ledger.
+        SpendStore.shared.record(kind: .search, provider: "brave", model: "web-search",
+                                 units: 1, costUSD: PricingCatalog.searchPerQuery,
+                                 isEstimate: true)
         do {
             return try await performSearch(query: query, count: count, extraSnippets: true)
         } catch let error as ProviderError {

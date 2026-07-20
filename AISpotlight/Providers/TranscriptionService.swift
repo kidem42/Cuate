@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 /// Speech-to-text via provider APIs.
 /// Mistral (Voxtral) and OpenAI share the same OpenAI-style
@@ -26,15 +27,28 @@ enum TranscriptionService {
             try Data(contentsOf: audioURL)
         }.value
 
+        let text: String
         switch provider {
         case .mistral, .openai:
-            return try await transcribeOpenAIStyle(
+            text = try await transcribeOpenAIStyle(
                 provider: provider, apiKey: apiKey, model: model,
                 audioData: audioData, filename: audioURL.lastPathComponent
             )
         case .deepgram:
-            return try await transcribeDeepgram(apiKey: apiKey, model: model, audioData: audioData)
+            text = try await transcribeDeepgram(apiKey: apiKey, model: model, audioData: audioData)
         }
+
+        // STT bills per audio minute — read the real duration off the asset.
+        let seconds = (try? await AVURLAsset(url: audioURL).load(.duration).seconds) ?? 0
+        if seconds > 0 {
+            let minutes = seconds / 60
+            SpendStore.shared.record(
+                kind: .stt, provider: provider.rawValue, model: model,
+                units: minutes,
+                costUSD: PricingCatalog.sttPerMinute[provider].map { $0 * minutes }
+            )
+        }
+        return text
     }
 
     // MARK: - OpenAI-style multipart (Mistral, OpenAI)

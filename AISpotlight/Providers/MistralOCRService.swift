@@ -38,6 +38,15 @@ enum MistralOCRService {
             throw ProviderError.decoding("no `pages` in OCR response")
         }
 
+        // Billed per page — record actual page count (Apple OCR is free and
+        // never reaches this service).
+        let pageCount = Double(max(1, pages.count))
+        SpendStore.shared.record(
+            kind: .ocr, provider: ProviderID.mistral.rawValue, model: model,
+            units: pageCount,
+            costUSD: PricingCatalog.ocrPerPage[.mistral].map { $0 * pageCount }
+        )
+
         let markdown = pages
             .compactMap { $0["markdown"] as? String }
             .joined(separator: "\n\n")

@@ -135,6 +135,7 @@ struct AnthropicProvider: LLMProvider {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var pendingCalls: [Int: (id: String, name: String, args: String)] = [:]
+                var usage = TokenUsage()
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
@@ -142,6 +143,21 @@ struct AnthropicProvider: LLMProvider {
                               let type = json["type"] as? String else { continue }
 
                         switch type {
+                        case "message_start":
+                            // Input-side usage (incl. cache split) rides on the
+                            // opening frame; output arrives via message_delta.
+                            if let message = json["message"] as? [String: Any],
+                               let u = message["usage"] as? [String: Any] {
+                                usage.inputTokens = u["input_tokens"] as? Int ?? 0
+                                usage.cacheWriteTokens = u["cache_creation_input_tokens"] as? Int ?? 0
+                                usage.cacheReadTokens = u["cache_read_input_tokens"] as? Int ?? 0
+                            }
+                        case "message_delta":
+                            // Cumulative output count — keep the latest value.
+                            if let u = json["usage"] as? [String: Any],
+                               let output = u["output_tokens"] as? Int {
+                                usage.outputTokens = output
+                            }
                         case "content_block_start":
                             if let index = json["index"] as? Int,
                                let block = json["content_block"] as? [String: Any],
@@ -180,6 +196,9 @@ struct AnthropicProvider: LLMProvider {
                             )
                         }
                         continuation.yield(.toolCalls(calls))
+                    }
+                    if !usage.isEmpty {
+                        continuation.yield(.usage(usage))
                     }
                     continuation.finish()
                 } catch {

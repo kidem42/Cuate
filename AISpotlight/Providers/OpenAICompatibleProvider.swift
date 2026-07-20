@@ -115,6 +115,14 @@ struct OpenAICompatibleProvider: LLMProvider {
             "stream": true,
             "max_tokens": options.maxTokens
         ]
+        // Ask for the final usage chunk (cost tracking). Sent to providers that
+        // document the OpenAI `stream_options` param: DeepSeek, OpenRouter and
+        // Kimi (e2e 2026-07-20 showed Kimi sends no usage without it; Moonshot's
+        // migration guide documents the flag). Mistral is excluded until
+        // verified live — unknown params risk a 422 there.
+        if providerID == .deepseek || providerID == .openrouter || providerID == .kimi {
+            body["stream_options"] = ["include_usage": true]
+        }
         if !options.tools.isEmpty {
             body["tools"] = options.tools.map { tool in
                 [
@@ -146,6 +154,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             let task = Task {
                 // Tool call deltas arrive fragmented — accumulate by index.
                 var pendingCalls: [Int: (id: String, name: String, args: String)] = [:]
+                var usage = TokenUsage()
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
@@ -156,6 +165,12 @@ struct OpenAICompatibleProvider: LLMProvider {
                         if let error = json["error"] as? [String: Any],
                            let message = error["message"] as? String {
                             throw ProviderError.http(status: (error["code"] as? Int) ?? 200, message: message)
+                        }
+
+                        // Usage rides on the final chunk, whose `choices` is
+                        // empty — must be read BEFORE the guard below skips it.
+                        if let u = json["usage"] as? [String: Any] {
+                            usage = Self.parseChatCompletionsUsage(u)
                         }
 
                         guard let choices = json["choices"] as? [[String: Any]],
@@ -189,6 +204,9 @@ struct OpenAICompatibleProvider: LLMProvider {
                         }
                         continuation.yield(.toolCalls(calls))
                     }
+                    if !usage.isEmpty {
+                        continuation.yield(.usage(usage))
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -196,6 +214,33 @@ struct OpenAICompatibleProvider: LLMProvider {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// Maps a chat/completions `usage` object to normalized counts.
+    /// DeepSeek splits input by cache outcome (hit ≈ 1/50 of miss price) —
+    /// its `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` take priority.
+    /// Other providers report `prompt_tokens` (total) + optional
+    /// `prompt_tokens_details.cached_tokens`; the cached share is subtracted
+    /// so `inputTokens` stays "uncached input" across all providers.
+    private static func parseChatCompletionsUsage(_ u: [String: Any]) -> TokenUsage {
+        var usage = TokenUsage()
+        let prompt = u["prompt_tokens"] as? Int ?? 0
+        let completion = u["completion_tokens"] as? Int ?? 0
+        usage.outputTokens = completion
+        if let hit = u["prompt_cache_hit_tokens"] as? Int,
+           let miss = u["prompt_cache_miss_tokens"] as? Int {
+            usage.cacheReadTokens = hit
+            usage.inputTokens = miss
+        } else {
+            let cached = (u["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int ?? 0
+            usage.cacheReadTokens = cached
+            usage.inputTokens = max(0, prompt - cached)
+        }
+        if let details = u["completion_tokens_details"] as? [String: Any],
+           let reasoning = details["reasoning_tokens"] as? Int {
+            usage.reasoningTokens = reasoning
+        }
+        return usage
     }
 
     // MARK: - OpenAI Responses API
@@ -294,6 +339,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var pendingCalls: [ToolCall] = []
+                var usage = TokenUsage()
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
@@ -301,6 +347,17 @@ struct OpenAICompatibleProvider: LLMProvider {
                               let type = json["type"] as? String else { continue }
 
                         switch type {
+                        case "response.completed":
+                            // Whole-response usage arrives on the terminal event.
+                            if let response = json["response"] as? [String: Any],
+                               let u = response["usage"] as? [String: Any] {
+                                let input = u["input_tokens"] as? Int ?? 0
+                                let cached = (u["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int ?? 0
+                                usage.inputTokens = max(0, input - cached)
+                                usage.cacheReadTokens = cached
+                                usage.outputTokens = u["output_tokens"] as? Int ?? 0
+                                usage.reasoningTokens = (u["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int ?? 0
+                            }
                         case "response.output_text.delta":
                             if let delta = json["delta"] as? String, !delta.isEmpty {
                                 continuation.yield(.text(delta))
@@ -331,6 +388,9 @@ struct OpenAICompatibleProvider: LLMProvider {
                     }
                     if !pendingCalls.isEmpty {
                         continuation.yield(.toolCalls(pendingCalls))
+                    }
+                    if !usage.isEmpty {
+                        continuation.yield(.usage(usage))
                     }
                     continuation.finish()
                 } catch {
@@ -404,12 +464,16 @@ struct OpenAICompatibleProvider: LLMProvider {
 
             let inputModalities = (item["architecture"] as? [String: Any])?["input_modalities"] as? [String] ?? []
             let params = item["supported_parameters"] as? [String] ?? []
+            // OpenRouter reports USD-per-token prices as decimal strings.
+            let pricing = item["pricing"] as? [String: Any]
             catalog.append(ModelInfo(
                 id: id,
                 supportsVision: inputModalities.contains("image"),
                 supportsTools: params.contains("tools"),
                 supportsReasoning: params.contains("reasoning"),
-                supportedParameters: params
+                supportedParameters: params,
+                promptPricePerToken: (pricing?["prompt"] as? String).flatMap(Double.init),
+                completionPricePerToken: (pricing?["completion"] as? String).flatMap(Double.init)
             ))
         }
         return catalog
