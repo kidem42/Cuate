@@ -303,10 +303,19 @@ struct ChatWindow: View {
                         // Reveal the "Thinking…" pill when it appears below
                         // the last message. Deferred a beat so the pill is
                         // actually laid out (scrollTo an unrendered id is a
-                        // silent no-op in a LazyVStack).
+                        // silent no-op in a LazyVStack) — and re-asserted once
+                        // more after layout settles: under load (tall markdown
+                        // row, attachment) 50ms is not enough and the single
+                        // attempt used to no-op, leaving the pill below the
+                        // fold. Same idiom as the history landing above.
                         if visible, isNearBottom {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                                 scrollToBottom(proxy)
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                if showThinkingIndicator, isNearBottom {
+                                    scrollToBottom(proxy)
+                                }
                             }
                         }
                     }
@@ -1336,8 +1345,20 @@ struct ChatWindow: View {
                 chatStore.addMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system)
                 return
             }
-            let voiceMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
-            chatStore.appendNow(voiceMessage)
+            if let attachment = pendingAttachment {
+                // Dictation over a staged image: voice here is just an input
+                // method (instead of typing), so the transcript goes out as a
+                // regular text message under the image — no audio kept, no
+                // voice reply. (A failed transcription keeps the attachment
+                // staged for retry.)
+                let userMessage = ChatMessage(text: transcript, isUser: true, attachments: [attachment])
+                chatStore.appendNow(userMessage)
+                clearCurrentAttachment()
+                try? FileManager.default.removeItem(at: audioURL)
+            } else {
+                let voiceMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
+                chatStore.appendNow(voiceMessage)
+            }
             streamAssistantReply()
         } catch {
             chatStore.setLoading(false)
