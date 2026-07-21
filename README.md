@@ -15,15 +15,18 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
 - **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default
 - **Image tools addon** — process an attached image in one click. **Background removal** and **upscale** run **on-device for free** by default (Apple Vision / Core Image — no key), with higher-quality cloud models optional (one fal.ai key): upscale (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), background removal (Bria RMBG-2.0 / BiRefNet v2). **Object removal** uses fal.ai (Bria Eraser / Object Removal) via an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; on by default
-- **Attach images** — paperclip button or paste with ⌘V (files, screenshots, browser images; HEIC/TIFF converted automatically)
+- **Attach images** — paperclip button or paste with ⌘V (files, screenshots, browser images; HEIC/TIFF converted automatically); an image can be sent with no text at all — the active preset's prompt drives the handling
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
 - **OCR** — extract text from images **on-device for free** by default (Apple Vision; many languages incl. Cyrillic), or via **Mistral OCR** for layout-aware Markdown (tables/columns)
 - **Web search** — augment answers with live results (Brave Search API)
+- **Cost tracking** — token usage is captured from every provider (including cache hits/misses and reasoning tokens) and priced via a bundled per-token catalog with weekly refresh; Settings → Costs shows session/today/month totals, daily stacked charts by provider or model, per-provider breakdowns and a soft monthly budget with 80%/100% warnings (informative, never blocks)
+- **Run terminal commands** — shell commands in answers get a ▶ button next to Copy: by default it opens Terminal with the command already typed in and you press Enter yourself; an opt-in mode runs it immediately (macOS asks for the Automation permission once). Consecutive commands land in the same Terminal window, so multi-step flows read like one session
 - **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its **own isolated chat** (separate history, context and rolling summary) via the "Own chat" toggle in Settings → Prompts — switching presets swaps the conversation, and a reply that is still generating keeps streaming into its home chat in the background
 - **Artifacts** — ask for an interactive demo, visualization or a document, and the model returns a complete HTML page or Markdown document shown as a compact card in the chat (streaming progress included). Click the card for a preview window (⅔ of the screen): live interactive WKWebView for HTML, Notion-style rendered view for Markdown, a Code tab, copy, save to file and open-in-browser. Ask for changes and the revised document arrives as a new card — earlier versions stay openable in the history
 - **Diagrams** — ask for an architecture scheme, flow, sequence, state machine or pie breakdown and the model answers with a mermaid diagram rendered **natively inline in the chat**: offline (bundled mermaid, no CDN), retina-crisp snapshots, themed to the app (accent color, light/dark, colorblind-validated series palette). Click for a live preview with pinch-zoom and export to SVG (always light, document-ready) or PNG @3x. Invalid diagram source degrades gracefully to a code block with an error badge — never an error graphic in the chat
-- **Markdown rendering** with code blocks, tables, task lists (`- [ ]`), numbered lists and dividers in responses
+- **Markdown rendering** with code blocks, tables, task lists (`- [ ]`), numbered lists and dividers in responses; copying a message with a table also puts a spreadsheet flavor on the clipboard, so a paste into Google Sheets / Excel / Numbers lands in real cells
 - **Launch at login**, light/dark/system theme, UI in English, Spanish and Russian
+- **Android companion app** — the same multi-provider chat as a native Android app (Kotlin/Compose): providers, web search, voice messages, OCR, image tools, artifacts, themes and cost tracking; lives in [`android/`](android/README.md)
 
 ## Default hotkeys
 
@@ -56,7 +59,7 @@ Requires **macOS 14 (Sonoma) or newer**; the binary is universal (Apple Silicon 
 On first run the onboarding walks you through the essentials:
 
 - **API keys** — add a key for at least one provider in Settings → API Keys. Keys are stored in the **macOS Keychain**, never in plain files
-- **Permissions** — macOS will ask for Microphone (voice input), Screen Recording (screenshots) and Accessibility (dictation typing) when the corresponding feature is first used
+- **Permissions** — macOS will ask for Microphone (voice input), Screen Recording (screenshots) and Accessibility (dictation typing, inserting commands into Terminal) when the corresponding feature is first used; the "Run immediately" mode for terminal commands additionally asks for Automation (controlling Terminal) once
 - Optional: a [Brave Search API](https://brave.com/search/api/) key for web search
 
 ## Building from source
@@ -82,12 +85,14 @@ The script builds a universal Release (arm64 + x86_64), signs the app with the "
 
 ```text
 AISpotlight/
-├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots
-├── Addons/       # self-contained addons (LayoutFix keyboard-layout fixer)
+├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots, terminal runner
+├── Addons/       # self-contained addons (LayoutFix keyboard-layout fixer, ImageAddon image tools)
 ├── Diagnostics/  # in-app logging and hang watchdog
 ├── Providers/    # LLM/STT/OCR/search clients, settings, Keychain key store
 ├── Models/       # chat data models
 └── Views/        # SwiftUI: chat window, settings, onboarding, voice UI
+android/          # Android companion app (Kotlin/Compose) — own README and build script
+docs/             # architecture reviews, research notes, tech debt
 scripts/
 └── make-dmg.sh   # Release + DMG packaging (universal binary)
 ```
