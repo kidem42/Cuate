@@ -815,6 +815,18 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            VStack(alignment: .leading, spacing: 3) {
+                Picker(L("general.terminalRun"), selection: $settings.terminalRunMode) {
+                    ForEach(TerminalRunMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .help(L("general.terminalRun.help"))
+                Text(L("general.terminalRun.caption"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
             ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
         }

@@ -312,6 +312,16 @@ enum Localization {
         "tooltip.dictation.language": [.english: "Translation language — click to change", .spanish: "Idioma de traducción — haz clic para cambiar", .russian: "Язык перевода — клик, чтобы сменить"],
         "copy.copied": [.english: "Copied", .spanish: "Copiado", .russian: "Скопировано"],
         "tooltip.tapToCopy": [.english: "Click to copy", .spanish: "Haz clic para copiar", .russian: "Клик — скопировать"],
+        "tooltip.insertIntoTerminal": [.english: "Insert into Terminal — press Enter there to run", .spanish: "Insertar en Terminal — pulsa Intro allí para ejecutar", .russian: "Вставить в Терминал — выполнение по Enter"],
+        "tooltip.runInTerminal": [.english: "Run in Terminal", .spanish: "Ejecutar en Terminal", .russian: "Выполнить в Терминале"],
+
+        // MARK: Terminal commands (▶ on shell code blocks)
+        "terminal.mode.off": [.english: "Off", .spanish: "Desactivado", .russian: "Выключено"],
+        "terminal.mode.insert": [.english: "Insert into Terminal", .spanish: "Insertar en Terminal", .russian: "Вставлять в Терминал"],
+        "terminal.mode.autorun": [.english: "Run immediately", .spanish: "Ejecutar inmediatamente", .russian: "Выполнять сразу"],
+        "general.terminalRun": [.english: "▶ on terminal commands", .spanish: "▶ en comandos de terminal", .russian: "▶ у команд терминала"],
+        "general.terminalRun.help": [.english: "What the ▶ button on shell code blocks does", .spanish: "Qué hace el botón ▶ en los bloques de código shell", .russian: "Что делает кнопка ▶ на блоках с shell-командами"],
+        "general.terminalRun.caption": [.english: "Shell commands in answers get a ▶ button: it opens Terminal with the command typed in — you press Enter. \"Run immediately\" executes it right away (macOS asks for the Automation permission once).", .spanish: "Los comandos de shell en las respuestas tienen un botón ▶: abre Terminal con el comando escrito — tú pulsas Intro. «Ejecutar inmediatamente» lo ejecuta al instante (macOS pide el permiso de Automatización una vez).", .russian: "У shell-команд в ответах появляется кнопка ▶: она открывает Терминал с уже введённой командой — Enter нажимаете вы. «Выполнять сразу» запускает её немедленно (macOS один раз спросит разрешение «Автоматизация»)."],
 
         // MARK: Onboarding
         "ob.next": [.english: "Next", .spanish: "Siguiente", .russian: "Далее"],

@@ -29,7 +29,7 @@ struct MarkdownBlocksView: View {
         case numbered([String])
         case tasks([(checked: Bool, text: String)])
         case quote(String)
-        case code(String)
+        case code(content: String, language: String)
         case divider
         case table(rows: [[String]])
         /// A deliverable document (```html or ```markdown fence) rendered as an
@@ -117,8 +117,8 @@ struct MarkdownBlocksView: View {
         case .quote(let content):
             QuoteBlockView(content: content, linkColor: linkColor)
 
-        case .code(let content):
-            CodeBlockView(content: content)
+        case .code(let content, let language):
+            CodeBlockView(content: content, language: language)
 
         case .artifact(let kind, let content, let complete):
             ArtifactCardView(
@@ -201,8 +201,26 @@ struct MarkdownBlocksView: View {
     /// fallback when a diagram fails to parse.
     struct CodeBlockView: View {
         let content: String
+        var language: String = ""
         @State private var justCopied = false
+        @State private var justRan = false
         @Environment(\.themePalette) private var palette
+        @ObservedObject private var settings = AppSettings.shared
+
+        /// ▶ shows only on shell-tagged blocks, and only while the feature
+        /// is enabled in Settings → General.
+        private var showsRun: Bool {
+            settings.terminalRunMode != .off && TerminalCommandRunner.isShellLanguage(language)
+        }
+
+        private func copyContent() {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(content, forType: .string)
+            withAnimation { justCopied = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                withAnimation { justCopied = false }
+            }
+        }
 
         var body: some View {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -215,19 +233,44 @@ struct MarkdownBlocksView: View {
             .background(palette.isGlass ? AnyShapeStyle(Color.secondary.opacity(0.12)) : palette.codeFill)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .topTrailing) {
-                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 9))
-                    .foregroundColor(justCopied ? .green : .secondary)
-                    .padding(5)
+                // Real buttons with generous (22 pt) hit zones: a near-miss
+                // on ▶ must not fall through to the block's tap-to-copy.
+                HStack(spacing: 0) {
+                    if showsRun {
+                        Button {
+                            TerminalCommandRunner.run(content)
+                            withAnimation { justRan = true }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                withAnimation { justRan = false }
+                            }
+                        } label: {
+                            Image(systemName: justRan ? "checkmark" : "play.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(justRan ? .green : .secondary)
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(settings.terminalRunMode == .autorun
+                            ? L("tooltip.runInTerminal")
+                            : L("tooltip.insertIntoTerminal"))
+                    }
+                    Button {
+                        copyContent()
+                    } label: {
+                        Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 9))
+                            .foregroundColor(justCopied ? .green : .secondary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(L("tooltip.tapToCopy"))
+                }
             }
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .onTapGesture {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(content, forType: .string)
-                withAnimation { justCopied = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    withAnimation { justCopied = false }
-                }
+                copyContent()
             }
             .help(L("tooltip.tapToCopy"))
         }
@@ -311,7 +354,7 @@ struct MarkdownBlocksView: View {
             if codeFenceLanguage == "mermaid" {
                 return .mermaid(code: content, complete: complete)
             }
-            return .code(content)
+            return .code(content: content, language: codeFenceLanguage)
         }
 
         func flushParagraph() {
@@ -545,7 +588,7 @@ struct MarkdownBlocksView: View {
                 html += "<ul>" + items.map { "<li>\($0.checked ? "☑" : "☐") \(inlineHTML($0.text))</li>" }.joined() + "</ul>"
             case .quote(let content):
                 html += "<blockquote>\(inlineHTML(content))</blockquote>"
-            case .code(let content), .artifact(_, let content, _), .mermaid(let content, _):
+            case .code(let content, _), .artifact(_, let content, _), .mermaid(let content, _):
                 html += "<pre>\(escapeHTML(content))</pre>"
             case .divider:
                 html += "<hr>"

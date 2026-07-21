@@ -273,6 +273,15 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(prefillFromSelection, forKey: "prefillFromSelection") }
     }
 
+    // MARK: - Terminal commands
+
+    /// What the ▶ button on shell code blocks does (see `TerminalCommandRunner`).
+    /// Default: insert into Terminal, the user presses Enter — nothing runs
+    /// without a human.
+    @Published var terminalRunMode: TerminalRunMode {
+        didSet { defaults.set(terminalRunMode.rawValue, forKey: "terminalRunMode") }
+    }
+
     // MARK: - Diagnostics
 
     /// Opt-in local logging + hang watchdog (see `Diagnostics`).
@@ -468,6 +477,7 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         holidayThemes = defaults.object(forKey: "holidayThemes") as? Bool ?? true
         panelFollowsMouse = defaults.object(forKey: "panelFollowsMouse") as? Bool ?? true
         prefillFromSelection = defaults.object(forKey: "prefillFromSelection") as? Bool ?? true
+        terminalRunMode = TerminalRunMode(rawValue: defaults.string(forKey: "terminalRunMode") ?? "") ?? .insert
         diagnosticsEnabled = defaults.bool(forKey: Diagnostics.defaultsKey)
         panelHasCustomPosition = defaults.bool(forKey: "panelHasCustomPosition")
         let lang = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .english
