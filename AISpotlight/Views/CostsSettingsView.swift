@@ -108,6 +108,7 @@ struct CostsSettingsView: View {
                 }
                 .chartForegroundStyleScale(domain: sliceLabels, range: sliceColors)
                 .chartLegend(position: .bottom, spacing: 6)
+                .chartXScale(domain: monthDomain)
                 .chartXAxis { dayAxisMarks }
                 .frame(height: 180)
                 .help(L("costs.dailyHelp"))
@@ -122,6 +123,7 @@ struct CostsSettingsView: View {
                     .foregroundStyle(by: .value("Model", slice.label))
                 }
                 .chartLegend(position: .bottom, spacing: 6)
+                .chartXScale(domain: monthDomain)
                 .chartXAxis { dayAxisMarks }
                 .frame(height: 180)
                 .help(L("costs.dailyHelp"))
@@ -129,12 +131,25 @@ struct CostsSettingsView: View {
         }
     }
 
+    /// Full span of the selected month. Without a fixed domain the chart
+    /// shrinks to the days that have data, which collapses the date axis
+    /// (no labels at all on sparse months) and makes bar widths jump
+    /// between months. Records are already month-filtered by SpendStore,
+    /// so this also caps the visible range at exactly one month.
+    private var monthDomain: ClosedRange<Date> {
+        let start = store.selectedMonth
+        let end = Calendar.current.date(byAdding: .month, value: 1, to: start) ?? start
+        return start...end
+    }
+
     /// Day-of-month numbers every few days — replaces Swift Charts' default
-    /// date axis, which degrades into an hour scale on sparse data.
+    /// date axis, which degrades into an hour scale on sparse data. Labels
+    /// sit on their gridline (not centered: with a 5-day stride, centering
+    /// would shift each label 2.5 days off its date).
     private var dayAxisMarks: some AxisContent {
         AxisMarks(values: .stride(by: .day, count: 5)) { _ in
             AxisGridLine()
-            AxisValueLabel(format: .dateTime.day(), centered: true)
+            AxisValueLabel(format: .dateTime.day())
         }
     }
 
