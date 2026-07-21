@@ -917,9 +917,13 @@ struct ChatWindow: View {
         return true
     }
 
-    /// True when there is nothing to send: no instruction and no quote.
+    /// True when there is nothing to send: no instruction, no quote and no
+    /// attachment. An attachment alone is sendable — preset system prompts
+    /// (e.g. a translator chat) act on the bare image without any typed text.
     private var composerIsEmpty: Bool {
-        messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && quotedText == nil
+        messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && quotedText == nil
+            && pendingAttachment == nil
     }
 
     private func sendMessage() {
@@ -938,7 +942,11 @@ struct ChatWindow: View {
         // The quote region (if any) becomes a markdown blockquote in the
         // outgoing text; on screen it was a styled block without markers.
         let text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
-        guard !text.isEmpty else { return }
+        // Attachment-only sends are allowed: the image goes to the model as
+        // is and the conversation's system prompt drives what happens to it.
+        // Providers already handle the empty text (vision → image block only,
+        // non-vision → OCR text is injected in buildLLMMessages).
+        guard !text.isEmpty || pendingAttachment != nil else { return }
         guard ensureChatConfigured() else {
             messageText = ""
             quotedText = nil
