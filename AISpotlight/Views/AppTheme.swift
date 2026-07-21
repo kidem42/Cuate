@@ -646,34 +646,46 @@ extension View {
     /// The panel's backing surface. `current` keeps the existing Liquid Glass;
     /// every other theme fills the panel with its gradient (plus signature
     /// pattern) instead of the glass material.
+    ///
+    /// On macOS 26 the glass and themed looks MUST share one modifier chain:
+    /// an `if palette.isGlass` branch tears the `glassEffect` node down when a
+    /// theme is picked and re-creates it on the way back — and a glass effect
+    /// re-created inside an already-visible borderless window loses its
+    /// backdrop connection, rendering as an opaque gray fill until relaunch
+    /// (screenshots still composite correctly; the breakage is on-screen
+    /// only). Keeping the node resident and switching `.regular ⇄ .identity`
+    /// avoids the teardown; identity glass draws nothing, so the themed looks
+    /// are pixel-identical to the old branch.
     @ViewBuilder
     func themedPanelSurface(_ palette: ThemePalette, cornerRadius: CGFloat) -> some View {
-        if palette.isGlass {
+        if #available(macOS 26.0, *) {
+            self
+                .background { PanelBackdrop(palette: palette) }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay {
+                    if !palette.isGlass {
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .stroke(palette.panelBorder ?? palette.accent.opacity(0.3),
+                                    lineWidth: palette.panelBorder == nil ? 0.5 : 1)
+                    }
+                }
+                // Blueprint's reference crosses in the four panel corners.
+                .overlay {
+                    if let markColor = palette.cornerMarkColor {
+                        BlueprintCornerMarks(color: markColor)
+                    }
+                }
+                // Synthwave's neon halo around the panel; nil → invisible.
+                .shadow(color: palette.panelGlow ?? .clear, radius: 12)
+                .glassEffect(palette.isGlass ? .regular.interactive() : .identity,
+                             in: .rect(cornerRadius: cornerRadius))
+        } else if palette.isGlass {
+            // Pre-26: the material fallback has no resident glass node to
+            // preserve — the original branches stay.
             self.adaptiveGlass(cornerRadius: cornerRadius)
         } else {
             self
-                .background {
-                    ZStack {
-                        if palette.glassSurface {
-                            // Hybrid glass (Halloween/Día): keep the desktop
-                            // blur, but lay the spec's radial gradient over it
-                            // at high opacity — the deep theme colors match the
-                            // design on any wallpaper, while a hint of the
-                            // desktop still breathes through the glass.
-                            Rectangle().fill(.ultraThinMaterial)
-                            Rectangle().fill(palette.backgroundStyle).opacity(0.85)
-                            // The spec's panel wash over the backdrop gradient
-                            // (light: milky rgba(255,250,240,0.5) — the panel
-                            // interior reads creamier than the raw gradient).
-                            Rectangle().fill(palette.panelTint)
-                        } else {
-                            // Solid themed fill (other themes).
-                            Rectangle().fill(palette.backgroundStyle)
-                        }
-                        ThemePatternOverlay(pattern: palette.pattern)
-                        ThemeDecorations(themeID: palette.themeID)
-                    }
-                }
+                .background { PanelBackdrop(palette: palette) }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay(
                     RoundedRectangle(cornerRadius: cornerRadius)
@@ -703,6 +715,39 @@ extension View {
             self
                 .background(RoundedRectangle(cornerRadius: palette.inputRadius).fill(palette.inputFill))
                 .overlay(RoundedRectangle(cornerRadius: palette.inputRadius).stroke(palette.inputStroke, lineWidth: 1))
+        }
+    }
+}
+
+/// The panel's themed background stack (gradient/hybrid glass + signature
+/// pattern + decorations), shared by both availability branches of
+/// `themedPanelSurface`. Empty for the Liquid Glass theme — its surface is the
+/// glass effect itself.
+private struct PanelBackdrop: View {
+    let palette: ThemePalette
+
+    var body: some View {
+        if !palette.isGlass {
+            ZStack {
+                if palette.glassSurface {
+                    // Hybrid glass (Halloween/Día): keep the desktop
+                    // blur, but lay the spec's radial gradient over it
+                    // at high opacity — the deep theme colors match the
+                    // design on any wallpaper, while a hint of the
+                    // desktop still breathes through the glass.
+                    Rectangle().fill(.ultraThinMaterial)
+                    Rectangle().fill(palette.backgroundStyle).opacity(0.85)
+                    // The spec's panel wash over the backdrop gradient
+                    // (light: milky rgba(255,250,240,0.5) — the panel
+                    // interior reads creamier than the raw gradient).
+                    Rectangle().fill(palette.panelTint)
+                } else {
+                    // Solid themed fill (other themes).
+                    Rectangle().fill(palette.backgroundStyle)
+                }
+                ThemePatternOverlay(pattern: palette.pattern)
+                ThemeDecorations(themeID: palette.themeID)
+            }
         }
     }
 }
