@@ -499,4 +499,88 @@ struct MarkdownBlocksView: View {
         parseCache.setObject(BlockBox(blocks), forKey: cacheKey)
         return blocks
     }
+
+    // MARK: - Clipboard HTML
+
+    /// Single entry point for copying message markdown: writes the plain
+    /// string always, plus an HTML flavor when the text contains a pipe
+    /// table (see `clipboardHTML`). Used by the bubble copy button and the
+    /// OCR auto-copy — both must behave identically.
+    static func copyMarkdownToPasteboard(_ markdown: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if let html = clipboardHTML(from: markdown) {
+            let item = NSPasteboardItem()
+            item.setString(markdown, forType: .string)
+            item.setString(html, forType: .html)
+            pasteboard.writeObjects([item])
+        } else {
+            pasteboard.setString(markdown, forType: .string)
+        }
+    }
+
+    /// HTML flavor for the copy button: spreadsheets (Google Sheets, Excel,
+    /// Numbers) split a paste into cells only when the clipboard carries an
+    /// HTML `<table>` (or TSV) — raw pipe-markdown lands as text in a single
+    /// column. Returns nil when the message contains no table, so ordinary
+    /// messages keep the plain-string-only clipboard exactly as before.
+    static func clipboardHTML(from text: String) -> String? {
+        let blocks = parse(text)
+        let hasTable = blocks.contains { if case .table = $0 { return true } else { return false } }
+        guard hasTable else { return nil }
+
+        var html = "<meta charset=\"utf-8\">"
+        for block in blocks {
+            switch block {
+            case .paragraph(let content):
+                html += "<p>\(inlineHTML(content))</p>"
+            case .heading(let level, let content):
+                let tag = "h\(min(max(level, 1), 6))"
+                html += "<\(tag)>\(inlineHTML(content))</\(tag)>"
+            case .bullets(let items):
+                html += "<ul>" + items.map { "<li>\(inlineHTML($0))</li>" }.joined() + "</ul>"
+            case .numbered(let items):
+                html += "<ol>" + items.map { "<li>\(inlineHTML($0))</li>" }.joined() + "</ol>"
+            case .tasks(let items):
+                html += "<ul>" + items.map { "<li>\($0.checked ? "☑" : "☐") \(inlineHTML($0.text))</li>" }.joined() + "</ul>"
+            case .quote(let content):
+                html += "<blockquote>\(inlineHTML(content))</blockquote>"
+            case .code(let content), .artifact(_, let content, _), .mermaid(let content, _):
+                html += "<pre>\(escapeHTML(content))</pre>"
+            case .divider:
+                html += "<hr>"
+            case .table(let rows):
+                html += "<table>"
+                for (rowIndex, row) in rows.enumerated() {
+                    let cellTag = rowIndex == 0 ? "th" : "td"
+                    html += "<tr>" + row.map { "<\(cellTag)>\(inlineHTML($0))</\(cellTag)>" }.joined() + "</tr>"
+                }
+                html += "</table>"
+            }
+        }
+        return html
+    }
+
+    private static func escapeHTML(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    /// Minimal inline markdown → HTML for clipboard cells: links, bold,
+    /// inline code. Single-`*` italics are left alone — a lone asterisk in
+    /// OCR'd table data is far more common than intentional italics.
+    private static func inlineHTML(_ text: String) -> String {
+        var s = escapeHTML(text)
+        s = s.replacingOccurrences(
+            of: #"\[([^\]]+)\]\((https?://[^)\s]+)\)"#,
+            with: "<a href=\"$2\">$1</a>", options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: #"\*\*([^*]+)\*\*"#,
+            with: "<b>$1</b>", options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: #"`([^`]+)`"#,
+            with: "<code>$1</code>", options: .regularExpression)
+        return s
+    }
 }

@@ -1200,8 +1200,9 @@ struct ChatWindow: View {
                     imageBase64: attachment.contentBase64,
                     mimeType: attachment.mimeType
                 )
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(markdown, forType: .string)
+                // Same dual-flavor copy as the bubble button: tables get an
+                // HTML <table> flavor so spreadsheets split them into cells.
+                MarkdownBlocksView.copyMarkdownToPasteboard(markdown)
                 clearCurrentAttachment()
                 // Show the source screenshot in the chat, then the extracted text.
                 chatStore.appendNow(ChatMessage(text: "", isUser: true, attachments: [attachment]))

@@ -354,8 +354,10 @@ struct CopyableBubble: ViewModifier {
     }
 
     private func copyPayload(_ payload: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(payload, forType: .string)
+        // Messages with pipe tables also publish an HTML flavor: spreadsheets
+        // (Sheets/Excel/Numbers) only split a paste into cells from an HTML
+        // <table>, while plain-text targets keep receiving the raw markdown.
+        MarkdownBlocksView.copyMarkdownToPasteboard(payload)
         withAnimation { justCopied = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             withAnimation { justCopied = false }
