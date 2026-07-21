@@ -10,8 +10,17 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case deepseek
     case openrouter
     case kimi
+    case ollama
 
     var id: String { rawValue }
+
+    /// Local providers run on the user's machine (Ollama and other
+    /// OpenAI-compatible servers) — no API key, availability is gated on
+    /// endpoint reachability instead of a stored key.
+    var isLocal: Bool { self == .ollama }
+
+    /// Cloud providers need a Keychain API key; local ones do not.
+    var requiresAPIKey: Bool { !isLocal }
 
     var displayName: String {
         switch self {
@@ -22,6 +31,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .deepseek: return "DeepSeek"
         case .openrouter: return "OpenRouter"
         case .kimi: return "Kimi (Moonshot)"
+        case .ollama: return "Ollama (Local)"
         }
     }
 
@@ -50,6 +60,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .deepseek: return "DS"
         case .openrouter: return "OR"
         case .kimi: return "K"
+        case .ollama: return "O"
         }
     }
 
@@ -63,6 +74,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .deepseek: return 0x4D6BFE  // DeepSeek blue
         case .openrouter: return 0x6467F2 // OpenRouter indigo
         case .kimi: return 0x16191E      // Kimi charcoal
+        case .ollama: return 0x2B2B2B    // Ollama charcoal
         }
     }
 
@@ -76,6 +88,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .deepseek: return URL(string: "https://platform.deepseek.com/api_keys")!
         case .openrouter: return URL(string: "https://openrouter.ai/keys")!
         case .kimi: return URL(string: "https://platform.moonshot.ai/console/api-keys")!
+        // Local: no key page — link to the install/download page instead.
+        case .ollama: return URL(string: "https://ollama.com/download")!
         }
     }
 
@@ -113,6 +127,10 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
             return []
         case .kimi:
             return ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"]
+        case .ollama:
+            // Common local defaults, best first — matched against the models the
+            // user has actually pulled (falls back to the first installed one).
+            return ["gemma3", "llama3.2", "qwen2.5", "mistral"]
         }
     }
 }
@@ -377,7 +395,7 @@ enum ModelCapabilities {
                 || m.contains("fable") || m.contains("mythos")
         case .gemini:
             return m.contains("2.5") || m.contains("gemini-3")
-        case .mistral, .deepseek, .openrouter, .kimi:
+        case .mistral, .deepseek, .openrouter, .kimi, .ollama:
             return false
         }
     }

@@ -6,6 +6,7 @@ import AVFoundation
 enum SettingsTab: String, Hashable {
     case chat, keys, voice, general, appearance, prompts
     case costs // spend analytics (Views/CostsSettingsView)
+    case localModels // Local models console (Views/LocalModelsSettingsView)
     case layoutFix // LayoutFix addon (Addons/LayoutFix)
     case imageAddon // ImageAddon (Addons/ImageAddon)
 }
@@ -66,11 +67,26 @@ struct SettingsView: View {
         .onChange(of: imageAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .imageAddon { selectedTab = .general }
         }
+        // Local-models tab bounces back to General when the feature is turned off.
+        .onChange(of: settings.localModelsEnabled) { _, enabled in
+            if enabled {
+                Task { await settings.verifyLocalEndpoint() }
+            } else if selectedTab == .localModels {
+                selectedTab = .general
+            }
+            reselectProviderIfOrphaned()
+        }
+        .onChange(of: settings.onlineModelsEnabled) { _, _ in
+            reselectProviderIfOrphaned()
+        }
         .frame(minWidth: 720, minHeight: 560)
         .onAppear {
             refreshMasks()
             sttModelInput = settings.sttModel(for: settings.sttProvider)
             settings.autoLoadModelsIfNeeded(for: settings.chatProvider)
+            if settings.localModelsEnabled {
+                Task { await settings.verifyLocalEndpoint() }
+            }
             validateAllKeys()
             refreshPermissions()
         }
@@ -95,6 +111,12 @@ struct SettingsView: View {
                 .tag(SettingsTab.chat)
             sidebarRow(L("tab.keys"), systemImage: "key.fill", color: .orange)
                 .tag(SettingsTab.keys)
+            // Local models row appears only while the feature is enabled
+            // (master switch lives in the General section).
+            if settings.localModelsEnabled {
+                sidebarRow(L("tab.localModels"), systemImage: "cpu", color: .mint)
+                    .tag(SettingsTab.localModels)
+            }
             sidebarRow(L("tab.voice"), systemImage: "mic.fill", color: .red)
                 .tag(SettingsTab.voice)
             sidebarRow(L("tab.general"), systemImage: "gearshape.fill", color: .gray)
@@ -149,6 +171,7 @@ struct SettingsView: View {
             case .appearance: tab { appearanceSection }
             case .prompts: tab { switcherSection; promptSection }
             case .costs: CostsSettingsView()           // brings its own Form
+            case .localModels: LocalModelsSettingsView() // brings its own Form
             case .layoutFix: LayoutFixSettingsView()   // brings its own Form
             case .imageAddon: ImageAddonSettingsView() // brings its own Form
             }
@@ -183,7 +206,9 @@ struct SettingsView: View {
     private var chatSection: some View {
         Section(L("chat.header")) {
             Picker(L("chat.provider"), selection: $settings.chatProvider) {
-                ForEach(ProviderID.allCases) { provider in
+                // Only classes the user has switched on (cloud vs local) — the
+                // local provider appears once "Local models" is enabled.
+                ForEach(ProviderID.allCases.filter { settings.isProviderClassEnabled($0) }) { provider in
                     Label {
                         Text(provider.displayName)
                     } icon: {
@@ -216,9 +241,11 @@ struct SettingsView: View {
                     Button(isLoadingModels ? L("chat.loading") : L("chat.loadModels")) {
                         loadModels()
                     }
-                    .disabled(isLoadingModels || !APIKeyStore.hasKey(for: settings.chatProvider))
+                    // Local: loadable once the class is on (loading itself
+                    // verifies the endpoint). Cloud: needs a key first.
+                    .disabled(isLoadingModels || !canLoadModels(settings.chatProvider))
 
-                    if !APIKeyStore.hasKey(for: settings.chatProvider) {
+                    if !settings.chatProvider.isLocal && !APIKeyStore.hasKey(for: settings.chatProvider) {
                         Text(L("chat.addKeyFirst"))
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -242,6 +269,21 @@ struct SettingsView: View {
                 statusIsError = true
             }
             isLoadingModels = false
+        }
+    }
+
+    /// Local models load once their master switch is on (the fetch itself
+    /// verifies the endpoint); cloud providers need a key first.
+    private func canLoadModels(_ provider: ProviderID) -> Bool {
+        provider.isLocal ? settings.localModelsEnabled : APIKeyStore.hasKey(for: provider)
+    }
+
+    /// After a master toggle changes, move the active chat provider off a class
+    /// that is now disabled, onto the first still-enabled one (if any).
+    private func reselectProviderIfOrphaned() {
+        guard !settings.isProviderClassEnabled(settings.chatProvider) else { return }
+        if let next = ProviderID.allCases.first(where: { settings.isProviderClassEnabled($0) }) {
+            settings.chatProvider = next
         }
     }
 
@@ -291,7 +333,9 @@ struct SettingsView: View {
 
     private var keysSection: some View {
         Section {
-            ForEach(ProviderID.allCases) { provider in
+            // Local providers have no API key — they're configured in the
+            // Local models tab, not here.
+            ForEach(ProviderID.allCases.filter { !$0.isLocal }) { provider in
                 keyRow(for: provider)
             }
         } header: {
@@ -827,6 +871,8 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            LocalModelsEnableToggle() // local models master switch
+            OnlineModelsEnableToggle() // cloud providers master switch
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
             ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
         }

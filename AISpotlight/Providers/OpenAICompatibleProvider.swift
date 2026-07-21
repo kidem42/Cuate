@@ -33,7 +33,11 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// OpenRouter gets an `X-Title` attribution header for its app rankings.
     private func makeRequest(path: String, apiKey: String) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        // Local servers (Ollama et al.) take no key — send Authorization only
+        // when we actually have one, so an empty "Bearer " header isn't sent.
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         if providerID == .openrouter {
             request.setValue("AISpotlight", forHTTPHeaderField: "X-Title")
         }
@@ -120,7 +124,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         // Kimi (e2e 2026-07-20 showed Kimi sends no usage without it; Moonshot's
         // migration guide documents the flag). Mistral is excluded until
         // verified live — unknown params risk a 422 there.
-        if providerID == .deepseek || providerID == .openrouter || providerID == .kimi {
+        if providerID == .deepseek || providerID == .openrouter || providerID == .kimi
+            || providerID == .ollama {
             body["stream_options"] = ["include_usage": true]
         }
         if !options.tools.isEmpty {

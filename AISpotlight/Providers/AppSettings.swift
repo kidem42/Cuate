@@ -41,6 +41,12 @@ enum PresetSwitcherStyle: String, CaseIterable, Identifiable {
     }
 }
 
+extension Notification.Name {
+    /// Posted when the local-models master switch or Ollama detection changes —
+    /// the status-bar menu rebuilds so its start/stop control appears/disappears.
+    static let localModelsMenuDidChange = Notification.Name("localModelsMenuDidChange")
+}
+
 /// Non-secret app settings (provider choice, models, system prompt).
 /// API keys are NOT stored here — they live in the Keychain (`APIKeyStore`).
 @MainActor
@@ -64,6 +70,69 @@ final class AppSettings: ObservableObject {
     @Published private(set) var cachedModels: [String: [String]] {
         didSet { defaults.set(cachedModels, forKey: "cachedModels") }
     }
+
+    // MARK: - Local models (Ollama / OpenAI-compatible endpoint)
+
+    static let defaultLocalEndpointURL = "http://localhost:11434/v1"
+
+    /// Master switch for local models — off by default (opt-in feature, like
+    /// the addons). When on, the local provider joins the pickers and the
+    /// "Local models" settings tab appears.
+    @Published var localModelsEnabled: Bool {
+        didSet {
+            defaults.set(localModelsEnabled, forKey: "localModelsEnabled")
+            if localModelsEnabled != oldValue {
+                NotificationCenter.default.post(name: .localModelsMenuDidChange, object: nil)
+            }
+        }
+    }
+
+    /// Master switch for cloud providers — on by default. Turning it off hides
+    /// every cloud provider (fully local/offline posture).
+    @Published var onlineModelsEnabled: Bool {
+        didSet { defaults.set(onlineModelsEnabled, forKey: "onlineModelsEnabled") }
+    }
+
+    /// Base URL of the local OpenAI-compatible endpoint (Ollama's default; the
+    /// user can point it at LM Studio, vLLM, llama.cpp, LocalAI, …).
+    @Published var localEndpointURL: String {
+        didSet { defaults.set(localEndpointURL, forKey: "localEndpointURL") }
+    }
+
+    /// Cached "the /v1 endpoint answered" flag — gates the local provider the
+    /// way key-presence gates the cloud ones.
+    @Published var localEndpointVerified: Bool {
+        didSet { defaults.set(localEndpointVerified, forKey: "localEndpointVerified") }
+    }
+
+    /// Cached "the endpoint is actually Ollama (native /api present)" flag —
+    /// gates the Ollama-only management console.
+    @Published var ollamaDetected: Bool {
+        didSet {
+            defaults.set(ollamaDetected, forKey: "ollamaDetected")
+            if ollamaDetected != oldValue {
+                NotificationCenter.default.post(name: .localModelsMenuDidChange, object: nil)
+            }
+        }
+    }
+
+    /// Per-model capabilities for local Ollama models, from `/api/show`
+    /// (vision/tools). Persisted as JSON like `openRouterCatalog`.
+    @Published private(set) var ollamaCatalog: [String: ModelInfo] {
+        didSet {
+            if let data = try? JSONEncoder().encode(ollamaCatalog) {
+                defaults.set(data, forKey: "ollamaCatalog")
+            }
+        }
+    }
+
+    /// Models currently loaded in memory (from `/api/ps`). Runtime only —
+    /// drives the "in memory" indicators and the menu-bar status.
+    @Published var ollamaLoadedModels: Set<String> = []
+
+    /// Bytes each loaded model holds in (V)RAM (from `/api/ps`) — its real
+    /// memory footprint, shown next to the "in memory" badge. Runtime only.
+    @Published var ollamaLoadedVRAM: [String: Int64] = [:]
 
     // MARK: - OpenRouter model catalog & history
 
@@ -449,6 +518,13 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         chatProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
         selectedModels = defaults.dictionary(forKey: "selectedModels") as? [String: String] ?? [:]
         cachedModels = defaults.dictionary(forKey: "cachedModels") as? [String: [String]] ?? [:]
+        localModelsEnabled = defaults.object(forKey: "localModelsEnabled") as? Bool ?? false
+        onlineModelsEnabled = defaults.object(forKey: "onlineModelsEnabled") as? Bool ?? true
+        localEndpointURL = defaults.string(forKey: "localEndpointURL") ?? Self.defaultLocalEndpointURL
+        localEndpointVerified = defaults.object(forKey: "localEndpointVerified") as? Bool ?? false
+        ollamaDetected = defaults.object(forKey: "ollamaDetected") as? Bool ?? false
+        ollamaCatalog = (defaults.data(forKey: "ollamaCatalog")
+            .flatMap { try? JSONDecoder().decode([String: ModelInfo].self, from: $0) }) ?? [:]
         openRouterCatalog = (defaults.data(forKey: "openRouterCatalog")
             .flatMap { try? JSONDecoder().decode([String: ModelInfo].self, from: $0) }) ?? [:]
         openRouterModelHistory = defaults.stringArray(forKey: "openRouterModelHistory") ?? []
@@ -664,9 +740,7 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
 
     /// Fetches the model list for a provider from its API and caches it.
     func refreshModels(for provider: ProviderID) async throws {
-        guard let apiKey = APIKeyStore.key(for: provider) else {
-            throw ProviderError.missingAPIKey(provider)
-        }
+        let apiKey = try resolvedAPIKey(for: provider)
         let models = try await ProviderRegistry.provider(for: provider).fetchModels(apiKey: apiKey)
         cachedModels[provider.rawValue] = models
         // Auto-select a sensible default if none is selected or the selection
@@ -705,8 +779,98 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
             autoLoadOpenRouterCatalogIfNeeded()
             return
         }
-        guard models(for: provider).isEmpty, APIKeyStore.hasKey(for: provider) else { return }
+        // Local providers load without a key (gated on the master switch);
+        // cloud ones need a key present.
+        let ready = provider.isLocal ? localModelsEnabled : APIKeyStore.hasKey(for: provider)
+        guard models(for: provider).isEmpty, ready else { return }
         Task { try? await refreshModels(for: provider) }
+    }
+
+    // MARK: - Local model availability & endpoint
+
+    /// The key handed to a provider's request. Cloud providers must have one;
+    /// local providers get an empty string (their server ignores auth).
+    func resolvedAPIKey(for provider: ProviderID) throws -> String {
+        if let key = APIKeyStore.key(for: provider) { return key }
+        if provider.requiresAPIKey { throw ProviderError.missingAPIKey(provider) }
+        return ""
+    }
+
+    /// Whether the provider's class is switched on (cloud vs local master
+    /// toggle). Used by config pickers, where a key may not be entered yet.
+    func isProviderClassEnabled(_ provider: ProviderID) -> Bool {
+        provider.isLocal ? localModelsEnabled : onlineModelsEnabled
+    }
+
+    /// Whether the provider is actually ready to send: class enabled AND
+    /// reachable (local endpoint verified) / keyed (cloud). Used by the panel
+    /// provider switcher and the send guard.
+    func isAvailable(_ provider: ProviderID) -> Bool {
+        guard isProviderClassEnabled(provider) else { return false }
+        return provider.isLocal ? localEndpointVerified : APIKeyStore.hasKey(for: provider)
+    }
+
+    /// Verifies the local endpoint: refreshes the `/v1` model list (sets
+    /// `localEndpointVerified`), probes whether it's Ollama (`ollamaDetected`),
+    /// and — if so — refreshes per-model capabilities into `ollamaCatalog`.
+    /// Best-effort; returns whether `/v1` answered.
+    @discardableResult
+    func verifyLocalEndpoint() async -> Bool {
+        do {
+            try await refreshModels(for: .ollama)
+            localEndpointVerified = true
+        } catch {
+            localEndpointVerified = false
+            ollamaDetected = false
+            ollamaLoadedModels = []
+            return false
+        }
+        let admin = OllamaAdminService(endpointURL: localEndpointURL)
+        ollamaDetected = await admin.detect()
+        if ollamaDetected {
+            await refreshOllamaCatalog(using: admin)
+            await refreshOllamaLoaded(using: admin)
+        }
+        return true
+    }
+
+    /// Populates `ollamaCatalog` (vision/tools per model) from `/api/show`.
+    func refreshOllamaCatalog(using admin: OllamaAdminService) async {
+        var catalog = ollamaCatalog
+        for model in models(for: .ollama) {
+            if let info = try? await admin.show(model: model) {
+                catalog[model] = info
+            }
+        }
+        ollamaCatalog = catalog
+    }
+
+    /// Refreshes which Ollama models are currently loaded in memory (`/api/ps`).
+    /// Polls `/api/ps` until `model`'s loaded state settles to `expected`, or a
+    /// ~1.5s timeout. Ollama's `/api/ps` lags ~100ms behind the load/unload
+    /// response (the llama-server subprocess is still tearing down), so a single
+    /// immediate refresh reads the stale state — the UI then looks like the
+    /// action didn't work until the next poll.
+    func refreshOllamaLoadedUntil(model: String, loaded expected: Bool,
+                                  using admin: OllamaAdminService) async {
+        for attempt in 0..<10 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 150_000_000) }
+            await refreshOllamaLoaded(using: admin)
+            if ollamaLoadedModels.contains(model) == expected { return }
+        }
+    }
+
+    func refreshOllamaLoaded(using admin: OllamaAdminService) async {
+        guard let loaded = try? await admin.ps() else { return }
+        // Assign only on change: a @Published Set/Dictionary fires objectWillChange
+        // on every assignment even when equal, and an unconditional assign here
+        // re-renders the settings tree → re-fires the view's onAppear refresh →
+        // a tight tags/ps polling loop. Equality-gating breaks that feedback.
+        let names = Set(loaded.map(\.name))
+        if names != ollamaLoadedModels { ollamaLoadedModels = names }
+        let vram = Dictionary(loaded.map { ($0.name, $0.sizeVRAM) },
+                              uniquingKeysWith: { first, _ in first })
+        if vram != ollamaLoadedVRAM { ollamaLoadedVRAM = vram }
     }
 
     // MARK: - OpenRouter catalog & manual model entry
@@ -772,6 +936,10 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         if provider == .openrouter {
             return openRouterModelInfo(for: model)?.supportsVision ?? true
         }
+        // Local: real capabilities from Ollama's /api/show (optimistic until cached).
+        if provider == .ollama {
+            return ollamaCatalog[model]?.supportsVision ?? true
+        }
         return provider.supportsVision
     }
 
@@ -780,6 +948,9 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
     func modelSupportsTools(provider: ProviderID, model: String) -> Bool {
         if provider == .openrouter {
             return openRouterModelInfo(for: model)?.supportsTools ?? true
+        }
+        if provider == .ollama {
+            return ollamaCatalog[model]?.supportsTools ?? true
         }
         return true
     }
@@ -805,6 +976,13 @@ enum ProviderRegistry {
         case .gemini: return GeminiProvider()
         case .openrouter: return OpenAICompatibleProvider.openRouter
         case .kimi: return OpenAICompatibleProvider.kimi
+        case .ollama:
+            // Base URL is user-configurable; read straight from UserDefaults so
+            // this stays nonisolated (no @MainActor AppSettings.shared hop).
+            let raw = UserDefaults.standard.string(forKey: "localEndpointURL")
+                ?? AppSettings.defaultLocalEndpointURL
+            let url = URL(string: raw) ?? URL(string: AppSettings.defaultLocalEndpointURL)!
+            return OpenAICompatibleProvider(providerID: .ollama, baseURL: url)
         }
     }
 }

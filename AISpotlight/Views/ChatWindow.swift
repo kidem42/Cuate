@@ -633,9 +633,10 @@ struct ChatWindow: View {
         L("panel.welcome")
     }
 
-    /// Chat providers that currently have an API key — for the quick switcher.
+    /// Chat providers that are ready to use (keyed cloud, or reachable local)
+    /// and whose class is enabled — for the quick switcher.
     private var availableProviders: [ProviderID] {
-        ProviderID.allCases.filter { APIKeyStore.hasKey(for: $0) }
+        ProviderID.allCases.filter { settings.isAvailable($0) }
     }
 
     /// Shared look for the header controls: small icon + 11pt secondary text,
@@ -904,7 +905,7 @@ struct ChatWindow: View {
 
     /// Verifies the active chat provider is configured; posts a hint otherwise.
     private func ensureChatConfigured() -> Bool {
-        guard APIKeyStore.hasKey(for: settings.chatProvider) else {
+        guard settings.isAvailable(settings.chatProvider) else {
             chatStore.addMessage(text: L("panel.noProviderKey"), isUser: false, messageType: .system)
             return false
         }

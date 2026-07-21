@@ -20,6 +20,10 @@ struct ProviderGlyph: View {
     let name: String
     let fallbackLetter: String
     var size: CGFloat = 16
+    /// SF Symbol used when there's no `Provider-<name>` asset — preferred over
+    /// the lettered badge for providers without a brand glyph (e.g. local/Ollama,
+    /// which would otherwise render as a bare, unrecognizable letter).
+    var systemFallback: String? = nil
 
     var body: some View {
         if let base = NSImage(named: "Provider-\(name)") {
@@ -30,6 +34,11 @@ struct ProviderGlyph: View {
             Image(nsImage: sized)
                 .renderingMode(.template)
                 .foregroundColor(.secondary)
+        } else if let systemFallback {
+            Image(systemName: systemFallback)
+                .font(.system(size: size * 0.82))
+                .foregroundColor(.secondary)
+                .frame(width: size, height: size)
         } else {
             RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
                 .fill(Color.secondary.opacity(0.3))
@@ -49,7 +58,14 @@ struct ProviderLogo: View {
     var size: CGFloat = 16
 
     var body: some View {
-        ProviderGlyph(name: provider.rawValue, fallbackLetter: provider.badgeLetter, size: size)
+        ProviderGlyph(
+            name: provider.rawValue,
+            fallbackLetter: provider.badgeLetter,
+            size: size,
+            // Local providers have no brand asset — use a hardware glyph
+            // (matches the Local models tab icon) instead of a bare letter.
+            systemFallback: provider.isLocal ? "cpu" : nil
+        )
     }
 }
 

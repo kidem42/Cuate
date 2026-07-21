@@ -30,9 +30,7 @@ enum ChatService {
         let settings = AppSettings.shared
         let providerID = settings.chatProvider
 
-        guard let apiKey = APIKeyStore.key(for: providerID) else {
-            throw ProviderError.missingAPIKey(providerID)
-        }
+        let apiKey = try settings.resolvedAPIKey(for: providerID)
         guard let model = settings.selectedModel(for: providerID) else {
             throw ProviderError.http(status: 0, message: "No model selected for \(providerID.displayName). Open Settings and load the model list.")
         }
@@ -367,7 +365,7 @@ You have a web_search tool. Use it when the answer depends on current events, li
     @MainActor
     static func compressHistoryIfNeeded(store: ChatStore) async {
         let settings = AppSettings.shared
-        guard let apiKey = APIKeyStore.key(for: settings.chatProvider),
+        guard let apiKey = try? settings.resolvedAPIKey(for: settings.chatProvider),
               let model = settings.selectedModel(for: settings.chatProvider) else { return }
 
         // Captured BEFORE the summarization call: it takes seconds, and the

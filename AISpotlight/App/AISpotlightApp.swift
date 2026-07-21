@@ -14,12 +14,15 @@ struct AISpotlightApp: App {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private var chatWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var hotkeyManager: HotkeyManager?
     private var statusItem: NSStatusItem?
+    /// Status-bar submenu listing local models with per-model load/unload
+    /// toggles — repopulated live in `menuNeedsUpdate` so its status stays fresh.
+    private weak var localModelsSubmenu: NSMenu?
     private let appState = AppState()
     private enum HotkeyIdentifier: UInt32 {
         case togglePanel = 1
@@ -79,6 +82,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Refresh the menu when the LayoutFix addon toggles (enable / auto).
         NotificationCenter.default.addObserver(forName: .layoutFixHotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.setupStatusItem() }
+        }
+
+        // Rebuild the menu when local models toggle on/off or Ollama is (un)detected,
+        // so the local model start/stop control appears/disappears promptly.
+        NotificationCenter.default.addObserver(forName: .localModelsMenuDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.setupStatusItem() }
         }
 
@@ -241,6 +250,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             menu.addItem(NSMenuItem.separator())
         }
 
+        // Local models — nested submenu: each installed model with a load/unload
+        // toggle (checkmark = in memory) and its footprint (Ollama only).
+        localModelsSubmenu = nil
+        if settings.localModelsEnabled, settings.ollamaDetected,
+           !settings.models(for: .ollama).isEmpty {
+            menu.addItem(NSMenuItem.separator())
+
+            let parent = NSMenuItem(title: L("tab.localModels"), action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            submenu.delegate = self
+            rebuildLocalModelsSubmenu(submenu)
+            parent.submenu = submenu
+            localModelsSubmenu = submenu
+            menu.addItem(parent)
+
+            menu.addItem(NSMenuItem.separator())
+        }
+
         let settingsItem = NSMenuItem(title: L("menu.settings"), action: #selector(openSettings(_:)), keyEquivalent: ",")
         settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = self
@@ -276,9 +303,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
+        menu.delegate = self
         item.menu = menu
 
         self.statusItem = item
+    }
+
+    /// (Re)fills the local-models submenu: one item per installed model, a
+    /// checkmark when it's in memory, and its footprint. Safe to call on an open
+    /// submenu (that's what `menuNeedsUpdate` is for).
+    private func rebuildLocalModelsSubmenu(_ submenu: NSMenu) {
+        let settings = AppSettings.shared
+        submenu.removeAllItems()
+        for model in settings.models(for: .ollama) {
+            let loaded = settings.ollamaLoadedModels.contains(model)
+            var title = model
+            if loaded, let vram = settings.ollamaLoadedVRAM[model], vram > 0 {
+                title += "  ·  " + ByteCountFormatter.string(fromByteCount: vram, countStyle: .file)
+            }
+            let item = NSMenuItem(title: title,
+                                  action: #selector(toggleLocalModelItem(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.state = loaded ? .on : .off   // checkmark = loaded/running
+            item.representedObject = model
+            submenu.addItem(item)
+        }
+        if submenu.items.isEmpty {
+            let empty = NSMenuItem(title: L("local.noModels"), action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            submenu.addItem(empty)
+        }
+    }
+
+    /// Before the local-models submenu shows, fill it from cache instantly, then
+    /// refresh the loaded state and refill so the checkmarks/memory are live.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === localModelsSubmenu else { return }
+        rebuildLocalModelsSubmenu(menu)
+        let settings = AppSettings.shared
+        let admin = OllamaAdminService(endpointURL: settings.localEndpointURL)
+        Task { @MainActor in
+            await settings.refreshOllamaLoaded(using: admin)
+            rebuildLocalModelsSubmenu(menu)
+        }
+    }
+
+    /// Toggle a local model's load/unload from the submenu. Reads the LIVE
+    /// loaded state (not the item's checkmark, which can lag), so the action is
+    /// never inverted.
+    @objc private func toggleLocalModelItem(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? String else { return }
+        let wasLoaded = AppSettings.shared.ollamaLoadedModels.contains(model)
+        Task { @MainActor in
+            let admin = OllamaAdminService(endpointURL: AppSettings.shared.localEndpointURL)
+            if wasLoaded { try? await admin.unload(model: model) }
+            else { try? await admin.load(model: model) }
+            // Wait for /api/ps to actually reflect the change (it lags the response).
+            await AppSettings.shared.refreshOllamaLoadedUntil(model: model, loaded: !wasLoaded, using: admin)
+        }
     }
 
     private func setupHotkeys() {

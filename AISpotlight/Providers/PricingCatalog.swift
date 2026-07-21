@@ -45,6 +45,13 @@ nonisolated enum PricingCatalog {
     /// "claude-sonnet-5" matches "claude-sonnet-5-20250929", and "gpt-5.5"
     /// prefers the "gpt-5.5" entry over "gpt-5".
     static func pricing(provider: ProviderID, model: String) -> ModelPricing? {
+        // Local models run on the user's machine — always free. Returning an
+        // all-zero price (not nil) makes the ledger record $0.00 rather than
+        // "no price".
+        if provider.isLocal {
+            return ModelPricing(inputPerToken: 0, outputPerToken: 0,
+                                cacheReadPerToken: 0, cacheWritePerToken: 0)
+        }
         guard let table = catalog[provider.rawValue] else { return nil }
         if let exact = table[model] { return exact }
         let candidate = table.keys
