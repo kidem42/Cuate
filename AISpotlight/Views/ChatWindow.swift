@@ -32,6 +32,13 @@ struct ChatWindow: View {
         case transcription(URL)
     }
     @State private var pendingRetry: RetryAction?
+    /// Pending "start this local model?" confirmation, shown as an assistant-style
+    /// bubble with Yes/No buttons in the chat (instead of sending straight away).
+    private struct PendingLocalStart {
+        let prompt: String
+        let send: () -> Void
+    }
+    @State private var pendingLocalStart: PendingLocalStart?
     /// In-flight assistant reply. Survives conversation switches (the reply
     /// keeps streaming in the background into its origin chat); cancelled
     /// only when the origin chat itself is deleted.
@@ -223,6 +230,13 @@ struct ChatWindow: View {
                                 .background(.ultraThinMaterial)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .id("thinking-indicator")
+                            }
+
+                            // In-chat "start this local model?" prompt (assistant
+                            // bubble + Yes/No), shown instead of sending straight away.
+                            if let pending = pendingLocalStart {
+                                localStartConfirmBubble(pending)
+                                    .id("local-start-confirm")
                             }
                         }
                         .padding(.horizontal, 12)
@@ -954,16 +968,83 @@ struct ChatWindow: View {
             return
         }
 
-        // Add user message immediately (synchronously, so the history snapshot includes it)
-        let attachmentToSend = pendingAttachment
-        let attachments = attachmentToSend.map { [$0] } ?? []
+        // Local provider: if the selected model isn't in memory, sending would
+        // implicitly load it (time + RAM) — confirm first. Otherwise send now.
+        if settings.chatProvider.isLocal {
+            let attachment = pendingAttachment
+            confirmLocalModelIfNeeded { performSend(text: text, attachment: attachment) }
+            return
+        }
+        performSend(text: text, attachment: pendingAttachment)
+    }
+
+    /// Appends the user message and streams the reply, clearing the composer.
+    private func performSend(text: String, attachment: ChatAttachment?) {
+        let attachments = attachment.map { [$0] } ?? []
         let userMessage = ChatMessage(text: text, isUser: true, attachments: attachments)
         chatStore.appendNow(userMessage)
         messageText = "" // the editor re-measures itself back to one line
         quotedText = nil
         clearCurrentAttachment()
-
         streamAssistantReply()
+    }
+
+    /// For a local (Ollama) provider: refreshes the loaded state, and if the
+    /// selected model isn't in memory, asks before loading it — loading a local
+    /// model costs time and RAM. On confirm runs `send`; on cancel guides the
+    /// user to switch provider or pick a model that's already loaded.
+    private func confirmLocalModelIfNeeded(_ send: @escaping () -> Void) {
+        let model = settings.selectedModel(for: .ollama) ?? ""
+        Task { @MainActor in
+            let admin = OllamaAdminService(endpointURL: settings.localEndpointURL)
+            await settings.refreshOllamaLoaded(using: admin)
+            if model.isEmpty || settings.ollamaLoadedModels.contains(model) {
+                send()
+                return
+            }
+            // Not in memory → ask in-chat (assistant-style bubble with buttons).
+            let prompt = String(format: L("local.start.confirm.message"), model)
+            pendingLocalStart = PendingLocalStart(prompt: prompt, send: send)
+        }
+    }
+
+    /// The in-chat confirmation: an assistant-style bubble carrying the prompt
+    /// and Start/Cancel buttons. Start runs the deferred send (which loads the
+    /// model); Cancel clears it and drops a hint to switch provider/model.
+    @ViewBuilder
+    private func localStartConfirmBubble(_ pending: PendingLocalStart) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(pending.prompt)
+                    .font(.system(size: 13, design: palette.fontDesign))
+                    .foregroundColor(palette.isGlass ? .primary : palette.ink)
+                    .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
+                HStack(spacing: 8) {
+                    Button(L("local.start.confirm.yes")) {
+                        let send = pending.send
+                        pendingLocalStart = nil
+                        send()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+                    Button(L("local.start.confirm.no")) {
+                        pendingLocalStart = nil
+                        chatStore.addMessage(text: L("local.start.confirm.declined"),
+                                             isUser: false, messageType: .system)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(palette.accent)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .modifier(ThemedBubble(palette: palette, isUser: false))
+            .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
+            .frame(maxWidth: max(320, bubbleContainerWidth * 0.75), alignment: .leading)
+            Spacer()
+        }
+        .padding(.horizontal, 4)
     }
 
     /// Streams the assistant reply for the current history into the chat,

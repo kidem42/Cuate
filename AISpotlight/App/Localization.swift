@@ -85,6 +85,11 @@ enum Localization {
         "local.manageExternally": [.english: "Manage models in your server's own tool.", .spanish: "Gestiona los modelos con la herramienta de tu servidor.", .russian: "Управляйте моделями в инструменте вашего сервера."],
         "menu.localModel": [.english: "Local model", .spanish: "Modelo local", .russian: "Локальная модель"],
         "local.notLoaded": [.english: "Not loaded", .spanish: "No cargado", .russian: "Не загружена"],
+        "local.start.confirm.title": [.english: "No model is running", .spanish: "Ningún modelo está activo", .russian: "Ни одна модель не запущена"],
+        "local.start.confirm.message": [.english: "No local model is in memory right now. Start \"%@\" and send your message? It will be loaded into memory, which can take a moment.", .spanish: "Ahora mismo no hay ningún modelo local en memoria. ¿Iniciar «%@» y enviar tu mensaje? Se cargará en memoria, lo que puede tardar un momento.", .russian: "Сейчас в памяти нет ни одной локальной модели. Запустить «%@» и отправить сообщение? Она будет загружена в память — это может занять время."],
+        "local.start.confirm.yes": [.english: "Start and send", .spanish: "Iniciar y enviar", .russian: "Запустить и отправить"],
+        "local.start.confirm.no": [.english: "Cancel", .spanish: "Cancelar", .russian: "Отмена"],
+        "local.start.confirm.declined": [.english: "Cancelled. Switch the provider or pick a model that's already loaded, then send again.", .spanish: "Cancelado. Cambia el proveedor o elige un modelo que ya esté cargado y envía de nuevo.", .russian: "Отменено. Смените провайдера или выберите уже загруженную модель и отправьте снова."],
         "menu.localStart": [.english: "Start current model", .spanish: "Iniciar modelo actual", .russian: "Запустить текущую модель"],
         "menu.localStop": [.english: "Stop current model", .spanish: "Detener modelo actual", .russian: "Остановить текущую модель"],
 

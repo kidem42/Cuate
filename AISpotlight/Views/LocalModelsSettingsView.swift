@@ -269,6 +269,10 @@ struct LocalModelsSettingsView: View {
             // Sort by name to match the status-bar submenu, which lists
             // `models(for: .ollama)` (already alphabetically sorted).
             installed = (try await admin.tags()).sorted { $0.name < $1.name }
+            // Keep the app-wide model list (chat dropdown + status-bar submenu)
+            // in sync — otherwise a deleted/pulled model lingers there, since
+            // those read `models(for:)`/cachedModels, not this view's `installed`.
+            try? await settings.refreshModels(for: .ollama)
             await settings.refreshOllamaLoaded(using: admin)
         } catch {
             errorText = error.localizedDescription
