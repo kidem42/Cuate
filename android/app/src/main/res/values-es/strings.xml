@@ -159,7 +159,9 @@
     <string name="settings_keys_summary">Claves configuradas: %d</string>
     <string name="settings_tts">Respuestas de voz (síntesis de voz)</string>
     <string name="settings_voice_replies">Responder con voz a mensajes de voz</string>
-    <string name="settings_voice_replies_note">Un mensaje de voz recibe una respuesta hablada con su transcripción debajo. OpenAI y Gemini reutilizan sus claves de chat; OpenAI también admite velocidad de habla.</string>
+    <string name="settings_voice_replies_note">Un mensaje de voz recibe una respuesta hablada; la transcripción queda plegada bajo el reproductor. OpenAI y Gemini reutilizan sus claves de chat; OpenAI también admite velocidad de habla.</string>
+    <string name="voice_show_transcript">Mostrar texto</string>
+    <string name="voice_hide_transcript">Ocultar texto</string>
     <string name="settings_tts_voice">Voz</string>
     <string name="settings_tts_speed">Velocidad: %1$s×</string>
     <string name="attach_failed">No se pudo leer la imagen; prueba con otra.</string>

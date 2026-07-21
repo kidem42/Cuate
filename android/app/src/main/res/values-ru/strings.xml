@@ -159,7 +159,9 @@
     <string name="settings_keys_summary">Настроено ключей: %d</string>
     <string name="settings_tts">Голосовые ответы (синтез речи)</string>
     <string name="settings_voice_replies">Отвечать голосом на голосовые</string>
-    <string name="settings_voice_replies_note">На голосовое сообщение придёт озвученный ответ с транскрипцией под ним. OpenAI и Gemini используют свои ключи чата; OpenAI также поддерживает скорость речи.</string>
+    <string name="settings_voice_replies_note">На голосовое сообщение придёт озвученный ответ; текст свёрнут под плеером. OpenAI и Gemini используют свои ключи чата; OpenAI также поддерживает скорость речи.</string>
+    <string name="voice_show_transcript">Показать текст</string>
+    <string name="voice_hide_transcript">Скрыть текст</string>
     <string name="settings_tts_voice">Голос</string>
     <string name="settings_tts_speed">Скорость: %1$s×</string>
     <string name="attach_failed">Не удалось прочитать изображение — попробуйте другое.</string>

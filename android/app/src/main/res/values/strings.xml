@@ -161,7 +161,9 @@
     <string name="settings_keys_summary">%d keys configured</string>
     <string name="settings_tts">Voice replies (speech synthesis)</string>
     <string name="settings_voice_replies">Reply with voice to voice messages</string>
-    <string name="settings_voice_replies_note">A voice message gets a spoken reply with its transcript below. OpenAI and Gemini reuse their chat keys; OpenAI also supports speaking speed.</string>
+    <string name="settings_voice_replies_note">A voice message gets a spoken reply; the transcript stays folded under the player. OpenAI and Gemini reuse their chat keys; OpenAI also supports speaking speed.</string>
+    <string name="voice_show_transcript">Show text</string>
+    <string name="voice_hide_transcript">Hide text</string>
     <string name="settings_tts_voice">Voice</string>
     <string name="settings_tts_speed">Speed: %1$s×</string>
     <string name="attach_failed">Couldn\'t read this image — try another one.</string>

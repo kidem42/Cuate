@@ -686,7 +686,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 dao.touch(conversationId, now)
             }
 
-            val reply = ChatMessage(text = "", isUser = false)
+            // A spoken question with voice replies on WILL be voiced — mark the
+            // reply VOICE from the first token so the bubble can keep the text
+            // folded during the synthesis lag. If TTS later fails, the message
+            // stays VOICE without audio, which renders as plain text.
+            val expectVoiceReply = userMessage.messageType == ChatMessage.Type.VOICE &&
+                settings.voiceReplies.value &&
+                com.aispotlight.android.providers.SpeechService.isAvailable
+            val reply = ChatMessage(
+                text = "", isUser = false,
+                messageType = if (expectVoiceReply) ChatMessage.Type.VOICE else ChatMessage.Type.TEXT,
+            )
             var replyText = StringBuilder()
             var toolContext: String? = null
             var lastUiFlush = 0L
@@ -787,10 +797,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // back — synthesize the reply and attach it as a voice
                     // message; the transcript (the reply text) stays below the
                     // player. TTS failure never degrades the text reply.
-                    if (userMessage.messageType == ChatMessage.Type.VOICE &&
-                        settings.voiceReplies.value &&
-                        com.aispotlight.android.providers.SpeechService.isAvailable
-                    ) {
+                    if (expectVoiceReply) {
                         if (isActive()) _statusText.value = "Voicing…"
                         try {
                             val audio = withContext(Dispatchers.IO) {

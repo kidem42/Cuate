@@ -51,6 +51,8 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
@@ -141,6 +143,12 @@ fun ChatScreen(
     val palette = LocalChatPalette.current
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
+    // One voice transport for the whole chat: a single active playback,
+    // auto-advance down the queue (oldest → newest) on completion.
+    val voicePlayback = remember { VoicePlaybackCoordinator() }
+    androidx.compose.runtime.SideEffect {
+        voicePlayback.queue = messages.mapNotNull { it.audioPath }
+    }
     var openArtifact by remember { mutableStateOf<Artifact?>(null) }
     // Full-screen zoomable viewer for a tapped chat image.
     var viewerTarget by remember { mutableStateOf<ChatAttachment?>(null) }
@@ -331,6 +339,7 @@ fun ChatScreen(
                     // artifact cards use this to tell "fence still coming"
                     // from "stream ended with the fence never closed".
                     isStreamingReply = isLoading && !message.isUser && message.id == messages.lastOrNull()?.id,
+                    voicePlayback = voicePlayback,
                     onOpenArtifact = { openArtifact = it },
                     onImageTool = { attachment, function, prompt ->
                         onImageTool(attachment, function, prompt, null)
@@ -852,10 +861,53 @@ private fun PendingProcessButton(
     }
 }
 
+/**
+ * The folded transcript of a voice bubble: a compact chevron row that expands
+ * to the full text. The text is ALWAYS reachable this way — including while
+ * the reply is still being voiced and after a failed synthesis — the audio is
+ * a presentation on top of it, never a gate.
+ */
+@Composable
+private fun TranscriptDisclosure(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    tint: Color,
+    content: @Composable () -> Unit,
+) {
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onToggle)
+                .padding(vertical = 2.dp),
+        ) {
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                stringResource(
+                    if (expanded) R.string.voice_hide_transcript else R.string.voice_show_transcript
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = tint,
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(expanded) {
+            Box(Modifier.padding(top = 6.dp)) { content() }
+        }
+    }
+}
+
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
     isStreamingReply: Boolean = false,
+    voicePlayback: VoicePlaybackCoordinator,
     onOpenArtifact: (Artifact) -> Unit,
     onImageTool: (ChatAttachment, com.aispotlight.android.providers.FalImageProvider.Function, String?) -> Unit,
     onRequestCleanup: (ChatAttachment) -> Unit,
@@ -886,6 +938,17 @@ private fun MessageBubble(
     // floor (~72%, cap 320dp) so the waveform + timestamp always get room —
     // a different minimum than text-only bubbles, which can stay tiny.
     val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    // Voice bubbles fold their transcript under the player (Telegram-style):
+    // the voice block leads, the text expands on demand. While a spoken reply
+    // is still being synthesized (`voicePending`) the same fold hides the
+    // streamed text behind a pulsing placeholder — no text-then-audio lag on
+    // screen. A VOICE message that never got audio (TTS failed, stream
+    // killed) falls out of both flags and renders as plain text.
+    val voicePending = !isUser && !message.isError && message.audioPath == null &&
+        message.messageType == ChatMessage.Type.VOICE && isStreamingReply
+    val voiceFolded = (message.audioPath != null || voicePending) &&
+        !message.isError && message.text.isNotEmpty()
+    var transcriptExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
     // Wide-screen cap at 500dp: on an unfolded foldable or tablet a bubble
     // must not stretch into a full-width reading ribbon — the extra room
     // becomes margin, not line length.
@@ -973,7 +1036,7 @@ private fun MessageBubble(
                     // Voice bubbles size to their widest block (transcript /
                     // markdown), and the player below stretches to match, so
                     // the waveform always reaches the bubble edge.
-                    .then(if (message.audioPath != null) {
+                    .then(if (message.audioPath != null || voicePending) {
                         Modifier.width(androidx.compose.foundation.layout.IntrinsicSize.Max)
                     } else Modifier)
                     .padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1017,24 +1080,65 @@ private fun MessageBubble(
                     // bubble's intrinsic width when text below is wider.
                     VoiceMessagePlayer(
                         it, isUser = isUser,
+                        coordinator = voicePlayback,
                         modifier = Modifier.widthIn(min = voiceContentWidth).fillMaxWidth(),
                     )
                 }
+                // The voice being synthesized: the player's silhouette holds
+                // the bubble's voice shape until the real audio lands.
+                if (voicePending) {
+                    PendingVoiceBar(
+                        isUser = false,
+                        modifier = Modifier.widthIn(min = voiceContentWidth).fillMaxWidth(),
+                    )
+                }
+                // The transcript of a voice bubble sits folded under the
+                // player; everything else renders inline as before.
+                val transcriptTint = when {
+                    themed -> if (isUser) palette.userText.copy(alpha = 0.75f) else palette.secondaryText
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
                 if (isUser) {
                     if (message.text.isNotEmpty()) {
-                        Text(
-                            message.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (themed) palette.userText else androidx.compose.ui.graphics.Color.Unspecified,
-                        )
+                        val body = @Composable {
+                            Text(
+                                message.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (themed) palette.userText else androidx.compose.ui.graphics.Color.Unspecified,
+                            )
+                        }
+                        if (voiceFolded) {
+                            TranscriptDisclosure(
+                                expanded = transcriptExpanded,
+                                onToggle = { transcriptExpanded = !transcriptExpanded },
+                                tint = transcriptTint,
+                                content = body,
+                            )
+                        } else {
+                            body()
+                        }
                     }
                 } else {
                     val parsed = remember(message.text) { parseArtifacts(message.text) }
-                    if (parsed.plainText.isNotEmpty()) {
-                        MarkdownText(parsed.plainText, isStreaming = isStreamingReply)
+                    val body = @Composable {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (parsed.plainText.isNotEmpty()) {
+                                MarkdownText(parsed.plainText, isStreaming = isStreamingReply)
+                            }
+                            for (artifact in parsed.artifacts) {
+                                ArtifactCard(artifact, isStreaming = isStreamingReply, onOpen = { onOpenArtifact(artifact) })
+                            }
+                        }
                     }
-                    for (artifact in parsed.artifacts) {
-                        ArtifactCard(artifact, isStreaming = isStreamingReply, onOpen = { onOpenArtifact(artifact) })
+                    if (voiceFolded) {
+                        TranscriptDisclosure(
+                            expanded = transcriptExpanded,
+                            onToggle = { transcriptExpanded = !transcriptExpanded },
+                            tint = transcriptTint,
+                            content = body,
+                        )
+                    } else {
+                        body()
                     }
                 }
             }
