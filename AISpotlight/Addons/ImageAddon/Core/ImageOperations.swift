@@ -47,7 +47,8 @@ final class ImageResultRegistry {
 
 /// The addon's operation pipeline, shared by the actions bar, slash
 /// commands, and the result bar: post the source into the chat, normalize
-/// the input (GIF/лимиты — с плашками), run, convert the output format,
+/// the input (GIF/лимиты — с плашками, прозрачность — флэттен на белый),
+/// run, restore/sanitize the alpha channel, convert the output format,
 /// offload large results to disk, append the result, remember it in the
 /// registry, auto-copy if enabled. On failure the source attachment is
 /// restored so the user can retry with one click.
@@ -76,7 +77,10 @@ enum ImageOperations {
         let origin = chatStore.conversation
         func isLive() -> Bool { chatStore.conversation == origin }
 
-        if postSourceMessage {
+        // Restored attachments are already visible in the chat — reposting
+        // the source would only duplicate the image (and trip the store's
+        // unique-id index into an empty bubble).
+        if postSourceMessage, !isRestoredFromChat(source) {
             chatStore.appendNow(ChatMessage(text: "", isUser: true, attachments: [source]))
         }
         // Synchronous set (NOT setLoading's async dispatch): the thinking
@@ -93,7 +97,7 @@ enum ImageOperations {
                 let sourceMime = source.mimeType
                 let maxMP = settings.maxInputMegapixels
                 let normalized = try await Task.detached(priority: .userInitiated) {
-                    () -> (data: Data, mime: String, notes: [ImageInputPreparer.InputNote], mask: Data?) in
+                    () -> (data: Data, mime: String, notes: [ImageInputPreparer.InputNote], mask: Data?, alphaMask: Data?) in
                     let prepared = try ImageInputPreparer.normalizeForOperation(
                         data: sourceData,
                         mime: sourceMime,
@@ -112,7 +116,20 @@ enum ImageOperations {
                        maskSize != imageSize {
                         mask = ImageInputPreparer.resizeImage(maskData, to: imageSize) ?? maskData
                     }
-                    return (prepared.data, prepared.mime, prepared.notes, mask)
+                    // Прозрачный вход флэттенится на белый: fal-модели альфу
+                    // игнорируют и работают с RGB — у вырезок там лежит
+                    // исходный фон (см. Alpha handling в ImageInputPreparer).
+                    // Альфа-маску запоминаем: после апскейла она вернётся на
+                    // результат.
+                    var sendData = prepared.data
+                    var sendMime = prepared.mime
+                    var alphaMask: Data?
+                    if let flat = ImageInputPreparer.flattenIfTransparent(sendData) {
+                        sendData = flat.flattened
+                        sendMime = "image/png"
+                        alphaMask = flat.alphaMask
+                    }
+                    return (sendData, sendMime, prepared.notes, mask, alphaMask)
                 }.value
                 for note in normalized.notes {
                     chatStore.deliver(
@@ -136,11 +153,40 @@ enum ImageOperations {
                 )
                 let result = try await ImageTaskRunner.shared.perform(request)
 
-                // Output format: user's choice, кроме фона — там всегда PNG
-                // (альфа-канал), ТЗ §4.4b.
                 var outData = result.image
                 var outMime = result.mimeType
-                if function != .removeBackground {
+
+                // Результат удаления фона несёт нетронутый оригинал в RGB под
+                // прозрачностью — затираем (иначе фон утекает в сохранённый
+                // файл и «воскресает» в альфа-слепых обработчиках).
+                if function == .removeBackground {
+                    let payload = outData
+                    if let sanitized = await Task.detached(priority: .userInitiated, operation: {
+                        ImageInputPreparer.sanitizedTransparency(payload)
+                    }).value {
+                        outData = sanitized
+                        outMime = "image/png"
+                    }
+                }
+
+                // Апскейл вырезки: модели возвращают непрозрачный RGB —
+                // восстанавливаем прозрачность масштабированием исходной
+                // альфа-маски (локально, бесплатно).
+                var restoredAlpha = false
+                if function == .upscale, let mask = normalized.alphaMask {
+                    let payload = outData
+                    if let masked = await Task.detached(priority: .userInitiated, operation: {
+                        ImageInputPreparer.applyingAlphaMask(mask, to: payload)
+                    }).value {
+                        outData = masked
+                        outMime = "image/png"
+                        restoredAlpha = true
+                    }
+                }
+
+                // Output format: user's choice, кроме фона и восстановленной
+                // прозрачности — там всегда PNG (альфа-канал), ТЗ §4.4b.
+                if function != .removeBackground, !restoredAlpha {
                     (outData, outMime) = ImageInputPreparer.convert(outData, from: outMime, to: settings.outputFormat)
                 }
 
@@ -206,7 +252,32 @@ enum ImageOperations {
         )
     }
 
+    /// Attachments put back into the composer from an already-shown chat
+    /// message («Продолжить редактирование», ретрай после ошибки/отмены).
+    /// Их бабл-источник повторно НЕ постится: картинка уже видна в чате, а
+    /// уникальный индекс вложений в сторе всё равно оставил бы второе
+    /// сообщение без вложения (пустой бабл после перезагрузки). Session-
+    /// scoped — после перезапуска карандаш просто снова пометит id.
+    private static var restoredIDs: Set<UUID> = []
+
+    static func isRestoredFromChat(_ attachment: ChatAttachment) -> Bool {
+        restoredIDs.contains(attachment.id)
+    }
+
+    /// Fresh identity (new id + own file) for the rare path that DOES post a
+    /// restored attachment as a new chat row (обычная отправка сообщения в
+    /// LLM с таким вложением) — иначе коллизия по уникальному индексу.
+    static func freshCopyForPosting(_ attachment: ChatAttachment) -> ChatAttachment {
+        guard let data = attachment.data else { return attachment }
+        return ChatAttachment.fileBacked(data: data, mimeType: attachment.mimeType, filename: attachment.filename)
+    }
+
+    /// Puts an attachment (back) into the composer — «Продолжить
+    /// редактирование» и восстановление после ошибки/отмены. No copy is
+    /// made: the bytes go to the provider from memory, and the source
+    /// bubble is skipped for restored attachments (see `restoredIDs`).
     static func restoreAttachment(_ attachment: ChatAttachment) {
+        restoredIDs.insert(attachment.id)
         NotificationCenter.default.post(name: .imageAddonAttachRequest, object: attachment)
     }
 

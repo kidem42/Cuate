@@ -86,7 +86,7 @@ object TranscriptionService {
             STTProviderID.MISTRAL, STTProviderID.OPENAI ->
                 transcribeOpenAIStyle(provider, apiKey, model, audioData, audioFile.name)
             STTProviderID.DEEPGRAM ->
-                transcribeDeepgram(apiKey, model, audioData)
+                transcribeDeepgram(apiKey, model, audioData, audioFile.name)
         }
 
         // STT bills per audio minute — read the real duration off the file.
@@ -108,6 +108,22 @@ object TranscriptionService {
         return text
     }
 
+    /**
+     * Content type by filename extension. Own recordings are AAC/.m4a; shared
+     * voice notes come as opus/ogg (WhatsApp, Telegram) or anything else the
+     * source app produced — providers key off the extension/mime.
+     */
+    private fun mimeFor(filename: String): String =
+        when (filename.substringAfterLast('.', "").lowercase()) {
+            "ogg", "oga", "opus" -> "audio/ogg"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "webm" -> "audio/webm"
+            "flac" -> "audio/flac"
+            "aac" -> "audio/aac"
+            else -> "audio/mp4"
+        }
+
     // MARK: - OpenAI-style multipart (Mistral, OpenAI)
 
     private suspend fun transcribeOpenAIStyle(
@@ -125,7 +141,7 @@ object TranscriptionService {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", model)
-            .addFormDataPart("file", filename, audioData.toRequestBody("audio/mp4".toMediaType()))
+            .addFormDataPart("file", filename, audioData.toRequestBody(mimeFor(filename).toMediaType()))
             .build()
 
         val request = Request.Builder()
@@ -150,7 +166,7 @@ object TranscriptionService {
      * `language=multi` enables nova-3's multilingual mode (covers en, ru, es,
      * de, fr, hi, pt, ja, it, nl — including code-switching mid-speech).
      */
-    private suspend fun transcribeDeepgram(apiKey: String, model: String, audioData: ByteArray): String {
+    private suspend fun transcribeDeepgram(apiKey: String, model: String, audioData: ByteArray, filename: String): String {
         val url = "https://api.deepgram.com/v1/listen".toHttpUrl().newBuilder()
             .addQueryParameter("model", model)
             .addQueryParameter("smart_format", "true")
@@ -160,8 +176,7 @@ object TranscriptionService {
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Token $apiKey")
-            // Recordings are AAC in an .m4a container.
-            .post(audioData.toRequestBody("audio/mp4".toMediaType()))
+            .post(audioData.toRequestBody(mimeFor(filename).toMediaType()))
             .build()
 
         val data = HttpClient.json(request)

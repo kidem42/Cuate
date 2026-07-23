@@ -31,12 +31,28 @@ BRANDS = [
     "safari", "firefox", "amazon", "uber", "paypal", "steam", "twitch",
     "figma", "notion", "viber", "signal", "wifi", "bluetooth",
 ]
+# Tech acronyms/terms (HTML, CSS, JSON …). Their letter patterns are
+# anti-language — impossible trigrams, no vowels — so the trigram clean bar
+# can never accept them; DecisionEngine has a whitelist-override rule that
+# trusts the frequency list instead (see verdict()). Latin-only: these are
+# typed as-is by RU/ES users too, so they go into every latin list.
+ACRONYMS = [
+    "html", "css", "scss", "js", "jsx", "ts", "tsx", "json", "yaml", "xml",
+    "sql", "php", "http", "https", "url", "api", "rest", "sdk", "cli",
+    "gui", "ui", "ux", "ai", "ml", "llm", "gpt", "cpu", "gpu", "ram",
+    "ssd", "hdd", "usb", "hdmi", "pdf", "docx", "xlsx", "csv", "exe",
+    "dmg", "apk", "ios", "macos", "vpn", "dns", "tcp", "udp", "ssh",
+    "ftp", "ssl", "tls", "jpg", "jpeg", "png", "gif", "svg", "webp",
+    "mp3", "mp4", "mkv", "zip", "rar", "git", "npm", "pip", "nodejs",
+    "react", "vue", "kotlin", "docker", "kubernetes", "nginx", "mysql",
+    "postgres", "mongodb", "redis", "jira", "vscode", "xcode", "webpack",
+]
 EXTRA_WORDS = {
-    "en": BRANDS + [
+    "en": BRANDS + ACRONYMS + [
         "email", "online", "offline", "login", "podcast", "smartphone",
         "laptop", "deadline", "feedback", "hashtag", "livestream",
     ],
-    "es": BRANDS + ["email", "online", "wasap", "mail"],
+    "es": BRANDS + ACRONYMS + ["email", "online", "wasap", "mail"],
     "ru": [
         "гугл", "гмейл", "ватсап", "вотсап", "телеграм", "телега",
         "инстаграм", "инста", "фейсбук", "ютуб", "ютюб", "тикток",

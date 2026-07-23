@@ -116,9 +116,13 @@ struct OpenAICompatibleProvider: LLMProvider {
         var body: [String: Any] = [
             "model": model,
             "messages": apiMessages,
-            "stream": true,
-            "max_tokens": options.maxTokens
+            "stream": true
         ]
+        // 0 = uncapped (local models): omit the parameter, the model generates
+        // until it stops on its own or hits its context window.
+        if options.maxTokens > 0 {
+            body["max_tokens"] = options.maxTokens
+        }
         // Ask for the final usage chunk (cost tracking). Sent to providers that
         // document the OpenAI `stream_options` param: DeepSeek, OpenRouter and
         // Kimi (e2e 2026-07-20 showed Kimi sends no usage without it; Moonshot's

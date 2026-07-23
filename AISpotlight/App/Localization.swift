@@ -85,8 +85,12 @@ enum Localization {
         "local.manageExternally": [.english: "Manage models in your server's own tool.", .spanish: "Gestiona los modelos con la herramienta de tu servidor.", .russian: "Управляйте моделями в инструменте вашего сервера."],
         "menu.localModel": [.english: "Local model", .spanish: "Modelo local", .russian: "Локальная модель"],
         "local.notLoaded": [.english: "Not loaded", .spanish: "No cargado", .russian: "Не загружена"],
+        "local.generation": [.english: "Generation", .spanish: "Generación", .russian: "Генерация"],
+        "local.maxTokens": [.english: "Max tokens per reply", .spanish: "Máximo de tokens por respuesta", .russian: "Максимум токенов на ответ"],
+        "local.maxTokens.off": [.english: "No limit", .spanish: "Sin límite", .russian: "Без лимита"],
+        "local.maxTokens.caption": [.english: "Applies to local models only; cloud providers use the chat limit. Local tokens are free — a limit only bounds how long a reply can take. \"No limit\" lets the model finish on its own (recommended for thinking models, whose reasoning also draws from this budget).", .spanish: "Solo se aplica a los modelos locales; los proveedores en la nube usan el límite del chat. Los tokens locales son gratis: un límite solo acota la duración de la respuesta. «Sin límite» deja que el modelo termine por sí solo (recomendado para modelos con razonamiento, que también consume este presupuesto).", .russian: "Действует только для локальных моделей; облачные используют лимит чата. Локальные токены бесплатны — лимит ограничивает лишь время ответа. «Без лимита» даёт модели закончить самой (рекомендуется для думающих моделей: их размышления тратят этот же бюджет)."],
         "local.start.confirm.title": [.english: "No model is running", .spanish: "Ningún modelo está activo", .russian: "Ни одна модель не запущена"],
-        "local.start.confirm.message": [.english: "No local model is in memory right now. Start \"%@\" and send your message? It will be loaded into memory, which can take a moment.", .spanish: "Ahora mismo no hay ningún modelo local en memoria. ¿Iniciar «%@» y enviar tu mensaje? Se cargará en memoria, lo que puede tardar un momento.", .russian: "Сейчас в памяти нет ни одной локальной модели. Запустить «%@» и отправить сообщение? Она будет загружена в память — это может занять время."],
+        "local.start.confirm.message": [.english: "No local model is in memory right now. Start \"%@\" and send your message? It will be loaded temporarily and unloaded again after about 5 minutes of inactivity. To keep it running permanently, start it in Settings → Local models.", .spanish: "Ahora mismo no hay ningún modelo local en memoria. ¿Iniciar «%@» y enviar tu mensaje? Se cargará temporalmente y se descargará tras unos 5 minutos de inactividad. Para mantenerlo activo de forma permanente, inícialo en Ajustes → Modelos locales.", .russian: "Сейчас в памяти нет ни одной локальной модели. Запустить «%@» и отправить сообщение? Она загрузится временно и примерно через 5 минут простоя выгрузится. Чтобы модель работала постоянно, запустите её в Настройках → Локальные модели."],
         "local.start.confirm.yes": [.english: "Start and send", .spanish: "Iniciar y enviar", .russian: "Запустить и отправить"],
         "local.start.confirm.no": [.english: "Cancel", .spanish: "Cancelar", .russian: "Отмена"],
         "local.start.confirm.declined": [.english: "Cancelled. Switch the provider or pick a model that's already loaded, then send again.", .spanish: "Cancelado. Cambia el proveedor o elige un modelo que ya esté cargado y envía de nuevo.", .russian: "Отменено. Смените провайдера или выберите уже загруженную модель и отправьте снова."],
@@ -199,7 +203,7 @@ enum Localization {
 
         // MARK: Web
         "web.header": [.english: "Web Access", .spanish: "Acceso web", .russian: "Доступ в интернет"],
-        "web.allow": [.english: "Allow web search", .spanish: "Permitir búsqueda web", .russian: "Разрешить веб-поиск"],
+        "web.allow": [.english: "Allow web access (search & page reading)", .spanish: "Permitir acceso web (búsqueda y lectura de páginas)", .russian: "Разрешить доступ в интернет (поиск и чтение страниц)"],
         "web.brave": [.english: "Brave Search", .spanish: "Brave Search", .russian: "Brave Search"],
         "web.pasteBrave": [.english: "Paste Brave API key", .spanish: "Pega la clave de Brave", .russian: "Вставьте ключ Brave"],
         "web.footer": [.english: "With a Brave Search API key, every chat model gains a web_search tool and can look up current information on its own. Free tier: api-dashboard.search.brave.com", .spanish: "Con una clave de Brave Search, cada modelo obtiene una herramienta web_search y puede buscar información actual por sí mismo. Plan gratuito: api-dashboard.search.brave.com", .russian: "С ключом Brave Search каждая модель получает инструмент web_search и может сама искать актуальную информацию. Бесплатный тариф: api-dashboard.search.brave.com"],
@@ -258,6 +262,10 @@ enum Localization {
         "diag.open": [.english: "Open Logs Folder", .spanish: "Abrir carpeta de registros", .russian: "Открыть папку логов"],
         "diag.exported": [.english: "Logs exported to Downloads", .spanish: "Registros exportados a Descargas", .russian: "Логи выгружены в «Загрузки»"],
         "diag.footer": [.english: "Writes an event log on this Mac and, if the interface freezes for over 2 seconds, saves a report with stack traces. No message texts, prompts or API keys are ever recorded. Export the archive and attach it to a bug report.", .spanish: "Guarda un registro de eventos en este Mac y, si la interfaz se congela más de 2 segundos, crea un informe con trazas de pila. Nunca se registran textos de mensajes, prompts ni claves API. Exporta el archivo y adjúntalo a un informe de error.", .russian: "Ведёт журнал событий на этом Mac и при зависании интерфейса дольше 2 секунд сохраняет отчёт со стеками потоков. Тексты сообщений, промпты и ключи API никогда не записываются. Выгрузите архив и приложите его к сообщению об ошибке."],
+
+        // MARK: About (app version)
+        "about.header": [.english: "About", .spanish: "Acerca de", .russian: "О приложении"],
+        "about.version": [.english: "Version", .spanish: "Versión", .russian: "Версия"],
 
         // MARK: Panel placement
         "panel.header": [.english: "Panel", .spanish: "Panel", .russian: "Панель"],
@@ -325,6 +333,7 @@ enum Localization {
         "panel.welcome": [.english: "Hi! I'm your AI assistant. How can I help you today?", .spanish: "¡Hola! Soy tu asistente de IA. ¿En qué puedo ayudarte hoy?", .russian: "Привет! Я ваш ИИ-ассистент. Чем могу помочь?"],
         "panel.thinking": [.english: "Thinking…", .spanish: "Pensando…", .russian: "Думаю…"],
         "panel.searching": [.english: "Searching", .spanish: "Buscando", .russian: "Поиск"],
+        "panel.fetchingPage": [.english: "Reading page", .spanish: "Leyendo la página", .russian: "Читаю страницу"],
         "panel.retry": [.english: "Retry last message", .spanish: "Reintentar último mensaje", .russian: "Повторить сообщение"],
         "panel.jumpLatest": [.english: "Jump to the latest message", .spanish: "Ir al mensaje más reciente", .russian: "К последнему сообщению"],
         "panel.recordingCancelled": [.english: "Recording cancelled.", .spanish: "Grabación cancelada.", .russian: "Запись отменена."],
@@ -332,6 +341,7 @@ enum Localization {
         "panel.recordLimitSent": [.english: "Recording reached the limit of %d minutes and was sent automatically.", .spanish: "La grabación alcanzó el límite de %d minutos y se envió automáticamente.", .russian: "Запись достигла лимита в %d минут и была отправлена автоматически."],
         "panel.recordLimitStopped": [.english: "Recording reached the limit of %d minutes and was stopped.", .spanish: "La grabación alcanzó el límite de %d minutos y se detuvo.", .russian: "Запись достигла лимита в %d минут и была остановлена."],
         "panel.recordStartFailed": [.english: "Failed to start recording. Please check microphone permissions in System Settings.", .spanish: "No se pudo iniciar la grabación. Revisa los permisos del micrófono en Ajustes del Sistema.", .russian: "Не удалось начать запись. Проверьте доступ к микрофону в Системных настройках."],
+        "panel.transcribing": [.english: "Transcribing voice message…", .spanish: "Transcribiendo el mensaje de voz…", .russian: "Распознаю голосовое сообщение…"],
         "panel.noSpeech": [.english: "The recording contained no recognizable speech.", .spanish: "La grabación no contenía voz reconocible.", .russian: "В записи не распознано речи."],
         "panel.transcriptionFailed": [.english: "Transcription failed: %@", .spanish: "Falló la transcripción: %@", .russian: "Ошибка расшифровки: %@"],
         "panel.emptyReply": [.english: "(empty reply)", .spanish: "(respuesta vacía)", .russian: "(пустой ответ)"],

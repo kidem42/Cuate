@@ -49,7 +49,7 @@
     <string name="settings_recent_images_enable">Keep recent photos visible</string>
     <string name="settings_recent_images_hint">Re-sends photos from the last three exchanges to the model as images, so follow-up questions about a photo still see it. Slightly increases the cost of each reply while a photo is recent. Off: only the newest message\'s photos go as images; older ones travel as extracted text.</string>
     <string name="settings_web_search">Web search (Brave)</string>
-    <string name="settings_web_search_enable">Enable web search</string>
+    <string name="settings_web_search_enable">Allow web access (search &amp; page reading)</string>
     <string name="settings_brave_key">Brave Search API key</string>
     <string name="settings_brave_key_saved">Brave key saved ✓</string>
     <string name="settings_stt">Voice input (speech-to-text)</string>

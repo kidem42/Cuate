@@ -47,7 +47,7 @@
     <string name="settings_recent_images_enable">Mantener visibles las fotos recientes</string>
     <string name="settings_recent_images_hint">Las fotos de los últimos tres intercambios se reenvían al modelo como imágenes, de modo que las preguntas de seguimiento sobre una foto siguen viéndola. Aumenta ligeramente el coste de cada respuesta mientras la foto es reciente. Desactivado: solo las fotos del último mensaje van como imágenes; las anteriores viajan como texto extraído.</string>
     <string name="settings_web_search">Búsqueda web (Brave)</string>
-    <string name="settings_web_search_enable">Activar búsqueda web</string>
+    <string name="settings_web_search_enable">Permitir acceso web (búsqueda y lectura de páginas)</string>
     <string name="settings_brave_key">Clave API de Brave Search</string>
     <string name="settings_brave_key_saved">Clave de Brave guardada ✓</string>
     <string name="settings_stt">Entrada de voz (reconocimiento)</string>

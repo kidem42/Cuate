@@ -7,7 +7,9 @@ import androidx.lifecycle.viewModelScope
 import com.aispotlight.android.data.AppDatabase
 import com.aispotlight.android.data.ChatAttachment
 import com.aispotlight.android.data.ChatMessage
+import com.aispotlight.android.R
 import com.aispotlight.android.data.Conversation
+import com.aispotlight.android.data.ImageAlpha
 import com.aispotlight.android.data.ImageStore
 import com.aispotlight.android.data.MessageEntity
 import com.aispotlight.android.data.toDomain
@@ -350,6 +352,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _isRecording.value = false
         if (file == null) return
         _isTranscribing.value = true
+        // Пилюля в чате на время распознавания: долгое голосовое без
+        // индикатора выглядит как пропавшее сообщение (порт маковского фикса;
+        // плейсхолдер композера её дублирует, но виден не всегда).
+        _statusText.value = getApplication<Application>().getString(R.string.chat_transcribing)
         viewModelScope.launch {
             try {
                 val text = withContext(Dispatchers.IO) { TranscriptionService.transcribe(file) }
@@ -387,6 +393,59 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 file.delete()
             } finally {
                 _isTranscribing.value = false
+                // dispatch() owns the status from here on (streaming reply);
+                // only clear a still-standing transcription pill.
+                if (_statusText.value == getApplication<Application>().getString(R.string.chat_transcribing)) {
+                    _statusText.value = null
+                }
+            }
+        }
+    }
+
+    /**
+     * Audio shared from another app (WhatsApp/Telegram voice notes, files):
+     * transcribes it and drops the text into the INPUT FIELD — the user
+     * decides what to do with it (send as is, add instructions, edit).
+     */
+    fun importSharedAudio(uri: Uri, mimeType: String?) {
+        if (_isTranscribing.value) return
+        _isTranscribing.value = true
+        _statusText.value = getApplication<Application>().getString(R.string.chat_transcribing)
+        viewModelScope.launch {
+            try {
+                val text = withContext(Dispatchers.IO) {
+                    val app = getApplication<Application>()
+                    // Extension drives the STT content type — take it from the
+                    // announced mime, falling back to the Uri's own name.
+                    val ext = when (mimeType?.lowercase()?.substringBefore(";")?.trim()) {
+                        "audio/ogg", "audio/opus" -> "ogg"
+                        "audio/mpeg", "audio/mp3" -> "mp3"
+                        "audio/wav", "audio/x-wav" -> "wav"
+                        "audio/webm" -> "webm"
+                        "audio/flac" -> "flac"
+                        "audio/aac" -> "aac"
+                        "audio/mp4", "audio/m4a", "audio/x-m4a" -> "m4a"
+                        else -> uri.lastPathSegment?.substringAfterLast('.', "")
+                            ?.takeIf { it.length in 2..4 } ?: "m4a"
+                    }
+                    val file = java.io.File(app.cacheDir, "shared-${System.currentTimeMillis()}.$ext")
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        file.outputStream().use { input.copyTo(it) }
+                    } ?: throw IllegalStateException(app.getString(R.string.attach_failed))
+                    try {
+                        TranscriptionService.transcribe(file)
+                    } finally {
+                        file.delete()
+                    }
+                }
+                if (text.isNotEmpty()) _transcriptionResult.value = text
+            } catch (e: Exception) {
+                _errorText.value = e.message
+            } finally {
+                _isTranscribing.value = false
+                if (_statusText.value == getApplication<Application>().getString(R.string.chat_transcribing)) {
+                    _statusText.value = null
+                }
             }
         }
     }
@@ -436,15 +495,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val modelId = settings.imageModel(function)
                 val model = com.aispotlight.android.providers.FalImageProvider.model(modelId)
+                // Alpha mask of a transparent input (kept to restore the
+                // cutout's transparency after an upscale — see ImageAlpha).
+                var alphaMask: android.graphics.Bitmap? = null
                 val result = withContext(Dispatchers.IO) {
                     val context = getApplication<Application>()
+                    // Прозрачный вход флэттенится на белый: fal-модели альфу
+                    // игнорируют и видят RGB под маской — у вырезок там лежит
+                    // исходный фон (ImageAlpha, порт маковского фикса).
+                    val flattened = ImageStore.file(context, attachment)
+                        .takeIf { it.exists() }?.readBytes()
+                        ?.let { ImageAlpha.flattenIfTransparent(it) }
                     // Some endpoints require PNG input (Recraft); others take the image as-is.
-                    val (base64, mime) =
-                        if (model?.requiresPNGInput == true) {
-                            ImageStore.pngBase64(context, attachment) to "image/png"
-                        } else {
-                            ImageStore.contentBase64(context, attachment) to attachment.mimeType
+                    val (base64, mime) = when {
+                        flattened != null -> {
+                            alphaMask = flattened.second
+                            android.util.Base64.encodeToString(flattened.first, android.util.Base64.NO_WRAP) to "image/png"
                         }
+                        model?.requiresPNGInput == true ->
+                            ImageStore.pngBase64(context, attachment) to "image/png"
+                        else ->
+                            ImageStore.contentBase64(context, attachment) to attachment.mimeType
+                    }
                     com.aispotlight.android.providers.FalImageProvider.run(
                         modelId = modelId,
                         imageBase64 = base64,
@@ -470,10 +542,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     com.aispotlight.android.providers.FalImageProvider.Function.OBJECT_CLEANUP -> "cleaned"
                 }
                 val resultAttachment = withContext(Dispatchers.IO) {
+                    var outBytes = result.image
+                    var outMime = result.mimeType
+                    // Результат удаления фона несёт нетронутый оригинал в RGB
+                    // под прозрачностью — затираем (утечка + «воскрешение»
+                    // фона в альфа-слепых обработчиках).
+                    if (function == com.aispotlight.android.providers.FalImageProvider.Function.REMOVE_BACKGROUND) {
+                        ImageAlpha.sanitizedTransparency(outBytes)?.let {
+                            outBytes = it
+                            outMime = "image/png"
+                        }
+                    }
+                    // Апскейл вырезки: модели возвращают непрозрачный RGB —
+                    // восстанавливаем прозрачность исходной альфа-маской.
+                    if (function == com.aispotlight.android.providers.FalImageProvider.Function.UPSCALE) {
+                        alphaMask?.let { mask ->
+                            ImageAlpha.applyAlphaMask(mask, outBytes)?.let {
+                                outBytes = it
+                                outMime = "image/png"
+                            }
+                        }
+                    }
                     ImageStore.importBytes(
-                        getApplication(), result.image, result.mimeType,
+                        getApplication(), outBytes, outMime,
                         filename = attachment.filename.substringBeforeLast('.') + "-$suffix." +
-                            if (result.mimeType == "image/png") "png" else "jpg",
+                            if (outMime == "image/png") "png" else "jpg",
                     )
                 }
                 // Local system-style message with the result — not sent to the LLM.

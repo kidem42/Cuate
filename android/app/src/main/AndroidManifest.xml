@@ -29,11 +29,20 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Text shared from other apps lands in the chat input. -->
+            <!-- Share targets: text lands in the chat input, images become
+                 pending attachments, audio (voice notes from WhatsApp/
+                 Telegram) is transcribed into the input. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
             </intent-filter>
             <!-- "AISpotlight" entry in the system text-selection menu. -->
             <intent-filter>

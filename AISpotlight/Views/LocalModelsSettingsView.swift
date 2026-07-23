@@ -17,6 +17,8 @@ struct LocalModelsEnableToggle: View {
 }
 
 /// Master switch for cloud providers — on by default. Off = fully local/offline.
+/// Mounted as a NESTED row under the local-models toggle (visible only while
+/// local models are on — with them off there'd be nothing to fall back on).
 struct OnlineModelsEnableToggle: View {
     @ObservedObject private var settings = AppSettings.shared
     var body: some View {
@@ -59,6 +61,7 @@ struct LocalModelsSettingsView: View {
         Form {
             introSection
             connectionSection
+            generationSection
             if settings.ollamaDetected {
                 installedSection
                 pullSection
@@ -150,6 +153,28 @@ struct LocalModelsSettingsView: View {
         case .failed:
             Label(L("local.status.fail"), systemImage: "xmark.circle.fill")
                 .foregroundColor(.red).font(.callout)
+        }
+    }
+
+    // MARK: Generation
+
+    /// Reply-length cap for local models, separate from the cloud `maxTokens`
+    /// budget (local tokens are free — the cap only bounds generation time).
+    private var generationSection: some View {
+        Section {
+            Stepper(value: $settings.localMaxTokens, in: 0...32768, step: 1024) {
+                LabeledContent(
+                    L("local.maxTokens"),
+                    value: settings.localMaxTokens == 0
+                        ? L("local.maxTokens.off")
+                        : "\(settings.localMaxTokens)"
+                )
+            }
+        } header: {
+            Text(L("local.generation"))
+        } footer: {
+            Text(L("local.maxTokens.caption"))
+                .font(.caption).foregroundColor(.secondary)
         }
     }
 

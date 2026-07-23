@@ -74,6 +74,22 @@ enum DecisionEngine {
         var winners: [Hypothesis] = []
         for alt in alternatives {
             guard alt.core.count >= 2, alt.core != source.core else { continue }
+            // Whitelist override: tech acronyms (html, css, json, png …) are
+            // anti-language — impossible trigrams, no vowels — so they can
+            // never pass the clean bar below no matter how obvious the fix
+            // (РЕЬД→HTML). When the frequency list explicitly knows the
+            // alternative, trust the list instead of the trigram bar — but
+            // only against unmistakable garbage: the source is neither dict-
+            // nor freq-supported AND itself contains impossible trigrams, and
+            // the alt rendering is letter-for-letter (equal core length rules
+            // out punctuation-stripped remnants: "жбль"→";,km"→core "km").
+            // Harness: 31→67 of 77 acronyms fixed, zero new false flips on
+            // 116k RU/EN typo-negatives, all hand cases unchanged.
+            if !srcSupported, source.impossible >= 1, alt.freqQ != nil,
+               alt.core.count == source.core.count {
+                winners.append(alt)
+                continue
+            }
             // The target must read as genuinely clean text in its language —
             // or be a word the frequency list explicitly knows (anglicisms).
             guard let altAvg = alt.charAvgQ, alt.impossible == 0 else { continue }

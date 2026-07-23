@@ -34,7 +34,7 @@ struct SettingsView: View {
     @State private var statusIsError = false
     @State private var sttModelInput = ""
     @State private var newPresetName = ""
-    @State private var selectedTab = SettingsTab.chat
+    @State private var selectedTab = SettingsTab.general
     // Prompt editor height: user-resizable via the grip below the field,
     // persisted so a tall editor stays tall on the next open.
     @AppStorage("settings.promptEditorHeight") private var promptEditorHeight: Double = 140
@@ -107,24 +107,24 @@ struct SettingsView: View {
             get: { selectedTab },
             set: { if let tab = $0 { selectedTab = tab } }
         )) {
+            sidebarRow(L("tab.general"), systemImage: "gearshape.fill", color: .gray)
+                .tag(SettingsTab.general)
             sidebarRow(L("tab.chat"), systemImage: "bubble.left.and.bubble.right.fill", color: .blue)
                 .tag(SettingsTab.chat)
-            sidebarRow(L("tab.keys"), systemImage: "key.fill", color: .orange)
-                .tag(SettingsTab.keys)
+            sidebarRow(L("tab.voice"), systemImage: "mic.fill", color: .red)
+                .tag(SettingsTab.voice)
+            sidebarRow(L("tab.prompts"), systemImage: "text.quote", color: .purple)
+                .tag(SettingsTab.prompts)
             // Local models row appears only while the feature is enabled
             // (master switch lives in the General section).
             if settings.localModelsEnabled {
                 sidebarRow(L("tab.localModels"), systemImage: "cpu", color: .mint)
                     .tag(SettingsTab.localModels)
             }
-            sidebarRow(L("tab.voice"), systemImage: "mic.fill", color: .red)
-                .tag(SettingsTab.voice)
-            sidebarRow(L("tab.general"), systemImage: "gearshape.fill", color: .gray)
-                .tag(SettingsTab.general)
             sidebarRow(L("tab.appearance"), systemImage: "paintbrush.fill", color: .pink)
                 .tag(SettingsTab.appearance)
-            sidebarRow(L("tab.prompts"), systemImage: "text.quote", color: .purple)
-                .tag(SettingsTab.prompts)
+            sidebarRow(L("tab.keys"), systemImage: "key.fill", color: .orange)
+                .tag(SettingsTab.keys)
             sidebarRow(L("tab.costs"), systemImage: "chart.bar.fill", color: .teal)
                 .tag(SettingsTab.costs)
 
@@ -167,7 +167,7 @@ struct SettingsView: View {
             case .chat: tab { chatSection; parametersSection; ocrSection }
             case .keys: tab { keysSection; speechKeysSection; webSection }
             case .voice: tab { voiceSection; dictationSection }
-            case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection }
+            case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection; aboutSection }
             case .appearance: tab { appearanceSection }
             case .prompts: tab { switcherSection; promptSection }
             case .costs: CostsSettingsView()           // brings its own Form
@@ -872,7 +872,13 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             LocalModelsEnableToggle() // local models master switch
-            OnlineModelsEnableToggle() // cloud providers master switch
+            // Cloud master switch is a NESTED row of local models: turning
+            // cloud off only makes sense when local models exist to fall back
+            // on (AppSettings re-enables cloud when the parent turns off).
+            if settings.localModelsEnabled {
+                OnlineModelsEnableToggle()
+                    .padding(.leading, 20)
+            }
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
             ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
         }
@@ -976,6 +982,34 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+
+    // MARK: - About (app version)
+
+    /// Values come from the generated Info.plist (MARKETING_VERSION /
+    /// CURRENT_PROJECT_VERSION in the pbxproj) — never hardcode the version
+    /// here, a release bump updates this row automatically.
+    private var aboutSection: some View {
+        Section {
+            HStack {
+                Text(L("about.version"))
+                Spacer()
+                Text(appVersionText)
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+            }
+        } header: {
+            Text(L("about.header"))
+        }
+    }
+
+    private var appVersionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        // The two are kept in sync by the release flow; show the build
+        // separately only if they ever diverge.
+        return build == version ? version : "\(version) (\(build))"
     }
 
     /// Zips logs into ~/Downloads off the main thread (ditto + file copies).

@@ -160,6 +160,142 @@ enum ImageInputPreparer {
         return out as Data
     }
 
+    // MARK: - Alpha handling (фикс «воскресшего фона»)
+    //
+    // Модели удаления фона (Bria RMBG, BiRefNet) возвращают PNG, где в RGB
+    // лежит НЕТРОНУТЫЙ оригинал, а вырезание живёт только в альфа-канале.
+    // Просмотрщики альфу уважают — картинка выглядит вырезанной; fal-модели
+    // (апскейл, eraser) альфу игнорируют и обрабатывают RGB — «удалённый»
+    // фон воскресал в результате. Плюс это утечка: из сохранённого файла
+    // фон достаётся любым редактором.
+
+    /// Decodes the first frame (shared by the alpha helpers below).
+    private static func decodeImage(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    /// RGBA8 premultiplied bitmap — само рисование в premultiplied-контекст
+    /// умножает RGB на альфу, т.е. скрытые под прозрачностью пиксели гибнут
+    /// уже на этом шаге.
+    private static func rgbaContext(width: Int, height: Int) -> CGContext? {
+        CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+    }
+
+    private static func encodePNG(_ image: CGImage) -> Data? {
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest), out.length > 0 else { return nil }
+        return out as Data
+    }
+
+    private static func hasAlphaChannel(_ image: CGImage) -> Bool {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: return false
+        default: return true
+        }
+    }
+
+    /// Flattens a transparent image onto WHITE (то, что видит пользователь
+    /// в чате) and extracts the alpha mask as a grayscale PNG. Returns nil
+    /// for images without actual transparency — the caller keeps the
+    /// original bytes and skips the restore step.
+    static func flattenIfTransparent(_ data: Data) -> (flattened: Data, alphaMask: Data)? {
+        guard let image = decodeImage(data), hasAlphaChannel(image) else { return nil }
+        let w = image.width, h = image.height
+        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+        guard let ctx = rgbaContext(width: w, height: h) else { return nil }
+        ctx.draw(image, in: rect)
+        guard let buf = ctx.data else { return nil }
+        let px = buf.bindMemory(to: UInt8.self, capacity: w * h * 4)
+
+        var mask = [UInt8](repeating: 255, count: w * h)
+        var transparent = false
+        for i in 0..<(w * h) {
+            let a = px[i * 4 + 3]
+            mask[i] = a
+            if a < 255 { transparent = true }
+        }
+        guard transparent else { return nil }
+
+        let maskPNG: Data? = mask.withUnsafeMutableBytes { raw in
+            guard let maskCtx = CGContext(
+                data: raw.baseAddress, width: w, height: h,
+                bitsPerComponent: 8, bytesPerRow: w,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ), let maskImage = maskCtx.makeImage() else { return nil }
+            return encodePNG(maskImage)
+        }
+
+        guard let flatCtx = rgbaContext(width: w, height: h) else { return nil }
+        flatCtx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        flatCtx.fill(rect)
+        flatCtx.draw(image, in: rect)
+        guard let maskPNG,
+              let flatImage = flatCtx.makeImage(),
+              let flatPNG = encodePNG(flatImage) else { return nil }
+        return (flatPNG, maskPNG)
+    }
+
+    /// Re-encodes an image so pixels under transparency hold no leftover RGB
+    /// (premultiply round-trip: RGB×0 → 0). Returns nil when the image has
+    /// no alpha channel — nothing to sanitize.
+    static func sanitizedTransparency(_ data: Data) -> Data? {
+        guard let image = decodeImage(data), hasAlphaChannel(image) else { return nil }
+        guard let ctx = rgbaContext(width: image.width, height: image.height) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let cleaned = ctx.makeImage() else { return nil }
+        return encodePNG(cleaned)
+    }
+
+    /// Scales the remembered alpha mask to the result's size and writes it
+    /// into the alpha channel — апскейл возвращает непрозрачный RGB, так что
+    /// прозрачность вырезки восстанавливается локально (бесплатно).
+    static func applyingAlphaMask(_ maskPNG: Data, to resultData: Data) -> Data? {
+        guard let result = decodeImage(resultData), let mask = decodeImage(maskPNG) else { return nil }
+        let w = result.width, h = result.height
+        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+
+        var scaled = [UInt8](repeating: 255, count: w * h)
+        let scaledOK = scaled.withUnsafeMutableBytes { raw -> Bool in
+            guard let maskCtx = CGContext(
+                data: raw.baseAddress, width: w, height: h,
+                bitsPerComponent: 8, bytesPerRow: w,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return false }
+            maskCtx.interpolationQuality = .high
+            maskCtx.draw(mask, in: rect)
+            return true
+        }
+        guard scaledOK, let ctx = rgbaContext(width: w, height: h) else { return nil }
+
+        ctx.draw(result, in: rect)
+        guard let buf = ctx.data else { return nil }
+        let px = buf.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        for i in 0..<(w * h) {
+            let a = Int(scaled[i])
+            guard a < 255 else { continue }
+            // Контекст premultiplied — умножаем вручную; PNG-энкодер обратит
+            // премультипликацию при записи (straight alpha).
+            px[i * 4]     = UInt8(Int(px[i * 4]) * a / 255)
+            px[i * 4 + 1] = UInt8(Int(px[i * 4 + 1]) * a / 255)
+            px[i * 4 + 2] = UInt8(Int(px[i * 4 + 2]) * a / 255)
+            px[i * 4 + 3] = UInt8(a)
+        }
+        guard let combined = ctx.makeImage() else { return nil }
+        return encodePNG(combined)
+    }
+
     // MARK: - Output conversion (ТЗ §4.5: формат вывода)
 
     /// Re-encodes a result into the requested format. Returns the input

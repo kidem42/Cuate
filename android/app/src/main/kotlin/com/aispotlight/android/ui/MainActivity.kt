@@ -80,8 +80,28 @@ class MainActivity : ComponentActivity() {
 
     private fun consumeIntent(intent: Intent?) {
         when (intent?.action) {
-            Intent.ACTION_SEND ->
-                sharedText.value = intent.getStringExtra(Intent.EXTRA_TEXT)
+            Intent.ACTION_SEND -> {
+                val type = intent.type ?: ""
+                val stream = androidx.core.content.IntentCompat.getParcelableExtra(
+                    intent, Intent.EXTRA_STREAM, android.net.Uri::class.java
+                )
+                when {
+                    // Shared image → pending attachment (same path as the picker).
+                    stream != null && type.startsWith("image/") ->
+                        viewModel.attachImage(stream)
+                    // Shared voice note / audio file → transcript into the input.
+                    stream != null && type.startsWith("audio/") ->
+                        viewModel.importSharedAudio(stream, type)
+                    else ->
+                        sharedText.value = intent.getStringExtra(Intent.EXTRA_TEXT)
+                }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val streams = androidx.core.content.IntentCompat.getParcelableArrayListExtra(
+                    intent, Intent.EXTRA_STREAM, android.net.Uri::class.java
+                )
+                streams?.forEach { viewModel.attachImage(it) }
+            }
             Intent.ACTION_PROCESS_TEXT ->
                 sharedText.value = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
         }

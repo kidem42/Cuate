@@ -20,44 +20,42 @@ struct ImageResultActionsBar: View {
     var body: some View {
         if settings.enabled, attachment.mimeType.hasPrefix("image") {
             VStack(alignment: .leading, spacing: 2) {
+                // Иконки вместо текста (кроме ретрай-меню): подписи живут в
+                // тултипах и accessibility-лейблах.
                 HStack(spacing: 12) {
-                    Button {
-                        save()
-                    } label: {
-                        Label(
-                            savedURL == nil ? IAL("ia.result.save") : IAL("ia.result.saved"),
-                            systemImage: savedURL == nil ? "square.and.arrow.down" : "checkmark"
-                        )
-                    }
-                    .help(String(format: IAL("ia.help.save"),
-                                 (settings.saveFolderURL.path as NSString).abbreviatingWithTildeInPath))
+                    iconButton(
+                        icon: savedURL == nil ? "square.and.arrow.down" : "checkmark",
+                        label: savedURL == nil ? IAL("ia.result.save") : IAL("ia.result.saved"),
+                        help: String(format: IAL("ia.help.save"),
+                                     (settings.saveFolderURL.path as NSString).abbreviatingWithTildeInPath)
+                    ) { save() }
 
                     if savedURL != nil {
-                        Button(IAL("ia.result.reveal")) { reveal() }
-                            .help(IAL("ia.help.reveal"))
+                        iconButton(icon: "folder",
+                                   label: IAL("ia.result.reveal"),
+                                   help: IAL("ia.help.reveal")) { reveal() }
                     }
 
-                    Button {
-                        copy()
-                    } label: {
-                        Label(
-                            justCopied ? IAL("ia.result.copied") : IAL("ia.result.copy"),
-                            systemImage: justCopied ? "checkmark" : "doc.on.doc"
-                        )
-                    }
-                    .help(IAL("ia.help.copy"))
+                    iconButton(
+                        icon: justCopied ? "checkmark" : "doc.on.doc",
+                        label: justCopied ? IAL("ia.result.copied") : IAL("ia.result.copy"),
+                        help: IAL("ia.help.copy")
+                    ) { copy() }
 
-                    // «Повторить с другой моделью» / «Продолжить
-                    // редактирование» — только пока жива сессионная запись
-                    // о том, чем этот результат был получен (ТЗ §4.3).
+                    // «Продолжить редактирование» — у ЛЮБОГО результата:
+                    // картинка возвращается в композер, где доступны все
+                    // функции аддона (апскейл/фон/объекты).
+                    iconButton(icon: "pencil",
+                               label: IAL("ia.result.continueEditing"),
+                               help: IAL("ia.help.continueEditing")) {
+                        ImageOperations.restoreAttachment(attachment)
+                    }
+
+                    // «Повторить с другой моделью» — только пока жива
+                    // сессионная запись о том, чем этот результат был
+                    // получен (ТЗ §4.3). Текстом — по решению дизайна.
                     if let record = ImageResultRegistry.shared.record(for: attachment.id) {
                         retryMenu(record)
-                        if record.function == .objectCleanup {
-                            Button(IAL("ia.result.continueEditing")) {
-                                ImageOperations.restoreAttachment(attachment)
-                            }
-                            .help(IAL("ia.help.continueEditing"))
-                        }
                     }
                 }
                 .buttonStyle(.link)
@@ -71,6 +69,17 @@ struct ImageResultActionsBar: View {
                 }
             }
         }
+    }
+
+    /// Icon-only action: the text lives in the tooltip; VoiceOver reads the
+    /// original label.
+    private func iconButton(icon: String, label: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .help(help)
+        .accessibilityLabel(label)
     }
 
     /// Other models of the same function → re-run on the remembered source.

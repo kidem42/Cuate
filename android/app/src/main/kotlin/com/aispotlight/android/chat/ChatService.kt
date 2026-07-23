@@ -15,6 +15,7 @@ import com.aispotlight.android.data.ImageStore
 import com.aispotlight.android.data.SpendKind
 import com.aispotlight.android.data.SpendTracker
 import com.aispotlight.android.providers.BraveSearchService
+import com.aispotlight.android.providers.WebFetchService
 import com.aispotlight.android.providers.MistralOCRService
 import com.aispotlight.android.providers.ModelPricing
 import com.aispotlight.android.providers.PricingCatalog
@@ -24,6 +25,7 @@ import com.aispotlight.android.settings.AppSettings
 import com.aispotlight.android.settings.Presets
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -109,20 +111,34 @@ object ChatService {
             reasoning = settings.reasoningMode.value,
             modelSupportsReasoning = settings.modelSupportsReasoningControl(providerID, model),
         )
-        // Attach the web-search tool only when the model can actually call
-        // tools (OpenRouter hosts models that can't) — otherwise the request errors.
+        // Attach web tools only when the model can actually call tools
+        // (OpenRouter hosts models that can't) — otherwise the request errors.
+        // web_search needs a Brave key; web_fetch is keyless and rides along
+        // whenever tools are possible at all.
         if (settings.webSearchEnabled.value &&
-            BraveSearchService.isAvailable &&
             settings.modelSupportsTools(providerID, model)
         ) {
-            options = options.copy(tools = listOf(BraveSearchService.toolSpec))
+            val tools = buildList {
+                if (BraveSearchService.isAvailable) add(BraveSearchService.toolSpec)
+                add(WebFetchService.toolSpec)
+            }
+            options = options.copy(tools = tools)
             // Usage hint appended at request time — the user's editable prompt
             // stays clean; the tool's schema/description travels via the API.
-            systemPrompt += "\n\n" +
-                "You have a web_search tool. Use it when the answer depends on current events, live data, or facts you are unsure about; do not guess. " +
-                "Citation rules for externally sourced facts: put an inline markdown link immediately after each fact, in the form ([Source Name](URL)). " +
-                "Never group links into a separate \"Sources\" section at the end. " +
-                "Do not add source links for answers from your own knowledge or the conversation."
+            systemPrompt += if (BraveSearchService.isAvailable) {
+                "\n\n" +
+                    "You have web tools. Use web_search when the answer depends on current events, live data, or facts you are unsure about; do not guess. " +
+                    "Use web_fetch to read a specific page in full — a promising search result, or a URL the user gave you; prefer fetching the actual page over relying on search snippets when details matter. " +
+                    "Citation rules for externally sourced facts: put an inline markdown link immediately after each fact, in the form ([Source Name](URL)). " +
+                    "Never group links into a separate \"Sources\" section at the end. " +
+                    "Do not add source links for answers from your own knowledge or the conversation."
+            } else {
+                "\n\n" +
+                    "You have a web_fetch tool: it downloads a web page and returns its readable text. " +
+                    "Use it when the user gives a URL or when you know the exact page that answers the question. " +
+                    "Citation rules for externally sourced facts: put an inline markdown link immediately after each fact, in the form ([Source Name](URL)). " +
+                    "Never group links into a separate \"Sources\" section at the end."
+            }
         }
 
         val supportsVision = settings.modelSupportsVision(providerID, model)
@@ -178,6 +194,19 @@ object ChatService {
                         r
                     } catch (e: Exception) {
                         "Search failed: ${e.message}"
+                    }
+                } else if (call.name == WebFetchService.toolSpec.name) {
+                    val urlString = call.arguments.optString("url")
+                    val host = urlString.toHttpUrlOrNull()?.host ?: urlString
+                    emit(ChatEvent.Status("Reading page: $host"))
+                    result = try {
+                        val r = WebFetchService.fetch(urlString)
+                        // Digest keeps only the head of a page — fetches are
+                        // big and must not evict search grounding from the 6k cap.
+                        toolDigest += (if (toolDigest.isEmpty()) "" else "\n\n") + "Fetched $urlString:\n${r.take(1500)}"
+                        r
+                    } catch (e: Exception) {
+                        "Fetch failed: ${e.message}"
                     }
                 } else {
                     result = "Unknown tool: ${call.name}"

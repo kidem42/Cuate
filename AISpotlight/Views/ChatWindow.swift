@@ -343,6 +343,24 @@ struct ChatWindow: View {
                             scrollToBottom(proxy)
                         }
                     }
+                    .onChange(of: pendingLocalStart != nil) { _, visible in
+                        // The local-model start confirmation appears below the
+                        // last message with NO store change (the send is
+                        // intercepted before performSend), so none of the other
+                        // scroll triggers fire. Always scroll — it answers the
+                        // user's own send. Deferred + re-asserted like the
+                        // thinking pill (scrollTo an unrendered LazyVStack id
+                        // is a silent no-op).
+                        guard visible else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            scrollToBottom(proxy)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            if pendingLocalStart != nil {
+                                scrollToBottom(proxy)
+                            }
+                        }
+                    }
                     .onAppear {
                         // Land on the latest message when the view first loads
                         // persisted history (LazyVStack needs a beat to lay out).
@@ -889,11 +907,17 @@ struct ChatWindow: View {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, pace: ScrollPace = .glide) {
-        // The thinking pill sits below the last message — when visible,
-        // it is the true bottom of the list.
-        let target: AnyHashable? = showThinkingIndicator
-            ? "thinking-indicator"
-            : chatStore.messages.last?.id
+        // The thinking pill and the local-start confirmation sit below the
+        // last message — when visible, they are the true bottom of the list
+        // (the confirm bubble renders below the pill, so it wins).
+        let target: AnyHashable?
+        if pendingLocalStart != nil {
+            target = "local-start-confirm"
+        } else if showThinkingIndicator {
+            target = "thinking-indicator"
+        } else {
+            target = chatStore.messages.last?.id
+        }
         guard let target else { return }
         lastAutoScroll = Date()
         isNearBottom = true
@@ -980,7 +1004,14 @@ struct ChatWindow: View {
 
     /// Appends the user message and streams the reply, clearing the composer.
     private func performSend(text: String, attachment: ChatAttachment?) {
-        let attachments = attachment.map { [$0] } ?? []
+        // An attachment restored from an existing chat message (ImageAddon
+        // «продолжить редактирование») already owns a store row; posting the
+        // same id again would collide with the unique index and persist an
+        // attachment-less message — re-wrap with a fresh identity.
+        let posted = attachment.map {
+            ImageOperations.isRestoredFromChat($0) ? ImageOperations.freshCopyForPosting($0) : $0
+        }
+        let attachments = posted.map { [$0] } ?? []
         let userMessage = ChatMessage(text: text, isUser: true, attachments: attachments)
         chatStore.appendNow(userMessage)
         messageText = "" // the editor re-measures itself back to one line
@@ -1427,11 +1458,17 @@ struct ChatWindow: View {
     private func sendVoiceMessage(audioURL: URL) async {
         guard ensureChatConfigured() else { return }
 
-        chatStore.setLoading(true)
+        // Synchronous set + status (not setLoading's async dispatch): during
+        // transcription the last message is still the assistant's previous
+        // reply, so the thinking pill only shows because statusText is set —
+        // without it a long recognition looks like the message was lost.
+        chatStore.isLoading = true
+        chatStore.statusText = L("panel.transcribing")
         pendingRetry = nil
         do {
             let transcript = try await TranscriptionService.transcribe(audioURL: audioURL)
             guard !transcript.isEmpty else {
+                chatStore.statusText = nil
                 chatStore.setLoading(false)
                 chatStore.addMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system)
                 return
@@ -1452,6 +1489,7 @@ struct ChatWindow: View {
             }
             streamAssistantReply()
         } catch {
+            chatStore.statusText = nil
             chatStore.setLoading(false)
             chatStore.addMessage(text: String(format: L("panel.transcriptionFailed"), error.localizedDescription), isUser: false, messageType: .system)
             // The recording file persists — Retry re-runs transcription + send.

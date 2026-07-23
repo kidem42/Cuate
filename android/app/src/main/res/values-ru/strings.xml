@@ -47,7 +47,7 @@
     <string name="settings_recent_images_enable">Свежие фото остаются видимыми</string>
     <string name="settings_recent_images_hint">Фото из последних трёх обменов повторно отправляются модели как изображения — уточняющие вопросы про фото продолжают его «видеть». Немного увеличивает стоимость ответа, пока фото свежее. Выкл: как изображение уходят только фото из последнего сообщения, старые — как извлечённый текст.</string>
     <string name="settings_web_search">Веб-поиск (Brave)</string>
-    <string name="settings_web_search_enable">Включить веб-поиск</string>
+    <string name="settings_web_search_enable">Разрешить доступ в интернет (поиск и чтение страниц)</string>
     <string name="settings_brave_key">API-ключ Brave Search</string>
     <string name="settings_brave_key_saved">Ключ Brave сохранён ✓</string>
     <string name="settings_stt">Голосовой ввод (распознавание речи)</string>

@@ -84,6 +84,13 @@ final class AppSettings: ObservableObject {
             if localModelsEnabled != oldValue {
                 NotificationCenter.default.post(name: .localModelsMenuDidChange, object: nil)
             }
+            // Облачный тумблер — вложенный пункт локальных моделей и виден
+            // только при включённых локальных. Выключение родителя при
+            // выключенном облаке оставило бы ноль провайдеров без видимого
+            // способа это исправить — облако возвращается само.
+            if !localModelsEnabled, !onlineModelsEnabled {
+                onlineModelsEnabled = true
+            }
         }
     }
 
@@ -186,6 +193,14 @@ final class AppSettings: ObservableObject {
 
     @Published var maxTokens: Int {
         didSet { defaults.set(maxTokens, forKey: "maxTokens") }
+    }
+
+    /// Reply-length cap for local (Ollama) models, separate from `maxTokens`:
+    /// local tokens are free, the cap only bounds generation time. 0 = no
+    /// limit — the request omits `max_tokens` and the model generates until
+    /// it stops on its own (thinking models can't get truncated mid-thought).
+    @Published var localMaxTokens: Int {
+        didSet { defaults.set(localMaxTokens, forKey: "localMaxTokens") }
     }
 
     // MARK: - Web search
@@ -547,6 +562,7 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         // tokens, and on OpenAI /responses the reasoning tokens draw from the
         // same budget. Users who explicitly set a value keep it.
         maxTokens = defaults.object(forKey: "maxTokens") as? Int ?? 16384
+        localMaxTokens = defaults.object(forKey: "localMaxTokens") as? Int ?? 0
         webSearchEnabled = defaults.object(forKey: "webSearchEnabled") as? Bool ?? true
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         theme = AppTheme(rawValue: defaults.string(forKey: "appTheme") ?? "") ?? .current

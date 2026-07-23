@@ -52,24 +52,41 @@ enum ChatService {
         // max_tokens above 8192 — clamp there so the raised default for
         // artifact-sized replies doesn't break those providers.
         let providerTokenCap = (providerID == .deepseek || providerID == .gemini) ? 8192 : Int.max
+        // Local models get their own cap (0 = unlimited, the request omits
+        // max_tokens) — local tokens are free, so the cloud budget shouldn't
+        // truncate them; thinking models were losing whole replies to it.
         var options = ChatRequestOptions(
-            maxTokens: min(settings.maxTokens, providerTokenCap),
+            maxTokens: providerID == .ollama
+                ? settings.localMaxTokens
+                : min(settings.maxTokens, providerTokenCap),
             reasoning: settings.reasoningMode
         )
         options.modelSupportsReasoning = settings.modelSupportsReasoningControl(provider: providerID, model: model)
-        // Attach the web-search tool only when the model can actually call tools
+        // Attach web tools only when the model can actually call tools
         // (OpenRouter hosts models that can't) — otherwise the request errors.
+        // web_search needs a Brave key; web_fetch is keyless and rides along
+        // whenever tools are possible at all.
         if settings.webSearchEnabled,
-           BraveSearchService.isAvailable,
            settings.modelSupportsTools(provider: providerID, model: model) {
-            options.tools = [BraveSearchService.toolSpec]
+            var tools: [ToolSpec] = []
+            if BraveSearchService.isAvailable { tools.append(BraveSearchService.toolSpec) }
+            tools.append(WebFetchService.toolSpec)
+            options.tools = tools
             // Usage hint appended at request time — the user's editable prompt
             // stays clean; the tool's schema/description travels via the API.
-            systemPrompt += """
+            if BraveSearchService.isAvailable {
+                systemPrompt += """
 
 
-You have a web_search tool. Use it when the answer depends on current events, live data, or facts you are unsure about; do not guess. Citation rules for externally sourced facts: put an inline markdown link immediately after each fact, in the form ([Source Name](URL)). Never group links into a separate "Sources" section at the end. Do not add source links for answers from your own knowledge or the conversation.
+You have web tools. Use web_search when the answer depends on current events, live data, or facts you are unsure about; do not guess. Use web_fetch to read a specific page in full — a promising search result, or a URL the user gave you; prefer fetching the actual page over relying on search snippets when details matter. Citation rules for externally sourced facts: put an inline markdown link immediately after each fact, in the form ([Source Name](URL)). Never group links into a separate "Sources" section at the end. Do not add source links for answers from your own knowledge or the conversation.
 """
+            } else {
+                systemPrompt += """
+
+
+You have a web_fetch tool: it downloads a web page and returns its readable text. Use it when the user gives a URL or when you know the exact page that answers the question. Citation rules for externally sourced facts: put an inline markdown link immediately after each fact, in the form ([Source Name](URL)). Never group links into a separate "Sources" section at the end.
+"""
+            }
         }
 
         let supportsVision = settings.modelSupportsVision(provider: providerID, model: model)
@@ -140,6 +157,20 @@ You have a web_search tool. Use it when the answer depends on current events, li
                                         + "Search \"\(query)\":\n\(result)"
                                 } catch {
                                     result = "Search failed: \(error.localizedDescription)"
+                                }
+                            } else if call.name == WebFetchService.toolSpec.name {
+                                let urlString = call.arguments["url"] as? String ?? ""
+                                let host = URL(string: urlString)?.host ?? urlString
+                                continuation.yield(.status("\(L("panel.fetchingPage")): \(host)"))
+                                do {
+                                    result = try await WebFetchService.fetch(urlString: urlString)
+                                    // Digest keeps only the head of a page —
+                                    // fetches are big and must not evict the
+                                    // search grounding from the 6k cap.
+                                    toolDigest += (toolDigest.isEmpty ? "" : "\n\n")
+                                        + "Fetched \(urlString):\n\(result.prefix(1500))"
+                                } catch {
+                                    result = "Fetch failed: \(error.localizedDescription)"
                                 }
                             } else {
                                 result = "Unknown tool: \(call.name)"

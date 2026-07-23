@@ -216,9 +216,9 @@ enum ImageAddonStrings {
             .russian: "Повторить ту же операцию над исходником другой моделью — удобно сравнить качество"
         ],
         "ia.help.continueEditing": [
-            .english: "Attach this result as the new input and keep removing objects",
-            .spanish: "Adjunta este resultado como nueva entrada y sigue eliminando objetos",
-            .russian: "Сделать этот результат новым вложением и продолжить удаление объектов"
+            .english: "Attach this result as the new input — upscale, remove the background or objects",
+            .spanish: "Adjunta este resultado como nueva entrada — escala, quita el fondo u objetos",
+            .russian: "Сделать этот результат новым вложением — апскейл, удаление фона или объектов"
         ],
 
         // Mask editor
