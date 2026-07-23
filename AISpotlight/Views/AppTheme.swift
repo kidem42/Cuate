@@ -642,6 +642,18 @@ extension EnvironmentValues {
 
 // MARK: - Panel surface
 
+/// Fade-out mask for the background pattern (World Time's Blueprint variant A,
+/// «чистое поле»): the pattern stays at full strength on the panel's margins —
+/// the row-header column and the top bar — and fades to nothing where the data
+/// grid begins, so the 24pt drafting grid never fights the table's own lines.
+/// The two gradient rectangles are unioned (ZStack alpha compositing).
+struct PatternFadeMask {
+    var solidWidth: CGFloat
+    var fadeWidth: CGFloat
+    var solidHeight: CGFloat
+    var fadeHeight: CGFloat
+}
+
 extension View {
     /// The panel's backing surface. `current` keeps the existing Liquid Glass;
     /// every other theme fills the panel with its gradient (plus signature
@@ -657,10 +669,12 @@ extension View {
     /// avoids the teardown; identity glass draws nothing, so the themed looks
     /// are pixel-identical to the old branch.
     @ViewBuilder
-    func themedPanelSurface(_ palette: ThemePalette, cornerRadius: CGFloat) -> some View {
+    func themedPanelSurface(_ palette: ThemePalette, cornerRadius: CGFloat,
+                            decorations: Bool = true,
+                            patternMask: PatternFadeMask? = nil) -> some View {
         if #available(macOS 26.0, *) {
             self
-                .background { PanelBackdrop(palette: palette) }
+                .background { PanelBackdrop(palette: palette, decorations: decorations, patternMask: patternMask) }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay {
                     if !palette.isGlass {
@@ -685,7 +699,7 @@ extension View {
             self.adaptiveGlass(cornerRadius: cornerRadius)
         } else {
             self
-                .background { PanelBackdrop(palette: palette) }
+                .background { PanelBackdrop(palette: palette, decorations: decorations, patternMask: patternMask) }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay(
                     RoundedRectangle(cornerRadius: cornerRadius)
@@ -725,6 +739,8 @@ extension View {
 /// glass effect itself.
 private struct PanelBackdrop: View {
     let palette: ThemePalette
+    var decorations: Bool = true
+    var patternMask: PatternFadeMask? = nil
 
     var body: some View {
         if !palette.isGlass {
@@ -745,9 +761,42 @@ private struct PanelBackdrop: View {
                     // Solid themed fill (other themes).
                     Rectangle().fill(palette.backgroundStyle)
                 }
-                ThemePatternOverlay(pattern: palette.pattern)
-                ThemeDecorations(themeID: palette.themeID)
+                pattern
+                if decorations {
+                    ThemeDecorations(themeID: palette.themeID)
+                }
             }
+        }
+    }
+
+    /// The signature pattern, faded out over the data field when a mask is
+    /// set. Only the Blueprint grid is masked — it is the one pattern whose
+    /// lines moiré against a data grid; Terminal's 3px scanlines are part of
+    /// the CRT look and stay full-bleed.
+    @ViewBuilder
+    private var pattern: some View {
+        if let mask = patternMask, case .blueprintGrid = palette.pattern {
+            ThemePatternOverlay(pattern: palette.pattern)
+                .mask {
+                    ZStack {
+                        // Union of the two margins: the row-header column…
+                        HStack(spacing: 0) {
+                            Rectangle().fill(.black).frame(width: mask.solidWidth)
+                            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: mask.fadeWidth)
+                            Color.clear
+                        }
+                        // …and the top-bar strip.
+                        VStack(spacing: 0) {
+                            Rectangle().fill(.black).frame(height: mask.solidHeight)
+                            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                                .frame(height: mask.fadeHeight)
+                            Color.clear
+                        }
+                    }
+                }
+        } else {
+            ThemePatternOverlay(pattern: palette.pattern)
         }
     }
 }

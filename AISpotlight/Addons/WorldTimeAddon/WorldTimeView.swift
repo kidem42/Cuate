@@ -15,7 +15,20 @@ struct WorldTimeView: View {
     @ObservedObject private var settings = WorldTimeSettings.shared
     // Re-renders the panel on interface-language changes (the L() pattern:
     // views observe AppSettings.language, `Localization` itself is static).
+    // Also drives live theme switches: `wt` re-resolves on settings.theme.
     @ObservedObject private var appSettings = AppSettings.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// The chat palette (panel surface, font design) and the World Time
+    /// tokens (day ramp, frames). A separate window, so both are read
+    /// straight from settings — the dictation-pill pattern, not the chat's
+    /// environment injection.
+    private var palette: ThemePalette {
+        ThemePalette.palette(for: appSettings.theme, scheme: colorScheme)
+    }
+    private var wt: WorldTimeTheme {
+        WorldTimeTheme.tokens(for: appSettings.theme, scheme: colorScheme)
+    }
 
     /// Midnight of the selected day in the home zone.
     @State private var dayStart: Date = .now
@@ -86,8 +99,20 @@ struct WorldTimeView: View {
             .padding(.bottom, 14)
             .padding(.top, 4)
             .frame(minWidth: 1000)
-            .adaptiveGlass(cornerRadius: 18)
+            // Same surface stack as the chat panel (glass stays resident on
+            // macOS 26 — never branch around it). Decorations are off: the
+            // panel is a working reference board. Blueprint's grid fades out
+            // where the data field begins (variant A «чистое поле»): full on
+            // the row-header column and the top bar, gone over the hours.
+            .themedPanelSurface(palette, cornerRadius: 18,
+                                decorations: false,
+                                patternMask: PatternFadeMask(solidWidth: Self.headerWidth,
+                                                             fadeWidth: 60,
+                                                             solidHeight: 80,
+                                                             fadeHeight: 30))
         }
+        // Terminal → monospaced, Pastel → rounded (the chat panel's rule).
+        .fontDesign(palette.fontDesign)
         .onAppear {
             dayStart = homeCalendar.startOfDay(for: .now)
             selectedColumn = nowColumn ?? 12
@@ -154,7 +179,7 @@ struct WorldTimeView: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
             }
             .buttonStyle(.borderless)
             .help("Esc")
@@ -170,7 +195,7 @@ struct WorldTimeView: View {
                 Text(WTL("wt.openCalendar"))
                     .font(.system(size: 11, weight: .medium))
                     .underline()
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(wt.link)
             }
             .buttonStyle(.plain)
             .onHover { inside in
@@ -179,7 +204,7 @@ struct WorldTimeView: View {
             formatToggle
             Text(WTL("wt.escHint"))
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(wt.isGlass ? AnyShapeStyle(.tertiary) : AnyShapeStyle(wt.secondary.opacity(0.7)))
         }
     }
 
@@ -187,7 +212,7 @@ struct WorldTimeView: View {
         HStack(spacing: 6) {
             Image(systemName: "plus")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
             TextField(WTL("wt.search.placeholder"), text: $searchText)
                 .textFieldStyle(.plain)
                 .frame(width: 230)
@@ -197,7 +222,7 @@ struct WorldTimeView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color.primary.opacity(0.06), in: Capsule())
+        .background(wt.capsule, in: Capsule())
         .onChange(of: searchText) { _, text in
             searchResults = WorldTimeCatalog.search(text)
         }
@@ -250,18 +275,46 @@ struct WorldTimeView: View {
         searchResults = []
     }
 
-    /// 12/24-hour segmented toggle.
+    /// 12/24-hour segmented toggle. The glass theme keeps the system
+    /// segmented picker; themed panels get a matching capsule pair — the
+    /// system control's material look is alien on a themed background.
+    @ViewBuilder
     private var formatToggle: some View {
-        Picker("", selection: Binding(
-            get: { settings.uses24Hour },
-            set: { settings.timeFormat = $0 ? .h24 : .h12 }
-        )) {
-            Text(verbatim: "AM/PM").tag(false)
-            Text(verbatim: "24").tag(true)
+        if wt.isGlass {
+            Picker("", selection: Binding(
+                get: { settings.uses24Hour },
+                set: { settings.timeFormat = $0 ? .h24 : .h12 }
+            )) {
+                Text(verbatim: "AM/PM").tag(false)
+                Text(verbatim: "24").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+        } else {
+            HStack(spacing: 0) {
+                themedSegment("AM/PM", is24: false)
+                themedSegment("24", is24: true)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(wt.sep, lineWidth: 1))
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+    }
+
+    private func themedSegment(_ label: String, is24: Bool) -> some View {
+        let active = settings.uses24Hour == is24
+        return Button {
+            settings.timeFormat = is24 ? .h24 : .h12
+        } label: {
+            Text(verbatim: label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(active ? wt.text : wt.secondary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(active ? wt.chip : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Busy lane (CalendarAddon integration)
@@ -319,14 +372,14 @@ struct WorldTimeView: View {
         HStack(spacing: 0) {
             Text(WTL("wt.busy.caption"))
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(wt.isGlass ? AnyShapeStyle(.tertiary) : AnyShapeStyle(wt.secondary.opacity(0.7)))
                 .frame(width: Self.headerWidth - 12, alignment: .trailing)
                 .padding(.trailing, 12)
             GeometryReader { geo in
                 let total = instant(forColumn: 24).timeIntervalSince(dayStart)
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.primary.opacity(0.07))
+                        .fill(wt.rail)
                         .frame(height: 3)
                     ForEach(busyBlocks) { block in
                         let x = geo.size.width * block.start.timeIntervalSince(dayStart) / total
@@ -335,6 +388,16 @@ struct WorldTimeView: View {
                         Capsule()
                             .fill(block.color)
                             .frame(width: width, height: hovered ? 12 : 8)
+                            // Halo ring in the theme's text color: the block's
+                            // fill is the CALENDAR's color (data — never
+                            // re-tinted), so on same-hued themes (blue on
+                            // Blueprint, green on Terminal) the ring is what
+                            // keeps it visible.
+                            .overlay {
+                                if !wt.isGlass {
+                                    Capsule().stroke(wt.text.opacity(0.55), lineWidth: 1)
+                                }
+                            }
                             .shadow(color: .black.opacity(hovered ? 0.3 : 0.15), radius: hovered ? 3 : 1, y: 1)
                             .offset(x: x)
                             .onHover { hoveredBusyID = $0 ? block.id : (hoveredBusyID == block.id ? nil : hoveredBusyID) }
@@ -413,6 +476,7 @@ struct WorldTimeView: View {
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
+                .tint(wt.isGlass ? nil : wt.link)
             }
             Spacer()
         }
@@ -434,12 +498,12 @@ struct WorldTimeView: View {
         } label: {
             Text(fmt.string(from: day))
                 .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.primary : (isWeekend ? Color.red.opacity(0.8) : Color.secondary))
+                .foregroundStyle(isSelected ? wt.text : (isWeekend ? wt.weekend : wt.secondary))
                 .padding(.horizontal, isSelected ? 10 : 7)
                 .padding(.vertical, 4)
                 .background {
                     if isSelected {
-                        Capsule().fill(Color.primary.opacity(0.1))
+                        Capsule().fill(wt.daySel)
                     }
                 }
         }
@@ -458,7 +522,7 @@ struct WorldTimeView: View {
                 VStack {
                     Spacer()
                     Text(WTL("wt.empty"))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -498,27 +562,35 @@ struct WorldTimeView: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(block.color.opacity(0.75), lineWidth: 1.5)
                     )
+                    // Same halo story as the lane blocks: the projection is
+                    // drawn in the calendar's color, so themed panels get a
+                    // text-colored glow to lift it off a same-hued ramp.
+                    .shadow(color: wt.isGlass ? .clear : wt.text.opacity(0.45), radius: 2)
                     .frame(width: width, height: geo.size.height + 6)
                     .position(x: x + width / 2, y: geo.size.height / 2)
             }
             if let hover = hoverColumn, hover != selectedColumn {
                 RoundedRectangle(cornerRadius: 9)
-                    .stroke(Color.primary.opacity(0.35), lineWidth: 1.2)
+                    .stroke(wt.hoverStroke, style: StrokeStyle(lineWidth: 1.2, dash: wt.selDash))
                     .frame(width: cellWidth + 4, height: geo.size.height + 6)
                     .position(x: Self.headerWidth + cellWidth * (CGFloat(hover) + 0.5),
                               y: geo.size.height / 2)
             }
             if let sel = selectedColumn {
                 RoundedRectangle(cornerRadius: 9)
-                    .fill(Color.primary.opacity(0.05))
+                    .fill(wt.selFill)
                     .frame(width: cellWidth + 4, height: geo.size.height + 6)
                     .position(x: Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5),
                               y: geo.size.height / 2)
+                // Blueprint's frame is dashed [4,3] (its bubble-stroke
+                // signature); Terminal/Synthwave/Halloween/Día dark add a
+                // neon glow around it.
                 RoundedRectangle(cornerRadius: 9)
-                    .stroke(Color.primary.opacity(0.8), lineWidth: 2)
+                    .stroke(wt.selStroke, style: StrokeStyle(lineWidth: 2, dash: wt.selDash))
                     .frame(width: cellWidth + 4, height: geo.size.height + 6)
                     .position(x: Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5),
                               y: geo.size.height / 2)
+                    .shadow(color: wt.selGlow ?? .clear, radius: wt.selGlow == nil ? 0 : 6)
                 // The half-hour divider: one dashed line down the WHOLE
                 // selected column (like the frame), only while the cursor is
                 // over the column.
@@ -529,7 +601,7 @@ struct WorldTimeView: View {
                         path.addLine(to: CGPoint(x: x, y: geo.size.height + 3))
                     }
                     .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
-                    .foregroundStyle(Color.primary.opacity(0.4))
+                    .foregroundStyle(wt.isGlass ? Color.primary.opacity(0.4) : wt.selStroke.opacity(0.45))
                 }
             }
         }
@@ -629,12 +701,12 @@ struct WorldTimeView: View {
                 if isHome {
                     Image(systemName: "house.fill")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
                 } else {
                     Text(offsetLabel(for: zoneID) ?? "")
                         .font(.system(size: 12, weight: .semibold))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
                 }
             }
             .frame(width: 36, alignment: .trailing)
@@ -645,6 +717,7 @@ struct WorldTimeView: View {
                     // compress before "Москва" becomes "Мос…".
                     Text(city.name)
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(wt.isGlass ? AnyShapeStyle(.primary) : AnyShapeStyle(wt.text))
                         .lineLimit(1)
                         .layoutPriority(2)
                     if let abbr = zone.abbreviation(for: instant(forColumn: selectedColumn ?? 12)) {
@@ -652,14 +725,14 @@ struct WorldTimeView: View {
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                            .foregroundStyle(.secondary)
+                            .background(Capsule().fill(wt.chip))
+                            .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
                     }
                 }
                 if !city.country.isEmpty {
                     Text(city.country)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
                         .lineLimit(1)
                 }
             }
@@ -670,10 +743,11 @@ struct WorldTimeView: View {
             VStack(alignment: .trailing, spacing: 1) {
                 Text(cachedFormatter(settings.uses24Hour ? "H:mm" : "h:mm a", zone: zone).string(from: now))
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(wt.isGlass ? AnyShapeStyle(.primary) : AnyShapeStyle(wt.text))
                     .monospacedDigit()
                 Text(cachedFormatter("EEE, MMM d", zone: zone).string(from: now))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(wt.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(wt.secondary))
             }
             .padding(.trailing, 10)
         }
@@ -706,10 +780,10 @@ struct WorldTimeView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: wt.bandRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: wt.bandRadius)
+                .stroke(wt.bandStroke, lineWidth: 0.5)
         )
     }
 
@@ -757,20 +831,28 @@ struct WorldTimeView: View {
                 }
             }
         }
-        .foregroundStyle(onDark ? Color.white : Color.primary)
+        .foregroundStyle(onDark ? wt.cellDarkText : (wt.isGlass ? Color.primary : wt.text))
         .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
         .background(cellFill(kind: kind, isMidnight: isMidnight))
+        .overlay {
+            // Día's signature dotted border around the midnight date chip.
+            if isMidnight, let stroke = wt.midnightStroke {
+                Rectangle()
+                    .strokeBorder(stroke, style: StrokeStyle(lineWidth: 1, dash: [1, 3]))
+            }
+        }
         .overlay(alignment: .leading) {
             // Hairline separator between cells inside the band.
             if index > 0 {
                 Rectangle()
-                    .fill(Color.white.opacity(0.22))
+                    .fill(wt.isGlass ? Color.white.opacity(0.22) : wt.sep)
                     .frame(width: 0.5)
                     .padding(.vertical, 6)
             }
         }
         .overlay {
-            // "Right now" marker: a dashed underline inside the cell.
+            // "Right now" marker: a dashed underline inside the cell (Día:
+            // dotted [1,3], the theme's papel-picado rhythm).
             if isNow && !isMidnight {
                 VStack {
                     Spacer()
@@ -779,8 +861,10 @@ struct WorldTimeView: View {
                         .frame(height: 1)
                         .overlay(
                             Line()
-                                .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [3, 2.5]))
-                                .foregroundStyle(onDark ? Color.white.opacity(0.8) : Color.primary.opacity(0.5))
+                                .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: wt.nowDash))
+                                .foregroundStyle(wt.isGlass
+                                                 ? (onDark ? Color.white.opacity(0.8) : Color.primary.opacity(0.5))
+                                                 : wt.now)
                         )
                         .padding(.horizontal, 8)
                         .padding(.bottom, 5)
@@ -825,13 +909,13 @@ struct WorldTimeView: View {
                 Color.clear
                 if let half {
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.primary.opacity(0.13))
+                        .fill(wt.isGlass ? Color.primary.opacity(0.13) : wt.selFill)
                         .frame(width: geo.size.width / 2 - 3, height: geo.size.height - 6)
                         .position(x: half == 0 ? geo.size.width / 4 : geo.size.width * 3 / 4,
                                   y: geo.size.height / 2)
                     Image(systemName: "plus")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(Color.primary.opacity(0.65))
+                        .foregroundStyle(wt.isGlass ? Color.primary.opacity(0.65) : wt.text.opacity(0.65))
                         .position(x: half == 0 ? geo.size.width / 4 : geo.size.width * 3 / 4,
                                   y: geo.size.height / 2)
                 }
@@ -855,15 +939,17 @@ struct WorldTimeView: View {
         }
     }
 
+    /// Cell fill from the theme's day ramp (`current` resolves to the
+    /// original hardcoded colors — see WorldTimeTheme).
     @ViewBuilder
     private func cellFill(kind: CellKind, isMidnight: Bool) -> some View {
         if isMidnight {
-            Color(red: 0.15, green: 0.20, blue: 0.63).opacity(0.85)
+            wt.midnight
         } else {
             switch kind {
-            case .night: Color(red: 0.25, green: 0.33, blue: 0.82).opacity(0.55)
-            case .shoulder: Color(red: 0.98, green: 0.80, blue: 0.39).opacity(0.38)
-            case .work: Color.white.opacity(0.32)
+            case .night: wt.night
+            case .shoulder: wt.shoulder
+            case .work: wt.work
             }
         }
     }
