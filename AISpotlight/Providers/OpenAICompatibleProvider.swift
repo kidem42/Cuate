@@ -153,7 +153,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             body["reasoning"] = ["effort": options.reasoning == .fast ? "low" : "high"]
         }
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         } catch {
             return AsyncThrowingStream { $0.finish(throwing: error) }
         }
@@ -339,7 +339,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         } catch {
             return AsyncThrowingStream { $0.finish(throwing: error) }
         }

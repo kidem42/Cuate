@@ -18,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private var chatWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
+    private var worldTimeWindow: NSWindow? // WorldTimeAddon (Addons/WorldTimeAddon)
     private var hotkeyManager: HotkeyManager?
     private var statusItem: NSStatusItem?
     /// Status-bar submenu listing local models with per-model load/unload
@@ -30,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         case captureArea = 3
         case dictate = 4
         case dictateTranslate = 5
+        case worldTime = 6 // WorldTimeAddon panel toggle
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -83,6 +85,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // Refresh the menu when the LayoutFix addon toggles (enable / auto).
         NotificationCenter.default.addObserver(forName: .layoutFixHotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.setupStatusItem() }
+        }
+
+        // WorldTimeAddon: its menu item and global hotkey appear/disappear
+        // with the master switch; the settings tab's "Open" button routes
+        // through here too.
+        NotificationCenter.default.addObserver(forName: .worldTimeAddonDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.setupHotkeys()
+                self?.setupStatusItem()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: .openWorldTimeWindow, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.showWorldTimePanel() }
+        }
+        NotificationCenter.default.addObserver(forName: .closeWorldTimeWindow, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.worldTimeWindow?.orderOut(nil) }
+        }
+        // Auto-fit the panel's height to its rows (grow on add, shrink on
+        // remove), clamped to the screen. Width stays the user's.
+        NotificationCenter.default.addObserver(forName: .worldTimeContentHeight, object: nil, queue: .main) { [weak self] note in
+            let height = (note.userInfo?["height"] as? CGFloat) ?? 0
+            Task { @MainActor in self?.fitWorldTimePanel(contentHeight: height) }
         }
 
         // Rebuild the menu when local models toggle on/off or Ollama is (un)detected,
@@ -202,6 +226,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         )
         areaItem.target = self
         menu.addItem(areaItem)
+
+        // WorldTimeAddon — timezone comparison grid (shown when enabled).
+        if WorldTimeSettings.shared.enabled {
+            menu.addItem(NSMenuItem.separator())
+            let worldTimeItem = NSMenuItem(
+                title: "\(WTL("wt.menu.open")) (\(WorldTimeSettings.shared.hotkey.displayString))",
+                action: #selector(openWorldTime(_:)),
+                keyEquivalent: ""
+            )
+            worldTimeItem.target = self
+            menu.addItem(worldTimeItem)
+        }
 
         // Dictation shortcuts (shown when the feature is enabled)
         if settings.dictationEnabled {
@@ -393,6 +429,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         var hotkeys = [toggleHotkey, screenshotHotkey, areaHotkey]
 
+        // WorldTimeAddon panel — registered only while the addon is on.
+        if WorldTimeSettings.shared.enabled {
+            hotkeys.append(HotkeyManager.Hotkey(
+                identifier: HotkeyIdentifier.worldTime.rawValue,
+                keyCode: WorldTimeSettings.shared.hotkey.keyCode,
+                modifiers: WorldTimeSettings.shared.hotkey.modifiers
+            ) { [weak self] in
+                self?.openWorldTime(nil)
+            })
+        }
+
         // System-wide dictation (Superwhisper-style) — optional feature
         if settings.dictationEnabled {
             hotkeys.append(HotkeyManager.Hotkey(
@@ -481,6 +528,122 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // old 560-wide TabView frame saved under the previous name.
     private static let settingsFrameName = "AISpotlightSettingsWindow.v2"
 
+    // MARK: - World Time (Addons/WorldTimeAddon)
+
+    private static let worldTimeFrameName = "AISpotlightWorldTimePanel"
+
+    /// The menu item toggles the panel: visible → hide, hidden → summon.
+    @objc private func openWorldTime(_ sender: Any?) {
+        if let window = worldTimeWindow, window.isVisible {
+            window.orderOut(nil)
+        } else {
+            showWorldTimePanel()
+        }
+    }
+
+    /// Summons the timezone grid as a Spotlight-like floating panel: glass,
+    /// borderless, above other windows, on the screen under the cursor
+    /// (pattern: the chat panel). Esc or its close button hides it; unlike
+    /// the chat panel it stays up on focus loss — it's a reference board you
+    /// glance at while writing elsewhere.
+    private func showWorldTimePanel() {
+        if worldTimeWindow == nil {
+            let hostingView = NSHostingView(rootView: WorldTimeView())
+            hostingView.sizingOptions = []
+            hostingView.translatesAutoresizingMaskIntoConstraints = false
+            hostingView.wantsLayer = true
+            hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+
+            let container = NSView()
+            container.wantsLayer = true
+            container.layer?.backgroundColor = NSColor.clear.cgColor
+            container.layer?.cornerRadius = 18
+            container.layer?.masksToBounds = true
+            container.addSubview(hostingView)
+            NSLayoutConstraint.activate([
+                hostingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                hostingView.topAnchor.constraint(equalTo: container.topAnchor),
+                hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            ])
+
+            let window = FloatingPanelWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1120, height: 340),
+                styleMask: [.borderless, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.minSize = NSSize(width: 1000, height: 260)
+            window.preservesContentDuringLiveResize = true
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            // NOT movable-by-background: AppKit would drag the window along
+            // with the row-reorder DragGesture (the gesture looks like
+            // "background" to it) and the rows jitter. Dragging goes through
+            // explicit DragHandle regions in the view instead.
+            window.isMovableByWindowBackground = false
+            window.level = .floating
+            window.hasShadow = true
+            window.isReleasedWhenClosed = false
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.hidesOnDeactivate = false
+            window.allowsToolTipsWhenApplicationIsInactive = true
+            window.contentView = container
+            window.setFrameAutosaveName(Self.worldTimeFrameName)
+            worldTimeWindow = window
+
+            // Esc closes the panel (borderless windows get no close button).
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                if event.keyCode == 53, // Esc
+                   let panel = self?.worldTimeWindow, panel.isKeyWindow {
+                    panel.orderOut(nil)
+                    return nil
+                }
+                return event
+            }
+        }
+
+        guard let window = worldTimeWindow else { return }
+        // First show (no saved frame): Spotlight-centered on the screen
+        // under the cursor. Afterwards: wherever the user left it.
+        if !window.setFrameUsingName(Self.worldTimeFrameName, force: true) {
+            let screen = screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
+            spotlightCenter(window, on: screen)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Chrome around the panel's measured content block: top padding (4) +
+    /// drag strip (16) + two VStack spacings (10+10) + bottom padding (14).
+    private static let worldTimeChromeHeight: CGFloat = 54
+
+    /// Resizes the panel so the grid fits exactly: the top edge stays put,
+    /// the bottom follows the content; clamped into the screen's visible
+    /// area. Skipped mid-user-resize so we never fight the drag.
+    private func fitWorldTimePanel(contentHeight: CGFloat) {
+        guard contentHeight > 0,
+              let window = worldTimeWindow, !window.inLiveResize else { return }
+        let desired = contentHeight + Self.worldTimeChromeHeight
+        var frame = window.frame
+        let delta = desired - frame.height
+        guard abs(delta) > 2 else { return }
+        frame.origin.y -= delta // keep the TOP edge anchored
+        frame.size.height = desired
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
+            if frame.height > visible.height {
+                frame.size.height = visible.height
+            }
+            if frame.minY < visible.minY {
+                frame.origin.y = visible.minY
+            }
+            if frame.maxY > visible.maxY {
+                frame.origin.y = visible.maxY - frame.height
+            }
+        }
+        window.setFrame(frame, display: true, animate: true)
+    }
+
     /// Clicking the Dock icon while Settings is open brings it back to front.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -488,13 +651,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
-        // Once Settings is gone, drop back to a menu-bar-only agent (no Dock icon).
-        // Deferred so the window has actually closed before we re-check visibility.
+        guard let window = notification.object as? NSWindow,
+              window === settingsWindow || window === worldTimeWindow else { return }
+        // Once every regular window is gone, drop back to a menu-bar-only
+        // agent (no Dock icon). Deferred so the window has actually closed
+        // before we re-check visibility.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let stillOpen = (self.settingsWindow?.isVisible ?? false)
                 || (self.onboardingWindow?.isVisible ?? false)
+                || (self.worldTimeWindow?.isVisible ?? false)
             if !stillOpen {
                 NSApp.setActivationPolicy(.accessory)
             }

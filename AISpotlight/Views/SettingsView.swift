@@ -9,12 +9,16 @@ enum SettingsTab: String, Hashable {
     case localModels // Local models console (Views/LocalModelsSettingsView)
     case layoutFix // LayoutFix addon (Addons/LayoutFix)
     case imageAddon // ImageAddon (Addons/ImageAddon)
+    case calendarAddon // CalendarAddon (Addons/CalendarAddon)
+    case worldTime // WorldTimeAddon (Addons/WorldTimeAddon)
 }
 
 struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var layoutFix = LayoutFixSettings.shared // addon: gates its tab
     @ObservedObject private var imageAddon = ImageAddonSettings.shared // addon: gates its tab
+    @ObservedObject private var calendarAddon = CalendarSettings.shared // addon: gates its tab
+    @ObservedObject private var worldTime = WorldTimeSettings.shared // addon: gates its tab
 
     enum KeyTestState: Equatable {
         case testing
@@ -67,6 +71,9 @@ struct SettingsView: View {
         }
         .onChange(of: imageAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .imageAddon { selectedTab = .general }
+        }
+        .onChange(of: calendarAddon.enabled) { _, enabled in
+            if !enabled && selectedTab == .calendarAddon { selectedTab = .general }
         }
         // Local-models tab bounces back to General when the feature is turned off.
         .onChange(of: settings.localModelsEnabled) { _, enabled in
@@ -131,7 +138,7 @@ struct SettingsView: View {
 
             // Addon rows appear only while the addon is enabled
             // (master switches live in the General section).
-            if layoutFix.enabled || imageAddon.enabled {
+            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled {
                 Section(L("sidebar.addons")) {
                     if layoutFix.enabled {
                         sidebarRow(LFL("lf.tab"), systemImage: "keyboard.fill", color: .indigo)
@@ -140,6 +147,14 @@ struct SettingsView: View {
                     if imageAddon.enabled {
                         sidebarRow(IAL("ia.tab"), systemImage: "photo.fill", color: .green)
                             .tag(SettingsTab.imageAddon)
+                    }
+                    if calendarAddon.enabled {
+                        sidebarRow(CAL("cal.tab"), systemImage: "calendar", color: .red)
+                            .tag(SettingsTab.calendarAddon)
+                    }
+                    if worldTime.enabled {
+                        sidebarRow(WTL("wt.tab"), systemImage: "globe", color: .cyan)
+                            .tag(SettingsTab.worldTime)
                     }
                 }
             }
@@ -175,6 +190,8 @@ struct SettingsView: View {
             case .localModels: LocalModelsSettingsView() // brings its own Form
             case .layoutFix: LayoutFixSettingsView()   // brings its own Form
             case .imageAddon: ImageAddonSettingsView() // brings its own Form
+            case .calendarAddon: CalendarSettingsView() // brings its own Form
+            case .worldTime: WorldTimeSettingsView()   // brings its own Form
             }
         }
         // The "glass" part: hide the forms' opaque scroll background (the
@@ -698,8 +715,10 @@ struct SettingsView: View {
     // MARK: - Hotkeys
 
     private var allHotkeys: [HotkeyCombo] {
-        [settings.togglePanelHotkey, settings.screenshotHotkey, settings.areaScreenshotHotkey,
-         settings.dictationHotkey, settings.dictationTranslateHotkey]
+        var combos = [settings.togglePanelHotkey, settings.screenshotHotkey, settings.areaScreenshotHotkey,
+                      settings.dictationHotkey, settings.dictationTranslateHotkey]
+        if worldTime.enabled { combos.append(worldTime.hotkey) }
+        return combos
     }
 
     private func others(_ combo: HotkeyCombo) -> [HotkeyCombo] {
@@ -735,12 +754,21 @@ struct SettingsView: View {
                     conflictingCombos: others(settings.dictationTranslateHotkey)
                 )
             }
+            // WorldTimeAddon panel hotkey — shown only while the addon is on.
+            if worldTime.enabled {
+                ShortcutRecorderView(
+                    title: WTL("wt.hotkey"),
+                    combo: $worldTime.hotkey,
+                    conflictingCombos: others(worldTime.hotkey)
+                )
+            }
             Button(L("hotkeys.reset")) {
                 settings.togglePanelHotkey = .defaultTogglePanel
                 settings.screenshotHotkey = .defaultScreenshot
                 settings.areaScreenshotHotkey = .defaultAreaScreenshot
                 settings.dictationHotkey = .defaultDictation
                 settings.dictationTranslateHotkey = .defaultDictationTranslate
+                worldTime.hotkey = WorldTimeSettings.defaultHotkey
             }
         } header: {
             Text(L("hotkeys.header"))
@@ -911,6 +939,8 @@ struct SettingsView: View {
             }
             LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
             ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
+            CalendarEnableToggle() // CalendarAddon master switch (Addons/CalendarAddon)
+            WorldTimeEnableToggle() // WorldTimeAddon master switch (Addons/WorldTimeAddon)
         }
     }
 

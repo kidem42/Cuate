@@ -110,7 +110,7 @@ struct GeminiProvider: LLMProvider {
         }
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         } catch {
             return AsyncThrowingStream { $0.finish(throwing: error) }
         }

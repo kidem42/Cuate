@@ -1,0 +1,923 @@
+import SwiftUI
+import AppKit
+import Combine
+import EventKit
+
+/// The World Time panel: a timezone comparison grid rendered in
+/// the app's liquid-glass idiom ("glass band" style). Columns are the 24
+/// hours of the selected day in the HOME zone; every row shows what those
+/// same instants read as in that city — one vertical slice is one moment
+/// everywhere.
+///
+/// Presented as a Spotlight-like floating panel (borderless, glass), see
+/// `AppDelegate.toggleWorldTimePanel`.
+struct WorldTimeView: View {
+    @ObservedObject private var settings = WorldTimeSettings.shared
+    // Re-renders the panel on interface-language changes (the L() pattern:
+    // views observe AppSettings.language, `Localization` itself is static).
+    @ObservedObject private var appSettings = AppSettings.shared
+
+    /// Midnight of the selected day in the home zone.
+    @State private var dayStart: Date = .now
+    @State private var selectedColumn: Int? = nil
+    @State private var hoverColumn: Int? = nil
+    @State private var draggingZone: String? = nil
+    @State private var dragTranslation: CGFloat = 0
+    @State private var now: Date = .now
+    @State private var searchText = ""
+    @State private var searchResults: [WorldTimeCity] = []
+    @State private var showDatePicker = false
+    @State private var busyBlocks: [BusyBlock] = []
+    @State private var hoveredBusyID: String? = nil
+
+    /// A half-hour slot inside the selected column: which row's cell shows
+    /// the split, and which half (:00 / :30) is hovered or being composed.
+    private struct SlotRef: Equatable {
+        let zoneID: String
+        let column: Int
+        let half: Int
+    }
+    @State private var hoverSlot: SlotRef? = nil
+    @State private var composerSlot: SlotRef? = nil
+
+    private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    /// Width of the row-header column; keeps hour columns aligned across rows.
+    private static let headerWidth: CGFloat = 250
+    private static let rowHeight: CGFloat = 46
+    private static let rowSpacing: CGFloat = 8
+
+    var body: some View {
+        // A single glass surface for the whole panel (pattern: ChatWindow).
+        AdaptiveGlassContainer(spacing: 24) {
+            VStack(spacing: 10) {
+                DragHandle()
+                    .frame(height: 16)
+                    .accessibilityHidden(true)
+                // The measured block: everything with intrinsic height. Its
+                // ideal height drives the window's auto-fit (AppDelegate).
+                VStack(spacing: 10) {
+                    topBar
+                    dateStrip
+                    if !busyBlocks.isEmpty {
+                        busyLane
+                    }
+                    grid
+                }
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                    }
+                )
+                .onPreferenceChange(ContentHeightKey.self) { height in
+                    NotificationCenter.default.post(
+                        name: .worldTimeContentHeight, object: nil,
+                        userInfo: ["height": height]
+                    )
+                }
+                // Everything below the rows is a window-drag area, like the
+                // strip at the top (`isMovableByWindowBackground` is off —
+                // it fought the row-reorder gesture).
+                DragHandle()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minHeight: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+            .padding(.top, 4)
+            .frame(minWidth: 1000)
+            .adaptiveGlass(cornerRadius: 18)
+        }
+        .onAppear {
+            dayStart = homeCalendar.startOfDay(for: .now)
+            selectedColumn = nowColumn ?? 12
+            refreshBusy()
+        }
+        .onReceive(timer) {
+            now = $0
+            refreshBusy() // events change while the panel sits open
+        }
+        .onChange(of: settings.homeZoneID) { _, _ in
+            // Re-anchor the day to the new reference zone's midnight.
+            dayStart = homeCalendar.startOfDay(for: dayStart.addingTimeInterval(12 * 3600))
+        }
+        .onChange(of: dayStart) { _, _ in refreshBusy() }
+        .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
+            refreshBusy()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .calendarAddonDidChange)) { _ in
+            refreshBusy()
+        }
+    }
+
+    // MARK: - Zones & calendars
+
+    private var homeZone: TimeZone {
+        TimeZone(identifier: settings.homeZoneID) ?? .current
+    }
+
+    private var homeCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = homeZone
+        return cal
+    }
+
+    /// The instant a grid column represents. `byAdding:.hour` keeps DST days
+    /// honest (a 23/25-hour day still yields correct wall-clock instants).
+    private func instant(forColumn index: Int) -> Date {
+        homeCalendar.date(byAdding: .hour, value: index, to: dayStart) ?? dayStart
+    }
+
+    /// Half-hour slot creation is offered only with the CalendarAddon on,
+    /// event access granted, and a writable calendar to land in — otherwise
+    /// the grid stays a pure clock.
+    private var slotCreationAvailable: Bool {
+        CalendarSettings.shared.enabled
+            && CalendarAddon.shared.hasEventAccess
+            && CalendarAddon.shared.defaultEventCalendar != nil
+    }
+
+    /// Column of "right now", when the selected day contains it.
+    private var nowColumn: Int? {
+        guard let end = homeCalendar.date(byAdding: .day, value: 1, to: dayStart),
+              now >= dayStart, now < end else { return nil }
+        return homeCalendar.dateComponents([.hour], from: dayStart, to: now).hour
+    }
+
+    // MARK: - Top bar
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            // Close on the LEFT — the macOS window convention.
+            Button {
+                NotificationCenter.default.post(name: .closeWorldTimeWindow, object: nil)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Esc")
+            searchField
+            Spacer()
+            // Jump to the Apple Calendar app — the created slots live there.
+            // A text link, not an icon.
+            Button {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.iCal") {
+                    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                }
+            } label: {
+                Text(WTL("wt.openCalendar"))
+                    .font(.system(size: 11, weight: .medium))
+                    .underline()
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            formatToggle
+            Text(WTL("wt.escHint"))
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            TextField(WTL("wt.search.placeholder"), text: $searchText)
+                .textFieldStyle(.plain)
+                .frame(width: 230)
+                .onSubmit {
+                    if let first = searchResults.first { add(first) }
+                }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.primary.opacity(0.06), in: Capsule())
+        .onChange(of: searchText) { _, text in
+            searchResults = WorldTimeCatalog.search(text)
+        }
+        .popover(isPresented: Binding(
+            get: { !searchText.isEmpty },
+            set: { if !$0 { searchText = "" } }
+        ), arrowEdge: .bottom) {
+            searchResultsList
+        }
+    }
+
+    private var searchResultsList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if searchResults.isEmpty {
+                Text(WTL("wt.search.noResults"))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+            } else {
+                ForEach(searchResults) { city in
+                    Button {
+                        add(city)
+                    } label: {
+                        HStack {
+                            Text(city.name)
+                            if !city.country.isEmpty {
+                                Text(city.country)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(offsetLabel(for: city.zoneID) ?? "")
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(6)
+        .frame(width: 300)
+    }
+
+    private func add(_ city: WorldTimeCity) {
+        settings.addZone(city.zoneID)
+        searchText = ""
+        searchResults = []
+    }
+
+    /// 12/24-hour segmented toggle.
+    private var formatToggle: some View {
+        Picker("", selection: Binding(
+            get: { settings.uses24Hour },
+            set: { settings.timeFormat = $0 ? .h24 : .h12 }
+        )) {
+            Text(verbatim: "AM/PM").tag(false)
+            Text(verbatim: "24").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    // MARK: - Busy lane (CalendarAddon integration)
+
+    /// One event from the user's visible calendars, clipped to the shown day.
+    private struct BusyBlock: Identifiable {
+        let id: String
+        let title: String
+        let start: Date
+        let end: Date
+        let color: Color
+    }
+
+    /// Reads the selected day's events from the calendars the CalendarAddon
+    /// is allowed to see. Empty (lane hidden) when the addon is off, access
+    /// is missing, or the day is free. All-day events are skipped — they'd
+    /// paint the whole lane and say nothing about meeting slots.
+    private func refreshBusy() {
+        guard CalendarSettings.shared.enabled, CalendarAddon.shared.hasEventAccess else {
+            if !busyBlocks.isEmpty { busyBlocks = [] }
+            return
+        }
+        let dayEnd = instant(forColumn: 24)
+        let calendars = CalendarAddon.shared.visibleEventCalendars()
+        guard !calendars.isEmpty else {
+            if !busyBlocks.isEmpty { busyBlocks = [] }
+            return
+        }
+        let store = CalendarAddon.shared.store
+        let predicate = store.predicateForEvents(withStart: dayStart, end: dayEnd, calendars: calendars)
+        busyBlocks = store.events(matching: predicate)
+            .filter { !$0.isAllDay }
+            .compactMap { event -> BusyBlock? in
+                guard let start = event.startDate, let end = event.endDate, end > start,
+                      end > dayStart, start < dayEnd else { return nil }
+                // Recurring events share an identifier — the occurrence date
+                // keeps ForEach ids unique.
+                let id = (event.eventIdentifier ?? UUID().uuidString) + "@\(start.timeIntervalSince1970)"
+                let color = event.calendar.flatMap { cal in
+                    cal.cgColor.map { Color(cgColor: $0) }
+                } ?? Color.red
+                return BusyBlock(id: id,
+                                 title: event.title ?? "",
+                                 start: max(start, dayStart),
+                                 end: min(end, dayEnd),
+                                 color: color)
+            }
+            .sorted { $0.start < $1.start }
+    }
+
+    /// The thin busy track above the grid, aligned with the hour columns.
+    /// Blocks are exact intervals (not snapped to hours), tinted with the
+    /// calendar's own color. Hover grows the block and reveals the title.
+    private var busyLane: some View {
+        HStack(spacing: 0) {
+            Text(WTL("wt.busy.caption"))
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: Self.headerWidth - 12, alignment: .trailing)
+                .padding(.trailing, 12)
+            GeometryReader { geo in
+                let total = instant(forColumn: 24).timeIntervalSince(dayStart)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.07))
+                        .frame(height: 3)
+                    ForEach(busyBlocks) { block in
+                        let x = geo.size.width * block.start.timeIntervalSince(dayStart) / total
+                        let width = max(6, geo.size.width * block.end.timeIntervalSince(block.start) / total)
+                        let hovered = hoveredBusyID == block.id
+                        Capsule()
+                            .fill(block.color)
+                            .frame(width: width, height: hovered ? 12 : 8)
+                            .shadow(color: .black.opacity(hovered ? 0.3 : 0.15), radius: hovered ? 3 : 1, y: 1)
+                            .offset(x: x)
+                            .onHover { hoveredBusyID = $0 ? block.id : (hoveredBusyID == block.id ? nil : hoveredBusyID) }
+                    }
+                    // Floating label of the hovered block — its own capsule,
+                    // NOT clipped to the block's width (a 30-minute meeting
+                    // is a sliver, its name is not). Clamped into the lane.
+                    if let block = busyBlocks.first(where: { $0.id == hoveredBusyID }) {
+                        let startX = geo.size.width * block.start.timeIntervalSince(dayStart) / total
+                        let width = max(6, geo.size.width * block.end.timeIntervalSince(block.start) / total)
+                        let center = min(max(startX + width / 2, 90), geo.size.width - 90)
+                        // Title capped in code (SwiftUI can't hug-and-cap in
+                        // one frame): ~40 chars covers a lane-sized capsule.
+                        let title = block.title.isEmpty ? "•" : String(block.title.prefix(40))
+                            + (block.title.count > 40 ? "…" : "")
+                        Text("\(title) · \(timeRangeLabel(block))")
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.regularMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(block.color, lineWidth: 1))
+                            .position(x: center, y: -13)
+                            .zIndex(2)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .frame(height: 18)
+        .animation(.easeOut(duration: 0.12), value: hoveredBusyID)
+    }
+
+    /// "14:30–15:30" in home-zone wall time (the lane lives on the home axis).
+    private func timeRangeLabel(_ block: BusyBlock) -> String {
+        let fmt = cachedFormatter(settings.uses24Hour ? "H:mm" : "h:mm a", zone: homeZone)
+        return "\(fmt.string(from: block.start))–\(fmt.string(from: block.end))"
+    }
+
+    // MARK: - Date strip
+
+    private var dateStrip: some View {
+        HStack(spacing: 4) {
+            Button {
+                showDatePicker = true
+            } label: {
+                Image(systemName: "calendar")
+            }
+            .buttonStyle(.borderless)
+            .help(WTL("wt.pickDate"))
+            .popover(isPresented: $showDatePicker, arrowEdge: .bottom) {
+                DatePicker(
+                    "",
+                    selection: Binding(
+                        get: { dayStart },
+                        set: { select(day: $0); showDatePicker = false }
+                    ),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .environment(\.timeZone, homeZone)
+                .labelsHidden()
+                .padding(8)
+            }
+
+            ForEach(stripDays, id: \.self) { day in
+                stripButton(for: day)
+            }
+
+            if nowColumn == nil {
+                Button(WTL("wt.today")) {
+                    select(day: .now)
+                    selectedColumn = nowColumn
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+            Spacer()
+        }
+    }
+
+    /// A week of tabs around today (yesterday .. +5 days).
+    private var stripDays: [Date] {
+        let todayStart = homeCalendar.startOfDay(for: now)
+        let anchor = homeCalendar.date(byAdding: .day, value: -1, to: todayStart) ?? todayStart
+        return (0..<7).compactMap { homeCalendar.date(byAdding: .day, value: $0, to: anchor) }
+    }
+
+    private func stripButton(for day: Date) -> some View {
+        let isSelected = homeCalendar.isDate(day, inSameDayAs: dayStart)
+        let isWeekend = homeCalendar.isDateInWeekend(day)
+        let fmt = cachedFormatter(isSelected ? "MMMd" : "d", zone: homeZone)
+        return Button {
+            select(day: day)
+        } label: {
+            Text(fmt.string(from: day))
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.primary : (isWeekend ? Color.red.opacity(0.8) : Color.secondary))
+                .padding(.horizontal, isSelected ? 10 : 7)
+                .padding(.vertical, 4)
+                .background {
+                    if isSelected {
+                        Capsule().fill(Color.primary.opacity(0.1))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func select(day: Date) {
+        dayStart = homeCalendar.startOfDay(for: day)
+    }
+
+    // MARK: - Grid
+
+    private var grid: some View {
+        Group {
+            if settings.zoneIDs.isEmpty {
+                VStack {
+                    Spacer()
+                    Text(WTL("wt.empty"))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                // No ScrollView: the grid takes exactly its content height
+                // (a flexible sibling below it was stealing half the space
+                // and forcing a scrollbar). The panel window resizes instead.
+                VStack(spacing: Self.rowSpacing) {
+                    ForEach(settings.zoneIDs, id: \.self) { zoneID in
+                        cityRow(zoneID)
+                    }
+                }
+                // The column frame: one rectangle through ALL rows,
+                // following the hover and marking the selection.
+                .overlay { columnFrames }
+                .padding(.vertical, 4)
+                .onHover { if !$0 { hoverColumn = nil } }
+            }
+        }
+    }
+
+    /// Hover + selection frames spanning the full grid height (the black
+    /// column outline). Drawn once over the rows so the gaps between
+    /// bands are framed too. Hovering a busy block projects its exact
+    /// interval down through every row the same way.
+    private var columnFrames: some View {
+        GeometryReader { geo in
+            let bandWidth = geo.size.width - Self.headerWidth
+            let cellWidth = bandWidth / 24
+            if let block = busyBlocks.first(where: { $0.id == hoveredBusyID }) {
+                let total = instant(forColumn: 24).timeIntervalSince(dayStart)
+                let x = Self.headerWidth + bandWidth * block.start.timeIntervalSince(dayStart) / total
+                let width = max(4, bandWidth * block.end.timeIntervalSince(block.start) / total)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(block.color.opacity(0.18))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(block.color.opacity(0.75), lineWidth: 1.5)
+                    )
+                    .frame(width: width, height: geo.size.height + 6)
+                    .position(x: x + width / 2, y: geo.size.height / 2)
+            }
+            if let hover = hoverColumn, hover != selectedColumn {
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(Color.primary.opacity(0.35), lineWidth: 1.2)
+                    .frame(width: cellWidth + 4, height: geo.size.height + 6)
+                    .position(x: Self.headerWidth + cellWidth * (CGFloat(hover) + 0.5),
+                              y: geo.size.height / 2)
+            }
+            if let sel = selectedColumn {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color.primary.opacity(0.05))
+                    .frame(width: cellWidth + 4, height: geo.size.height + 6)
+                    .position(x: Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5),
+                              y: geo.size.height / 2)
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(Color.primary.opacity(0.8), lineWidth: 2)
+                    .frame(width: cellWidth + 4, height: geo.size.height + 6)
+                    .position(x: Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5),
+                              y: geo.size.height / 2)
+                // The half-hour divider: one dashed line down the WHOLE
+                // selected column (like the frame), only while the cursor is
+                // over the column.
+                if slotCreationAvailable && hoverSlot?.column == sel {
+                    Path { path in
+                        let x = Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5)
+                        path.move(to: CGPoint(x: x, y: -3))
+                        path.addLine(to: CGPoint(x: x, y: geo.size.height + 3))
+                    }
+                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
+                    .foregroundStyle(Color.primary.opacity(0.4))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Vertical distance from one row's top to the next.
+    private var rowStride: CGFloat { Self.rowHeight + Self.rowSpacing }
+
+    /// Live offset of a row while another row is being dragged over it:
+    /// the dragged row follows the cursor, its neighbors slide out of the
+    /// way by exactly one stride.
+    private func rowOffset(for zoneID: String) -> CGFloat {
+        guard let dragging = draggingZone,
+              let from = settings.zoneIDs.firstIndex(of: dragging),
+              let index = settings.zoneIDs.firstIndex(of: zoneID) else { return 0 }
+        if zoneID == dragging { return dragTranslation }
+        let shift = Int((dragTranslation / rowStride).rounded())
+        let to = max(0, min(settings.zoneIDs.count - 1, from + shift))
+        if from < to, index > from, index <= to { return -rowStride }
+        if to < from, index >= to, index < from { return rowStride }
+        return 0
+    }
+
+    private func finishRowDrag() {
+        defer {
+            draggingZone = nil
+            dragTranslation = 0
+        }
+        guard let dragging = draggingZone,
+              let from = settings.zoneIDs.firstIndex(of: dragging) else { return }
+        let shift = Int((dragTranslation / rowStride).rounded())
+        let to = max(0, min(settings.zoneIDs.count - 1, from + shift))
+        guard to != from else { return }
+        settings.zoneIDs.move(fromOffsets: IndexSet(integer: from),
+                              toOffset: to > from ? to + 1 : to)
+    }
+
+    private func cityRow(_ zoneID: String) -> some View {
+        let zone = TimeZone(identifier: zoneID) ?? .current
+        let isHome = zoneID == settings.homeZoneID
+        let isDragging = draggingZone == zoneID
+        return HStack(spacing: 0) {
+            rowHeader(zoneID: zoneID, zone: zone, isHome: isHome)
+                .frame(width: Self.headerWidth, alignment: .leading)
+                .contentShape(Rectangle())
+                // Rows are dragged by their header — a manual
+                // DragGesture, not system drag-and-drop: the NSItemProvider
+                // route never delivers dropEntered reliably on macOS here.
+                .gesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { value in
+                            draggingZone = zoneID
+                            dragTranslation = value.translation.height
+                        }
+                        .onEnded { _ in finishRowDrag() }
+                )
+                // Double-click the header = make this the home city (the
+                // context menu has the same action for discoverability).
+                .onTapGesture(count: 2) { settings.homeZoneID = zoneID }
+            hourBand(zone: zone)
+        }
+        .frame(height: Self.rowHeight)
+        .opacity(isDragging ? 0.75 : 1)
+        .offset(y: rowOffset(for: zoneID))
+        .zIndex(isDragging ? 2 : 0)
+        // The dragged row tracks the cursor raw; its neighbors animate as
+        // they make room.
+        .animation(isDragging ? nil : .easeInOut(duration: 0.14), value: rowOffset(for: zoneID))
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                settings.homeZoneID = zoneID
+            } label: {
+                Label(WTL("wt.row.setHome"), systemImage: "house")
+            }
+            .disabled(isHome)
+            Divider()
+            Button(role: .destructive) {
+                settings.removeZone(zoneID)
+            } label: {
+                Label(WTL("wt.row.remove"), systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: - Row header
+
+    private func rowHeader(zoneID: String, zone: TimeZone, isHome: Bool) -> some View {
+        let city = WorldTimeCatalog.city(for: zoneID)
+        // No hover buttons on the left edge — home/remove live in the
+        // right-click menu (and double-click sets home), so the header
+        // starts right at the offset column.
+        return HStack(spacing: 8) {
+            // Offset from home (or the home marker itself).
+            Group {
+                if isHome {
+                    Image(systemName: "house.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(offsetLabel(for: zoneID) ?? "")
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 36, alignment: .trailing)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    // The name wins the space fight — the clock and badge
+                    // compress before "Москва" becomes "Мос…".
+                    Text(city.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .layoutPriority(2)
+                    if let abbr = zone.abbreviation(for: instant(forColumn: selectedColumn ?? 12)) {
+                        Text(abbr)
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if !city.country.isEmpty {
+                    Text(city.country)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            // Live wall clock of that city (ticks every 30 s).
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(cachedFormatter(settings.uses24Hour ? "H:mm" : "h:mm a", zone: zone).string(from: now))
+                    .font(.system(size: 13, weight: .semibold))
+                    .monospacedDigit()
+                Text(cachedFormatter("EEE, MMM d", zone: zone).string(from: now))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.trailing, 10)
+        }
+    }
+
+    /// "+7" / "−3.5" — the zone's offset relative to home at the selected
+    /// instant (so DST transitions show the offset that actually applies).
+    private func offsetLabel(for zoneID: String) -> String? {
+        guard let zone = TimeZone(identifier: zoneID) else { return nil }
+        let at = instant(forColumn: selectedColumn ?? 12)
+        let seconds = zone.secondsFromGMT(for: at) - homeZone.secondsFromGMT(for: at)
+        if seconds == 0 { return "0" }
+        let hours = Double(seconds) / 3600
+        let text = hours == hours.rounded()
+            ? String(Int(abs(hours)))
+            : String(format: "%.1f", abs(hours))
+        return (seconds > 0 ? "+" : "−") + text
+    }
+
+    // MARK: - Hour band (the "glass band" of variant B)
+
+    /// One continuous capsule per city: 24 cells with no gaps, translucent
+    /// period tints, hairline separators. Rounded only at the band's ends.
+    private func hourBand(zone: TimeZone) -> some View {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = zone
+        return HStack(spacing: 0) {
+            ForEach(0..<24, id: \.self) { index in
+                hourCell(index: index, zone: zone, calendar: cal)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+    }
+
+    private func hourCell(index: Int, zone: TimeZone, calendar: Calendar) -> some View {
+        let date = instant(forColumn: index)
+        let comps = calendar.dateComponents([.hour, .minute], from: date)
+        let hour = comps.hour ?? 0
+        let minute = comps.minute ?? 0
+        let isMidnight = hour == 0 && minute == 0
+        let isNow = nowColumn == index
+        let kind = cellKind(hour: hour)
+        let onDark = isMidnight || kind == .night
+
+        return VStack(spacing: 0) {
+            if isMidnight {
+                // Local midnight: the date chip, three stacked levels —
+                // weekday / day number / month ("ПТ / 24 / ИЮЛ") — same
+                // width as an hour cell so columns stay aligned.
+                Text(cachedFormatter("EEE", zone: zone).string(from: date).uppercased())
+                    .font(.system(size: 7.5, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(cachedFormatter("d", zone: zone).string(from: date))
+                    .font(.system(size: 12, weight: .bold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                // Russian "июл." keeps its abbreviation dot — drop it, the
+                // chip is cramped enough.
+                Text(cachedFormatter("MMM", zone: zone).string(from: date)
+                    .replacingOccurrences(of: ".", with: "").uppercased())
+                    .font(.system(size: 7.5, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            } else {
+                // Hours only — no minutes (half-hour zones show them, they
+                // have to: "9:30"). 12h mode adds the small am/pm.
+                let displayHour = settings.uses24Hour ? hour : (hour % 12 == 0 ? 12 : hour % 12)
+                Text(minute == 0 ? "\(displayHour)" : String(format: "%d:%02d", displayHour, minute))
+                    .font(.system(size: 13, weight: .semibold))
+                    .monospacedDigit()
+                if !settings.uses24Hour {
+                    Text(hour < 12 ? "am" : "pm")
+                        .font(.system(size: 8))
+                        .opacity(0.7)
+                }
+            }
+        }
+        .foregroundStyle(onDark ? Color.white : Color.primary)
+        .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
+        .background(cellFill(kind: kind, isMidnight: isMidnight))
+        .overlay(alignment: .leading) {
+            // Hairline separator between cells inside the band.
+            if index > 0 {
+                Rectangle()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: 0.5)
+                    .padding(.vertical, 6)
+            }
+        }
+        .overlay {
+            // "Right now" marker: a dashed underline inside the cell.
+            if isNow && !isMidnight {
+                VStack {
+                    Spacer()
+                    Rectangle()
+                        .fill(.clear)
+                        .frame(height: 1)
+                        .overlay(
+                            Line()
+                                .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [3, 2.5]))
+                                .foregroundStyle(onDark ? Color.white.opacity(0.8) : Color.primary.opacity(0.5))
+                        )
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 5)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { selectedColumn = index }
+        .onHover { hoverColumn = $0 ? index : (hoverColumn == index ? nil : hoverColumn) }
+        // Inside the SELECTED column (and only with the CalendarAddon live):
+        // hover splits the hour with a dashed line into :00 / :30 halves;
+        // clicking a half opens the slot composer right there.
+        .overlay {
+            if slotCreationAvailable && selectedColumn == index {
+                slotSplitOverlay(zoneID: zone.identifier, column: index)
+            }
+        }
+        .popover(isPresented: Binding(
+            get: { composerSlot?.zoneID == zone.identifier && composerSlot?.column == index },
+            set: { if !$0 { composerSlot = nil } }
+        ), arrowEdge: .bottom) {
+            if let slot = composerSlot {
+                WorldTimeSlotComposer(
+                    slot: instant(forColumn: slot.column).addingTimeInterval(Double(slot.half) * 1800),
+                    rowZoneID: slot.zoneID,
+                    homeZoneID: settings.homeZoneID,
+                    onClose: { composerSlot = nil }
+                )
+            }
+        }
+    }
+
+    /// The half-hour picker drawn over a selected-column cell: the hovered
+    /// half gently highlighted with a "+" (the dashed divider itself runs
+    /// through the whole column — see `columnFrames`).
+    private func slotSplitOverlay(zoneID: String, column: Int) -> some View {
+        GeometryReader { geo in
+            let half = (hoverSlot?.zoneID == zoneID && hoverSlot?.column == column) ? hoverSlot?.half : nil
+            ZStack {
+                // Full-size base layer: without it an empty ZStack collapses
+                // to zero size and the hover region vanishes with it.
+                Color.clear
+                if let half {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.primary.opacity(0.13))
+                        .frame(width: geo.size.width / 2 - 3, height: geo.size.height - 6)
+                        .position(x: half == 0 ? geo.size.width / 4 : geo.size.width * 3 / 4,
+                                  y: geo.size.height / 2)
+                    Image(systemName: "plus")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color.primary.opacity(0.65))
+                        .position(x: half == 0 ? geo.size.width / 4 : geo.size.width * 3 / 4,
+                                  y: geo.size.height / 2)
+                }
+            }
+            .contentShape(Rectangle())
+            .onContinuousHover { hoverPhase in
+                switch hoverPhase {
+                case .active(let point):
+                    hoverSlot = SlotRef(zoneID: zoneID, column: column,
+                                        half: point.x < geo.size.width / 2 ? 0 : 1)
+                case .ended:
+                    if hoverSlot?.zoneID == zoneID && hoverSlot?.column == column {
+                        hoverSlot = nil
+                    }
+                }
+            }
+            .onTapGesture {
+                guard let slot = hoverSlot, slot.zoneID == zoneID, slot.column == column else { return }
+                composerSlot = slot
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cellFill(kind: CellKind, isMidnight: Bool) -> some View {
+        if isMidnight {
+            Color(red: 0.15, green: 0.20, blue: 0.63).opacity(0.85)
+        } else {
+            switch kind {
+            case .night: Color(red: 0.25, green: 0.33, blue: 0.82).opacity(0.55)
+            case .shoulder: Color(red: 0.98, green: 0.80, blue: 0.39).opacity(0.38)
+            case .work: Color.white.opacity(0.32)
+            }
+        }
+    }
+
+    private enum CellKind { case night, shoulder, work }
+
+    /// Cell coloring: dark night, pale shoulder, light working hours — the
+    /// classic day-planner palette translated into glass tints.
+    private func cellKind(hour: Int) -> CellKind {
+        if hour < 6 || hour >= 22 { return .night }
+        if hour >= settings.workStartHour && hour < settings.workEndHour { return .work }
+        return .shoulder
+    }
+
+    // MARK: - Formatter cache
+
+    /// DateFormatters are expensive; the grid asks for the same few
+    /// (template × zone × language) combinations every render.
+    private static var formatterCache: [String: DateFormatter] = [:]
+
+    private func cachedFormatter(_ template: String, zone: TimeZone) -> DateFormatter {
+        let lang = Localization.currentLanguage.rawValue
+        let key = "\(template)|\(zone.identifier)|\(lang)"
+        if let cached = Self.formatterCache[key] { return cached }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: lang)
+        formatter.timeZone = zone
+        if template == "H:mm" || template == "h:mm a" {
+            formatter.dateFormat = template // fixed layout, not a template
+        } else {
+            formatter.setLocalizedDateFormatFromTemplate(template)
+        }
+        Self.formatterCache[key] = formatter
+        return formatter
+    }
+}
+
+/// Ideal height of the panel's fixed-height content (everything above the
+/// window-drag filler) — read by the AppDelegate to auto-fit the window.
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// A horizontal line shape (for the dashed "now" underline).
+private struct Line: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return path
+    }
+}
+
+

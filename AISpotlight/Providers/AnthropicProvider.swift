@@ -126,7 +126,10 @@ struct AnthropicProvider: LLMProvider {
         }
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            // .sortedKeys: Swift dictionary order is randomized per launch —
+            // unsorted JSON would silently bust the provider prompt cache
+            // whenever a conversation resumes after an app restart.
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         } catch {
             return AsyncThrowingStream { $0.finish(throwing: error) }
         }

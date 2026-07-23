@@ -252,14 +252,14 @@
 				CODE_SIGN_STYLE = Manual;
 				CODE_SIGN_IDENTITY = "AISpotlight Signing";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3.14;
+				CURRENT_PROJECT_VERSION = 3.15;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
 				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
@@ -270,12 +270,14 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "AISpotlight opens Terminal to run shell commands from chat answers when you click the Run button.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "AISpotlight reads and creates calendar events when you ask the assistant about your schedule.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to record audio messages.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "AISpotlight reads and creates reminders when you ask the assistant to.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.14;
+				MARKETING_VERSION = 3.15;
 				PRODUCT_BUNDLE_IDENTIFIER = kpn.AISpotlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -297,14 +299,14 @@
 				CODE_SIGN_STYLE = Manual;
 				CODE_SIGN_IDENTITY = "AISpotlight Signing";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3.14;
+				CURRENT_PROJECT_VERSION = 3.15;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
 				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
@@ -315,12 +317,14 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "AISpotlight opens Terminal to run shell commands from chat answers when you click the Run button.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "AISpotlight reads and creates calendar events when you ask the assistant about your schedule.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to record audio messages.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "AISpotlight reads and creates reminders when you ask the assistant to.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.14;
+				MARKETING_VERSION = 3.15;
 				PRODUCT_BUNDLE_IDENTIFIER = kpn.AISpotlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

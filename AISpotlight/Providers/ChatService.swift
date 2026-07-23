@@ -89,6 +89,18 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
             }
         }
 
+        // Calendar addon tools ride the same tool-capability gate. Both the
+        // specs AND the prompt hint live inside this one condition: addon off,
+        // access missing, or a tool-less model → zero tools, zero prompt bytes.
+        if CalendarAddon.shared.isAvailable,
+           settings.modelSupportsTools(provider: providerID, model: model) {
+            let calendarTools = CalendarToolService.toolSpecs()
+            if !calendarTools.isEmpty {
+                options.tools += calendarTools
+                systemPrompt += "\n\n" + CalendarToolService.systemPromptHint()
+            }
+        }
+
         let supportsVision = settings.modelSupportsVision(provider: providerID, model: model)
         let initialMessages = try await buildMessages(
             from: history,
@@ -172,6 +184,12 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                                 } catch {
                                     result = "Fetch failed: \(error.localizedDescription)"
                                 }
+                            } else if CalendarToolService.canHandle(call.name) {
+                                continuation.yield(.status(CalendarToolService.statusLine(for: call)))
+                                // Calendar results are not added to toolDigest:
+                                // the digest is web grounding for follow-ups;
+                                // schedule data goes stale by design.
+                                result = await CalendarToolService.run(call)
                             } else {
                                 result = "Unknown tool: \(call.name)"
                             }
