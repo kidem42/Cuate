@@ -16,6 +16,8 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
 - **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default. Detection is statistical (letter trigrams + word frequencies + the system dictionary), so names, word forms and typos convert too — and a curated tech-terms list handles acronyms the statistics can't (`РЕЬД` → `HTML`, and css/json/png/…)
 - **Image tools addon** — process an attached image in one click. **Background removal** and **upscale** run **on-device for free** by default (Apple Vision / Core Image — no key), with higher-quality cloud models optional (one fal.ai key): upscale (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), background removal (Bria RMBG-2.0 / BiRefNet v2). **Object removal** uses fal.ai (Bria Eraser / Object Removal) via an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; on by default. Transparency is handled end-to-end: transparent inputs are flattened for alpha-blind cloud models (no original background "resurrecting" from under the mask), background-removal results get leftover RGB under transparency scrubbed (nothing of the source leaks in the file), and upscaling a cutout restores its transparency locally from the original alpha mask
+- **Calendar & Reminders addon** — the assistant reads your schedule and creates events and reminders through the macOS Calendar (EventKit): iCloud, Google, Exchange — whatever is already synced into the system, no OAuth and no extra keys. Per-calendar checkboxes decide what the assistant can see (unchecked calendars are invisible to it entirely); data leaves the device only as part of a schedule-related question to your chosen provider. Off by default (Settings → General)
+- **World Time addon** — a timezone comparison grid in a floating glass panel, summoned from the menu bar or with ⌥⇧T: cities as rows, the home city's 24 hours as aligned columns (one vertical slice = one moment everywhere), night/working-hours coloring, a date strip with calendar picker (DST-aware), drag to reorder rows, right-click or double-click to change the home city; 400+ cities searchable in the interface language, free and fully on-device. With the Calendar addon enabled the panel also shows a **busy lane** — your day's events as exact colored intervals above the grid — and clicking a half-hour slot in the selected column creates a **30-minute event right there**: the microphone starts immediately (say the title) or type it, and the event lands in your default calendar with an alert
 - **Attach images** — paperclip button or paste with ⌘V (files, screenshots, browser images; HEIC/TIFF converted automatically); an image can be sent with no text at all — the active preset's prompt drives the handling
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
 - **OCR** — extract text from images **on-device for free** by default (Apple Vision; many languages incl. Cyrillic), or via **Mistral OCR** for layout-aware Markdown (tables/columns)
@@ -38,6 +40,7 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 | Area screenshot to chat | ⌘⇧D |
 | Dictation (type where the cursor is) | ⌥Space |
 | Dictation with translation | ⌥⇧Space |
+| World Time panel (when the addon is on) | ⌥⇧T |
 
 All hotkeys are configurable in Settings → General.
 
@@ -87,7 +90,7 @@ The script builds a universal Release (arm64 + x86_64), signs the app with the "
 ```text
 AISpotlight/
 ├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots, terminal runner
-├── Addons/       # self-contained addons (LayoutFix keyboard-layout fixer, ImageAddon image tools)
+├── Addons/       # self-contained addons (LayoutFix layout fixer, ImageAddon image tools, CalendarAddon events/reminders, WorldTimeAddon timezone grid)
 ├── Diagnostics/  # in-app logging and hang watchdog
 ├── Providers/    # LLM/STT/OCR/search clients, settings, Keychain key store
 ├── Models/       # chat data models
