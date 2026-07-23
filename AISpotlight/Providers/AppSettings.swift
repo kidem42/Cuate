@@ -282,6 +282,22 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(dictationChunked, forKey: "dictationChunked") }
     }
 
+    /// Keep the audio input open (samples discarded) for N minutes after a
+    /// dictation ends, so the next one starts with zero mic spin-up — the
+    /// CoreAudio power-up costs ~100-300 ms on the built-in mic and multiple
+    /// SECONDS on Bluetooth (HFP switch), losing the first words. 0 = off
+    /// (default: no orange "mic in use" indicator lingering after dictation).
+    @Published var dictationWarmMinutes: Int {
+        didSet { defaults.set(dictationWarmMinutes, forKey: "dictationWarmMinutes") }
+    }
+
+    /// CoreAudio device UID of the microphone to dictate with; "" = the
+    /// system default input. When the chosen device is not connected the
+    /// capture silently falls back to the system default.
+    @Published var dictationMicUID: String {
+        didSet { defaults.set(dictationMicUID, forKey: "dictationMicUID") }
+    }
+
     static let dictationLanguages = ["English", "Russian", "German", "French", "Spanish", "Italian", "Portuguese", "Chinese", "Japanese"]
 
     /// ISO 639-1 code shown in the dictation pill while translating.
@@ -584,6 +600,8 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         dictationCleanup = defaults.object(forKey: "dictationCleanup") as? Bool ?? true
         dictationTargetLanguage = defaults.string(forKey: "dictationTargetLanguage") ?? "English"
         dictationChunked = defaults.object(forKey: "dictationChunked") as? Bool ?? true
+        dictationWarmMinutes = defaults.object(forKey: "dictationWarmMinutes") as? Int ?? 0
+        dictationMicUID = defaults.string(forKey: "dictationMicUID") ?? ""
         customPresets = defaults.dictionary(forKey: "customPresets") as? [String: String] ?? [:]
         presetIcons = defaults.dictionary(forKey: "presetIcons") as? [String: String] ?? [:]
         presetSwitcherStyle = PresetSwitcherStyle(rawValue: defaults.string(forKey: "presetSwitcherStyle") ?? "") ?? .menu

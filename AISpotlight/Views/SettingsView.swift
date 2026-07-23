@@ -22,6 +22,7 @@ struct SettingsView: View {
         case failed(String)
     }
 
+    @State private var micDevices: [AudioInputDevices.Device] = []
     @State private var keyInput: [ProviderID: String] = [:]
     @State private var maskedKeys: [ProviderID: String?] = [:]
     @State private var keyTests: [String: KeyTestState] = [:]
@@ -800,6 +801,35 @@ struct SettingsView: View {
                     ForEach(AppSettings.dictationLanguages, id: \.self) { lang in
                         Text(lang).tag(lang)
                     }
+                }
+
+                // Dictation microphone: "auto" follows the system default; a
+                // chosen device that is currently unplugged stays selected
+                // (shown as such) and the capture falls back to the default.
+                Picker(L("dictation.mic"), selection: $settings.dictationMicUID) {
+                    Text(L("dictation.mic.auto")).tag("")
+                    ForEach(micDevices) { device in
+                        Text(device.name).tag(device.uid)
+                    }
+                    if !settings.dictationMicUID.isEmpty,
+                       !micDevices.contains(where: { $0.uid == settings.dictationMicUID }) {
+                        Text(L("dictation.mic.offline")).tag(settings.dictationMicUID)
+                    }
+                }
+                .onAppear { micDevices = AudioInputDevices.inputDevices() }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Picker(L("dictation.warm"), selection: $settings.dictationWarmMinutes) {
+                        Text(L("dictation.warm.off")).tag(0)
+                        Text(String(format: L("dictation.warm.minutes"), 1)).tag(1)
+                        Text(String(format: L("dictation.warm.minutes"), 3)).tag(3)
+                        Text(String(format: L("dictation.warm.minutes"), 5)).tag(5)
+                        Text(String(format: L("dictation.warm.minutes"), 15)).tag(15)
+                    }
+                    Text(L("dictation.warm.caption"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         } header: {

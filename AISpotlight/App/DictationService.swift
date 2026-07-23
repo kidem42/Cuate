@@ -1,6 +1,9 @@
 import Foundation
+import Accelerate
 import AppKit
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import SwiftUI
 import Combine
 import Carbon
@@ -33,8 +36,15 @@ final class DictationService: NSObject, ObservableObject {
 
     /// Published so the widget can show the translate-mode language badge.
     @Published private(set) var mode: Mode = .transcribe
-    private var recorder: AVAudioRecorder?
-    private var meterTimer: Timer?
+    /// False from the hotkey until the first audio buffer actually arrives:
+    /// the pill shows warm-up dots instead of the equalizer while the mic
+    /// hardware spins up (~100–300 ms built-in, seconds on Bluetooth), so
+    /// the user doesn't speak into a mic that isn't hearing yet.
+    @Published private(set) var micReady = false
+    /// Normalized 0…1 magnitudes of `MicCapture.bandCount` log-spaced voice
+    /// bands — the pill's equalizer renders the REAL input spectrum.
+    @Published private(set) var spectrum: [Float] = Array(repeating: 0, count: MicCapture.bandCount)
+    private let capture = MicCapture()
     private var fileURL: URL?
     private var panel: NSPanel?
     private var cancellables = Set<AnyCancellable>()
@@ -47,11 +57,18 @@ final class DictationService: NSObject, ObservableObject {
     private var processingChain: Task<Void, Never>?
     private var sessionCancelled = false
 
-    /// VAD thresholds on raw meter dB: below `silenceDB` counts as a pause,
-    /// above `speechDB` marks that the segment actually contains speech.
-    private let silenceDB: Float = -38
-    private let speechDB: Float = -28
-    private let pauseDuration: TimeInterval = 0.9
+    /// VAD thresholds on the dB EXCESS over the adaptive noise floor (the
+    /// capture reports gain-independent values — absolute dBFS thresholds
+    /// silently stopped detecting speech when the metering source changed,
+    /// which killed phrase chunking): above `speechDB` marks speech, below
+    /// `silenceDB` counts as a pause.
+    private let silenceDB: Float = 8
+    private let speechDB: Float = 15
+    /// 0.7 s: every phrase the VAD cuts DURING dictation is a phrase the
+    /// stop doesn't have to wait for — the tail after stop is at most one
+    /// short segment. 0.9 felt safer against splitting slow speech, but it
+    /// grew the tail; with the gapless rotation a split now costs nothing.
+    private let pauseDuration: TimeInterval = 0.7
     private let minSegmentDuration: TimeInterval = 1.5
 
     override init() {
@@ -65,6 +82,64 @@ final class DictationService: NSObject, ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Real audio drives the pill and the VAD.
+        capture.onCaptureStarted = { [weak self] in
+            guard let self else { return }
+            self.micReady = true
+            // The phrase timer starts when audio actually flows — hardware
+            // spin-up must not eat into the minimum segment length.
+            self.segmentStart = Date()
+        }
+        capture.onAudio = { [weak self] dbExcess, bands in
+            guard let self else { return }
+            // dbExcess is "how far over the room's noise floor" — ~0 in
+            // silence, ~15–40 while speaking, on any mic at any gain.
+            self.level = max(0, min(1, dbExcess / 40))
+            // Fast attack / slower release per band: raw FFT frames are
+            // jumpy, this keeps the bars lively without flicker.
+            self.spectrum = zip(self.spectrum, bands).map { old, new in
+                new > old ? old + (new - old) * 0.6 : old + (new - old) * 0.25
+            }
+            if self.chunkedMode, self.phase == .recording {
+                self.voiceActivityTick(db: dbExcess)
+            }
+        }
+        capture.onError = { [weak self] in
+            guard let self, self.phase == .recording else { return }
+            NSSound.beep()
+            self.cancel()
+        }
+
+        // Warm window turned off / mic changed in Settings: release the idle
+        // engine (the next start re-arms with the new device). Mid-recording
+        // changes apply to the NEXT session — never yank a live capture.
+        AppSettings.shared.$dictationWarmMinutes
+            .dropFirst()
+            .sink { [weak self] minutes in
+                guard let self, self.phase == .idle, minutes <= 0 else { return }
+                self.capture.shutdown()
+            }
+            .store(in: &cancellables)
+        AppSettings.shared.$dictationMicUID
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self, self.phase == .idle else { return }
+                self.capture.shutdown()
+            }
+            .store(in: &cancellables)
+        // The capture engine actually DIED mid-session (device unplugged):
+        // salvage what was recorded so far. Spurious configuration-change
+        // notifications (initial device pick, aggregate reshuffles) are
+        // filtered inside MicCapture — they used to kill the session right
+        // after the warm-up animation.
+        capture.onEngineDied = { [weak self] in
+            guard let self else { return }
+            if self.phase == .recording {
+                Task { @MainActor in await self.stopAndProcess() }
+            }
+        }
     }
 
     // MARK: - Hotkey entry point
@@ -96,15 +171,17 @@ final class DictationService: NSObject, ObservableObject {
         // DNS+TCP+TLS handshake (HTTPClient.session pools the connection).
         TranscriptionService.prewarmConnection()
 
-        // Mic already authorized (the common case): show the pill IMMEDIATELY,
-        // before the recorder spins up the audio hardware — `record()` blocks
-        // the main thread for ~50–200 ms and used to delay the widget, making
-        // the hotkey feel laggy. Speech starts after the finger leaves the key,
-        // so the recorder still catches the first word. First-ever use (system
-        // permission prompt pending) keeps the conservative order — no pill
-        // flashing behind a permission dialog.
+        // Mic already authorized (the common case): the pill appears
+        // IMMEDIATELY in its warm-up state (pulsing dots) and flips to the
+        // live equalizer only when the first real buffer arrives. The engine
+        // spin-up runs off the main thread on the capture queue, so the
+        // warm-up animation actually animates even while a Bluetooth mic
+        // takes seconds to power up. First-ever use (system permission
+        // prompt pending) keeps the conservative order — no pill flashing
+        // behind a permission dialog.
         let preAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         if preAuthorized {
+            micReady = false
             phase = .recording
             showWidget()
         }
@@ -124,37 +201,22 @@ final class DictationService: NSObject, ObservableObject {
             processingChain = nil
             speechDetected = false
             silenceBegan = nil
-
-            do {
-                let (recorder, url) = try makeSegmentRecorder()
-                self.recorder = recorder
-                self.fileURL = url
-                self.segmentStart = Date()
-                self.phase = .recording
+            spectrum = Array(repeating: 0, count: MicCapture.bandCount)
+            if !preAuthorized {
+                micReady = false
+                phase = .recording
                 showWidget()
-                startMetering()
-            } catch {
-                NSSound.beep()
-                phase = .idle
-                hideWidget()
             }
+            let url = Self.segmentURL()
+            fileURL = url
+            segmentStart = Date()
+            capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
         }
     }
 
-    private func makeSegmentRecorder() throws -> (AVAudioRecorder, URL) {
-        let url = FileManager.default.temporaryDirectory
+    private static func segmentURL() -> URL {
+        FileManager.default.temporaryDirectory
             .appendingPathComponent("dictation_\(UUID().uuidString).m4a")
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 64000,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder.isMeteringEnabled = true
-        recorder.record()
-        return (recorder, url)
     }
 
     private func requestMicPermission() async -> Bool {
@@ -168,21 +230,6 @@ final class DictationService: NSObject, ObservableObject {
                 }
             }
         @unknown default: return false
-        }
-    }
-
-    private func startMetering() {
-        meterTimer?.invalidate()
-        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let recorder = self.recorder else { return }
-                recorder.updateMeters()
-                let db = recorder.averagePower(forChannel: 0) // -160…0 dB
-                self.level = max(0, min(1, (db + 50) / 50))
-                if self.chunkedMode, self.phase == .recording {
-                    self.voiceActivityTick(db: db)
-                }
-            }
         }
     }
 
@@ -210,63 +257,88 @@ final class DictationService: NSObject, ObservableObject {
         rotateSegment()
     }
 
-    /// Closes the current audio segment (cut inside a pause), immediately
-    /// starts a new one, and queues the finished file for ordered processing.
+    /// Closes the current audio segment (cut inside a pause) and queues it
+    /// for ordered processing. The file swap happens under the running tap —
+    /// recording continues into the fresh file with no gap, so no words are
+    /// lost at phrase boundaries.
     private func rotateSegment() {
         guard let finishedURL = fileURL else { return }
-        recorder?.stop()
-        do {
-            let (recorder, url) = try makeSegmentRecorder()
-            self.recorder = recorder
-            self.fileURL = url
-        } catch {
-            self.recorder = nil
-            self.fileURL = nil
-        }
+        let url = Self.segmentURL()
+        fileURL = url
         segmentStart = Date()
         speechDetected = false
         silenceBegan = nil
-        enqueueSegment(finishedURL)
+        capture.rotate(to: url) { [weak self] in
+            // Runs after the finished file is finalized — safe to upload.
+            self?.enqueueSegment(finishedURL)
+        }
     }
 
-    /// Segments are processed strictly in order (each task awaits the previous
-    /// one), so phrases are inserted in the order they were spoken.
+    /// Each segment's STT starts IMMEDIATELY (parallel — that's where the
+    /// stop-tail latency win lives); the LLM cleanup + insertion stay
+    /// CHAINED in spoken order. Sequential cleanup is not just about
+    /// ordering: when cleanups ran in parallel they tripped the provider's
+    /// rate limit (Mistral: ~1 req/s), the 429 was swallowed and phrases
+    /// silently fell back to the raw unpunctuated transcript — sentences
+    /// randomly lost their periods and dashes.
     private func enqueueSegment(_ url: URL) {
+        let stt = Task { await self.transcribeSegment(url) }
         let previous = processingChain
         processingChain = Task { [weak self] in
             await previous?.value
-            await self?.processSegment(url)
+            guard let self else { return }
+            guard let transcript = await stt.value, !self.sessionCancelled else { return }
+            var text = transcript
+            let settings = AppSettings.shared
+            if self.mode == .translate || settings.dictationCleanup {
+                if let processed = await self.postProcessWithRetry(transcript) {
+                    text = processed
+                }
+            }
+            guard !self.sessionCancelled else { return }
+            TextInserter.insert(text + " ")
         }
     }
 
-    private func processSegment(_ url: URL) async {
+    /// STT for one segment (parallel-safe). One retry after a short backoff:
+    /// a transient 429/network hiccup must not DROP the phrase entirely.
+    private func transcribeSegment(_ url: URL) async -> String? {
         defer { try? FileManager.default.removeItem(at: url) }
-        guard !sessionCancelled else { return }
-
-        guard let transcript = try? await TranscriptionService.transcribe(audioURL: url),
-              !transcript.isEmpty else { return }
-
-        var text = transcript
-        let settings = AppSettings.shared
-        if mode == .translate || settings.dictationCleanup {
-            if let processed = try? await postProcess(transcript) {
-                text = processed
-            }
+        guard !sessionCancelled else { return nil }
+        if let transcript = try? await TranscriptionService.transcribe(audioURL: url),
+           !transcript.isEmpty {
+            return transcript
         }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        guard !sessionCancelled else { return nil }
+        guard let transcript = try? await TranscriptionService.transcribe(audioURL: url),
+              !transcript.isEmpty else { return nil }
+        return transcript
+    }
 
-        guard !sessionCancelled else { return }
-        TextInserter.insert(text + " ")
+    /// One retry after a short backoff: a transient failure must not degrade
+    /// a phrase to the raw unpunctuated transcript.
+    private func postProcessWithRetry(_ transcript: String) async -> String? {
+        if let processed = try? await postProcess(transcript) { return processed }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        guard !sessionCancelled else { return nil }
+        return try? await postProcess(transcript)
     }
 
     func cancel() {
         sessionCancelled = true // pending segments will skip insertion
         processingChain = nil
-        meterTimer?.invalidate()
-        meterTimer = nil
-        recorder?.stop()
-        recorder = nil
-        if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
+        let keepWarm = TimeInterval(AppSettings.shared.dictationWarmMinutes) * 60
+        if let url = fileURL {
+            // Delete only after the capture queue released the file handle.
+            capture.endRecording(keepWarmSeconds: keepWarm) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        } else {
+            capture.endRecording(keepWarmSeconds: keepWarm)
+        }
         fileURL = nil
+        micReady = false
         phase = .idle
         hideWidget()
     }
@@ -275,22 +347,26 @@ final class DictationService: NSObject, ObservableObject {
 
     func stopAndProcess() async {
         guard phase == .recording else { return }
-        guard let fileURL else {
-            // Stop arrived before the recorder finished spinning up (the pill
-            // shows optimistically) — nothing was captured, treat as cancel.
+        guard let finishedURL = fileURL else {
+            // Stop arrived before the mic even spun up (the pill shows
+            // optimistically) — nothing was captured, treat as cancel.
             cancel()
             return
         }
-        meterTimer?.invalidate()
-        meterTimer = nil
-        recorder?.stop()
-        recorder = nil
+        fileURL = nil
         phase = .processing
+
+        // The segment file is finalized on the capture queue — wait for that
+        // before handing it to the transcriber. The engine itself either
+        // keeps running warm (Settings → keep mic ready) or releases the mic.
+        let keepWarm = TimeInterval(AppSettings.shared.dictationWarmMinutes) * 60
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            capture.endRecording(keepWarmSeconds: keepWarm) { continuation.resume() }
+        }
 
         if chunkedMode {
             // Queue the final segment and wait for the ordered pipeline to drain.
-            self.fileURL = nil
-            enqueueSegment(fileURL)
+            enqueueSegment(finishedURL)
             await processingChain?.value
             processingChain = nil
             phase = .idle
@@ -299,14 +375,13 @@ final class DictationService: NSObject, ObservableObject {
         }
 
         defer {
-            try? FileManager.default.removeItem(at: fileURL)
-            self.fileURL = nil
+            try? FileManager.default.removeItem(at: finishedURL)
             phase = .idle
             hideWidget()
         }
 
         do {
-            let transcript = try await TranscriptionService.transcribe(audioURL: fileURL)
+            let transcript = try await TranscriptionService.transcribe(audioURL: finishedURL)
             guard !transcript.isEmpty else { NSSound.beep(); return }
 
             var text = transcript
@@ -474,10 +549,14 @@ private struct DictationWidgetView: View {
         AdaptiveGlassContainer {
             HStack(spacing: 8) {
                 if service.phase == .processing {
-                    ProgressView()
-                        .controlSize(.small)
+                    // Transcription/cleanup in flight: indeterminate running line.
+                    RunningLine()
+                } else if !service.micReady {
+                    // Mic hardware still spinning up: pulsing dots say "not
+                    // hearing yet" — they flip to live bars on the first buffer.
+                    WarmupDots()
                 } else {
-                    EqualizerBars(level: service.level)
+                    EqualizerBars(level: service.level, spectrum: service.spectrum)
                 }
                 if service.mode == .translate {
                     // Left-clicking the badge opens the language menu (the
@@ -546,42 +625,560 @@ private struct DictationWidgetView: View {
     }
 }
 
-/// Live mic-level bars driven by the real input level.
+/// Shared color logic for the pill's indicators: the dictation panel is a
+/// separate window, so the theme is read straight from settings (the panel's
+/// appearance drives `colorScheme`). Themes with a multi-color dictation
+/// palette cycle their colors per element (Día: marigold/magenta/teal).
+private func dictationBarColor(_ index: Int, theme: AppTheme, scheme: ColorScheme) -> Color {
+    let palette = ThemePalette.palette(for: theme, scheme: scheme)
+    if palette.isGlass { return Color.primary.opacity(0.75) }
+    let colors = palette.dictationColors.isEmpty ? [palette.accent] : palette.dictationColors
+    return colors[index % colors.count]
+}
+
+/// Live spectrum bars: each bar is a real log-spaced frequency band of the
+/// input (80 Hz … 8 kHz via FFT), not a synthetic wobble — bass on the left,
+/// sibilants on the right, and the picture follows the actual voice timbre.
 private struct EqualizerBars: View {
     let level: Float
-    private let barCount = 14
+    var spectrum: [Float] = []
+    private let barCount = MicCapture.bandCount
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var settings = AppSettings.shared
 
-    /// The dictation panel is a separate window, so it reads the selected theme
-    /// straight from settings (the panel's appearance drives `colorScheme`).
-    /// Themes with a multi-color dictation palette cycle their colors per bar
-    /// (Día: marigold/magenta/teal).
-    private func barColor(_ index: Int) -> Color {
-        let palette = ThemePalette.palette(for: settings.theme, scheme: colorScheme)
-        if palette.isGlass { return Color.primary.opacity(0.75) }
-        let colors = palette.dictationColors.isEmpty ? [palette.accent] : palette.dictationColors
-        return colors[index % colors.count]
+    var body: some View {
+        HStack(spacing: 2.5) {
+            ForEach(0..<barCount, id: \.self) { index in
+                Capsule()
+                    .fill(dictationBarColor(index, theme: settings.theme, scheme: colorScheme))
+                    .frame(width: 2.5, height: barHeight(index))
+            }
+        }
+        .animation(.linear(duration: 0.06), value: spectrum)
     }
+
+    private func barHeight(_ index: Int) -> CGFloat {
+        // The band magnitude leads; the broadband level keeps a faint floor
+        // while speaking so quiet bands never look fully dead.
+        let band = index < spectrum.count ? CGFloat(spectrum[index]) : 0
+        let value = max(band, CGFloat(level) * 0.12)
+        return 3 + 15 * min(1, value)
+    }
+}
+
+/// Warm-up state: three pulsing dots (typing-indicator style) while the mic
+/// hardware spins up — deliberately unlike the equalizer, so "not hearing
+/// yet" and "recording" can't be confused. No sound cues by design.
+private struct WarmupDots: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 2.5) {
-                ForEach(0..<barCount, id: \.self) { index in
-                    Capsule()
-                        .fill(barColor(index))
-                        .frame(width: 2.5, height: barHeight(index: index, time: time))
+            HStack(spacing: 7) {
+                ForEach(0..<3, id: \.self) { index in
+                    let pulse = 0.5 + 0.5 * sin(time * 5.2 - Double(index) * 1.9)
+                    Circle()
+                        .fill(dictationBarColor(index, theme: settings.theme, scheme: colorScheme))
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(0.8 + 0.35 * pulse)
+                        .opacity(0.35 + 0.65 * pulse)
                 }
             }
         }
     }
+}
 
-    private func barHeight(index: Int, time: TimeInterval) -> CGFloat {
-        // Each bar oscillates with its own phase, scaled by the real mic level.
-        let wobble = 0.5 + 0.5 * sin(time * 9 + Double(index) * 1.1)
-        let value = CGFloat(level) * CGFloat(0.35 + 0.65 * wobble)
-        return 3 + 15 * min(1, value * 1.6)
+/// Processing state: a thin indeterminate track with a running segment
+/// (replaces the system spinner — same semantics, pill-native look).
+private struct RunningLine: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var settings = AppSettings.shared
+
+    private let trackWidth: CGFloat = 74
+    private let runnerWidth: CGFloat = 26
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            let phase = time.truncatingRemainder(dividingBy: 1.3) / 1.3
+            let color = dictationBarColor(0, theme: settings.theme, scheme: colorScheme)
+            ZStack(alignment: .leading) {
+                Capsule().fill(color.opacity(0.22))
+                Capsule()
+                    .fill(color)
+                    .frame(width: runnerWidth)
+                    .offset(x: -runnerWidth + (trackWidth + runnerWidth) * phase)
+            }
+            .frame(width: trackWidth, height: 3)
+            .clipShape(Capsule())
+        }
+    }
+}
+
+// MARK: - Microphone capture engine
+
+/// AVAudioEngine-backed microphone capture. Replaces AVAudioRecorder for
+/// dictation because it can do what the recorder can't:
+/// - record from a CHOSEN input device (Settings → Voice → Microphone),
+///   silently falling back to the system default when that device is gone;
+/// - keep the input running after a session ("warm window") so the next
+///   dictation starts with zero hardware spin-up — CoreAudio power-up costs
+///   ~100–300 ms on the built-in mic and SECONDS on Bluetooth (HFP switch),
+///   which is exactly where the first dictated words were being lost;
+/// - rotate segment files under the running tap (gapless phrase chunking);
+/// - expose raw buffers, so the pill's equalizer can show the REAL voice
+///   spectrum (log-spaced bands via vDSP FFT) instead of a synthetic wobble.
+///
+/// Threading: control methods hop onto a private serial queue and never
+/// block the caller — a cold Bluetooth start takes seconds and must not
+/// freeze the warm-up animation. The tap callback runs on the audio thread
+/// and only touches lock-guarded state. UI callbacks fire on the main thread.
+nonisolated final class MicCapture {
+
+    /// Fired once per recording session when the first buffer actually
+    /// arrives — the mic is REALLY hearing now (pill flips dots → bars).
+    var onCaptureStarted: (@MainActor () -> Void)?
+    /// ~20 Hz on the main thread: broadband dB EXCESS over the adaptive
+    /// noise floor (≈0 in silence, ~15–40 while speaking, on any mic at any
+    /// gain — drives the level indicator and the VAD) and the normalized
+    /// 0…1 spectrum for the equalizer bars.
+    var onAudio: (@MainActor (_ dbExcess: Float, _ spectrum: [Float]) -> Void)?
+    /// A recording session failed to start (device trouble) — main thread.
+    var onError: (@MainActor () -> Void)?
+    /// The engine STOPPED for real mid-session (device vanished and a
+    /// restart failed) — main thread. Spurious configuration-change
+    /// notifications never reach this.
+    var onEngineDied: (@MainActor () -> Void)?
+
+    /// Equalizer resolution; matches the pill's bar count.
+    static let bandCount = 14
+    private static let fftSize = 1024
+    /// Voice band edges: 80 Hz … 8 kHz, log-spaced.
+    private static let bandLowHz: Float = 80
+    private static let bandHighHz: Float = 8000
+
+    private let engine = AVAudioEngine()
+    private let queue = DispatchQueue(label: "aispotlight.mic.capture")
+    private let state = State()
+    /// Queue-confined: pending warm-window expiry.
+    private var cooldown: DispatchWorkItem?
+    private var configObserver: NSObjectProtocol?
+
+    init() {
+        // OUR engine only (object:) — a global observer used to catch every
+        // engine's configuration chatter, including the benign one posted
+        // when the engine starts on a user-selected device, and killed the
+        // dictation right after the warm-up animation.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
+    }
+
+    deinit {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+        }
+    }
+
+    /// A configuration change is only fatal when the engine actually stopped
+    /// (input device disappeared). A warm idle engine restarts silently on
+    /// whatever input is now current; a live RECORDING can't continue (the
+    /// open file carries the old device's format), so it's surfaced as dead
+    /// and the service salvages what was captured so far.
+    private func handleConfigurationChange() {
+        queue.async { [self] in
+            state.lock.lock()
+            let running = state.engineRunning
+            let recording = state.file != nil
+            state.lock.unlock()
+            guard running, !engine.isRunning else { return }
+            if recording {
+                Diagnostics.log("dictation", "capture.engine.died mid-recording")
+                shutdownEngine()
+                DispatchQueue.main.async { self.onEngineDied?() }
+                return
+            }
+            do {
+                // Warm idle: rebuild the tap for the new device's format.
+                state.lock.lock()
+                state.engineRunning = false
+                state.bandFloors = []
+                state.levelFloor = nil
+                state.lock.unlock()
+                engine.inputNode.removeTap(onBus: 0)
+                try ensureRunning(deviceUID: "")
+                Diagnostics.log("dictation", "capture.engine.recovered")
+            } catch {
+                Diagnostics.log("dictation", "capture.engine.died \(String(error.localizedDescription.prefix(120)))")
+                shutdownEngine()
+            }
+        }
+    }
+
+    /// Lock-guarded state shared with the audio-thread tap.
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var file: AVAudioFile?
+        var awaitingFirstBuffer = false
+        var engineRunning = false
+        var lastEmit: CFAbsoluteTime = 0
+        var sampleRate: Float = 44100
+        var fft: FFTSetup?
+        var windowCurve: [Float] = []
+        /// Per-band adaptive noise floor (dB, min-tracker): bars show the
+        /// EXCESS over this floor, so silence sits at zero on any mic/gain
+        /// and speech reads as real dynamics. Slowly rises (recovers after
+        /// loud stretches), instantly drops to a new quieter floor.
+        var bandFloors: [Float] = []
+        /// Broadband twin of `bandFloors` — the excess over it drives the
+        /// level indicator AND the VAD (gain-independent thresholds).
+        var levelFloor: Float?
+    }
+
+    // MARK: Control plane (serialized, off the main thread)
+
+    /// Starts (or reuses, when warm) the engine and begins writing to `url`.
+    func beginRecording(to url: URL, deviceUID: String) {
+        queue.async { [self] in
+            cooldown?.cancel()
+            cooldown = nil
+            do {
+                try ensureRunning(deviceUID: deviceUID)
+                let file = try makeFile(at: url)
+                state.lock.lock()
+                state.file = file
+                state.awaitingFirstBuffer = true
+                state.lock.unlock()
+            } catch {
+                Diagnostics.log("dictation", "capture.start.error \(String(error.localizedDescription.prefix(120)))")
+                shutdownEngine()
+                DispatchQueue.main.async { self.onError?() }
+            }
+        }
+    }
+
+    /// Closes the current segment file and opens a fresh one at `url` WITHOUT
+    /// stopping the engine — buffers keep flowing into the new file, so no
+    /// audio is lost at phrase boundaries. `completion` runs on the main
+    /// thread after the old file is finalized (safe to upload).
+    func rotate(to url: URL, completion: @escaping @MainActor () -> Void) {
+        queue.async { [self] in
+            let next = try? makeFile(at: url)
+            state.lock.lock()
+            state.file = next // the old AVAudioFile releases here → finalized
+            state.lock.unlock()
+            DispatchQueue.main.async { completion() }
+        }
+    }
+
+    /// Stops writing. With `keepWarmSeconds > 0` the engine keeps running and
+    /// discards samples (the orange mic indicator stays on) so the next start
+    /// is instant; a cooldown then releases the mic. `completion` (main
+    /// thread) runs after the recording file is finalized.
+    func endRecording(keepWarmSeconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
+        queue.async { [self] in
+            state.lock.lock()
+            state.file = nil
+            state.awaitingFirstBuffer = false
+            state.lock.unlock()
+            if keepWarmSeconds > 0 {
+                scheduleCooldown(after: keepWarmSeconds)
+            } else {
+                shutdownEngine()
+            }
+            if let completion {
+                DispatchQueue.main.async { completion() }
+            }
+        }
+    }
+
+    /// Releases the mic now regardless of the warm window (Settings changed).
+    func shutdown() {
+        queue.async { [self] in shutdownEngine() }
+    }
+
+    // MARK: Engine lifecycle (queue-confined)
+
+    private func ensureRunning(deviceUID: String) throws {
+        state.lock.lock()
+        let running = state.engineRunning
+        state.lock.unlock()
+        guard !running else { return }
+
+        let input = engine.inputNode
+        // Selected mic; an unresolved UID (device unplugged) falls through
+        // to the system default input.
+        if !deviceUID.isEmpty,
+           let deviceID = AudioInputDevices.deviceID(forUID: deviceUID),
+           let unit = input.audioUnit {
+            var id = deviceID
+            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                 kAudioUnitScope_Global, 0, &id,
+                                 UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
+
+        let format = input.outputFormat(forBus: 0)
+        state.lock.lock()
+        state.sampleRate = Float(format.sampleRate)
+        if state.fft == nil {
+            state.fft = vDSP_create_fftsetup(vDSP_Length(log2(Float(Self.fftSize))), FFTRadix(kFFTRadix2))
+            var curve = [Float](repeating: 0, count: Self.fftSize)
+            vDSP_hann_window(&curve, vDSP_Length(Self.fftSize), Int32(vDSP_HANN_NORM))
+            state.windowCurve = curve
+        }
+        state.lock.unlock()
+
+        input.removeTap(onBus: 0) // stale tap from a previous device/format
+        let st = state
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+            guard let self else { return }
+            Self.handle(buffer: buffer, state: st) { db, spectrum, isFirst in
+                DispatchQueue.main.async {
+                    if isFirst { self.onCaptureStarted?() }
+                    self.onAudio?(db, spectrum)
+                }
+            }
+        }
+        engine.prepare()
+        try engine.start()
+        state.lock.lock()
+        state.engineRunning = true
+        state.lock.unlock()
+        Diagnostics.log("dictation", "capture.engine.start device=\(deviceUID.isEmpty ? "auto" : "custom") rate=\(Int(format.sampleRate))")
+    }
+
+    private func makeFile(at url: URL) throws -> AVAudioFile {
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        return try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: format.sampleRate,
+                AVNumberOfChannelsKey: Int(format.channelCount),
+                AVEncoderBitRateKey: 64000,
+            ],
+            commonFormat: format.commonFormat,
+            interleaved: format.isInterleaved
+        )
+    }
+
+    private func scheduleCooldown(after seconds: TimeInterval) {
+        cooldown?.cancel()
+        let item = DispatchWorkItem { [self] in
+            state.lock.lock()
+            let recording = state.file != nil
+            state.lock.unlock()
+            if !recording { shutdownEngine() }
+        }
+        cooldown = item
+        queue.asyncAfter(deadline: .now() + seconds, execute: item)
+    }
+
+    private func shutdownEngine() {
+        cooldown?.cancel()
+        cooldown = nil
+        state.lock.lock()
+        let wasRunning = state.engineRunning
+        state.engineRunning = false
+        state.file = nil
+        state.awaitingFirstBuffer = false
+        // The next session may run on a different device/gain — its noise
+        // floors must be learned from scratch.
+        state.bandFloors = []
+        state.levelFloor = nil
+        state.lock.unlock()
+        guard wasRunning else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        Diagnostics.log("dictation", "capture.engine.stop")
+    }
+
+    // MARK: Audio thread
+
+    private static func handle(buffer: AVAudioPCMBuffer, state: State,
+                               emit: (Float, [Float], Bool) -> Void) {
+        var isFirst = false
+        state.lock.lock()
+        if state.awaitingFirstBuffer {
+            state.awaitingFirstBuffer = false
+            isFirst = true
+        }
+        if let file = state.file {
+            try? file.write(from: buffer)
+        }
+        let now = CFAbsoluteTimeGetCurrent()
+        let due = isFirst || now - state.lastEmit >= 0.045
+        if due { state.lastEmit = now }
+        let fft = state.fft
+        let windowCurve = state.windowCurve
+        let sampleRate = state.sampleRate
+        state.lock.unlock()
+
+        guard due, let samples = buffer.floatChannelData?[0] else { return }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return }
+
+        var rms: Float = 0
+        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
+        // Clamped like the bands: digital silence must not poison trackers.
+        let db: Float = max(-90, rms > 0 ? 20 * log10(rms) : -160)
+
+        let rawBands = spectrum(samples: samples, count: count, fft: fft,
+                                windowCurve: windowCurve, sampleRate: sampleRate)
+        // Normalize against adaptive noise floors (min-trackers): displayed
+        // values are the EXCESS over the quiet-room level of THIS mic at
+        // THIS gain — silence ≈ 0, no absolute-calibration guesswork (raw
+        // FFT/RMS dB scales vary wildly between devices).
+        //
+        // The floors initialize RELATIVE to the first meaningful frame
+        // (raw − 12 dB): if dictation starts mid-speech the bars come up at
+        // a modest height and settle at the first word gap, instead of the
+        // old absolute init that pegged everything at max for seconds. The
+        // engine's leading all-zero buffers are skipped entirely.
+        var bands = [Float](repeating: 0, count: bandCount)
+        var dbExcess: Float = 0
+        state.lock.lock()
+        let heardSomething = db > -85 || rawBands.contains { $0 > -85 }
+        if state.bandFloors.count != bandCount, heardSomething {
+            state.bandFloors = rawBands.map { $0 - 12 }
+        }
+        if state.bandFloors.count == bandCount {
+            for i in 0..<bandCount {
+                let raw = rawBands[i]
+                // Min-tracker with a leash: rises ~10 dB/s after loud
+                // stretches, snaps down instantly, and never lags more than
+                // 45 dB below the signal (self-heals after gain jumps).
+                state.bandFloors[i] = min(max(state.bandFloors[i] + 0.5, raw - 45), raw)
+                bands[i] = min(1, max(0, (raw - state.bandFloors[i] - 8) / 30))
+            }
+        }
+        if state.levelFloor == nil, heardSomething {
+            state.levelFloor = db - 12
+        }
+        if let floor = state.levelFloor {
+            let updated = min(max(floor + 0.5, db - 45), db)
+            state.levelFloor = updated
+            dbExcess = max(0, db - updated)
+        }
+        state.lock.unlock()
+        emit(dbExcess, bands, isFirst)
+    }
+
+    /// 1024-point real FFT → `bandCount` log-spaced voice bands, 0…1.
+    /// Costs single-digit microseconds on Accelerate hardware — negligible
+    /// against the ~46 ms buffer cadence.
+    private static func spectrum(samples: UnsafeMutablePointer<Float>, count: Int,
+                                 fft: FFTSetup?, windowCurve: [Float],
+                                 sampleRate: Float) -> [Float] {
+        guard let fft, count >= fftSize, windowCurve.count == fftSize else {
+            return [Float](repeating: 0, count: bandCount)
+        }
+        var windowed = [Float](repeating: 0, count: fftSize)
+        vDSP_vmul(samples, 1, windowCurve, 1, &windowed, 1, vDSP_Length(fftSize))
+
+        var real = [Float](repeating: 0, count: fftSize / 2)
+        var imag = [Float](repeating: 0, count: fftSize / 2)
+        var magnitudes = [Float](repeating: 0, count: fftSize / 2)
+        real.withUnsafeMutableBufferPointer { realPtr in
+            imag.withUnsafeMutableBufferPointer { imagPtr in
+                var split = DSPSplitComplex(realp: realPtr.baseAddress!, imagp: imagPtr.baseAddress!)
+                windowed.withUnsafeBufferPointer { windowPtr in
+                    windowPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: fftSize / 2) {
+                        vDSP_ctoz($0, 2, &split, 1, vDSP_Length(fftSize / 2))
+                    }
+                }
+                vDSP_fft_zrip(fft, &split, 1, vDSP_Length(log2(Float(fftSize))), FFTDirection(FFT_FORWARD))
+                vDSP_zvmags(&split, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+            }
+        }
+
+        let binWidth = sampleRate / Float(fftSize)
+        let ratio = bandHighHz / bandLowHz
+        var bands = [Float](repeating: 0, count: bandCount)
+        for band in 0..<bandCount {
+            let f0 = bandLowHz * pow(ratio, Float(band) / Float(bandCount))
+            let f1 = bandLowHz * pow(ratio, Float(band + 1) / Float(bandCount))
+            let b0 = max(1, Int(f0 / binWidth))
+            let b1 = min(fftSize / 2 - 1, max(b0 + 1, Int(f1 / binWidth)))
+            var sum: Float = 0
+            for bin in b0..<b1 { sum += magnitudes[bin] }
+            let mean = sum / Float(b1 - b0)
+            // Raw band energy in dB (uncalibrated — the adaptive per-band
+            // floor in `handle` turns it into a displayable 0…1 excess).
+            // Clamped at −90: the engine's first buffers are digital SILENCE
+            // (all zeros), and an unclamped log10 would report ~−3000 dB —
+            // poisoning the min-tracking floor for minutes.
+            bands[band] = max(-90, 10 * log10(mean + .leastNormalMagnitude))
+        }
+        return bands
+    }
+}
+
+// MARK: - Input device enumeration (CoreAudio)
+
+/// Lists audio input devices and resolves persisted UIDs for the dictation
+/// microphone picker. UIDs are stable across reboots and replugs; numeric
+/// device IDs are not — only UIDs are stored in settings.
+nonisolated enum AudioInputDevices {
+    struct Device: Identifiable, Equatable {
+        let uid: String
+        let name: String
+        var id: String { uid }
+    }
+
+    static func inputDevices() -> [Device] {
+        allDeviceIDs().compactMap { id in
+            guard inputChannelCount(id) > 0,
+                  let uid = stringProperty(id, kAudioDevicePropertyDeviceUID) else { return nil }
+            let name = stringProperty(id, kAudioObjectPropertyName) ?? uid
+            return Device(uid: uid, name: name)
+        }
+    }
+
+    static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        allDeviceIDs().first {
+            inputChannelCount($0) > 0 && stringProperty($0, kAudioDevicePropertyDeviceUID) == uid
+        }
+    }
+
+    private static func address(_ selector: AudioObjectPropertySelector,
+                                scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    private static func allDeviceIDs() -> [AudioDeviceID] {
+        var addr = address(kAudioHardwarePropertyDevices)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr,
+              size > 0 else { return [] }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    private static func inputChannelCount(_ id: AudioDeviceID) -> Int {
+        var addr = address(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeInput)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+        let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+        return list.reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+
+    private static func stringProperty(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> String? {
+        var addr = address(selector)
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var value: Unmanaged<CFString>?
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr,
+              let value else { return nil }
+        return value.takeRetainedValue() as String
     }
 }
 
