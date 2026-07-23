@@ -51,6 +51,32 @@ enum TranscriptionService {
         return text
     }
 
+    // MARK: - Connection pre-warm
+
+    /// Fire-and-forget TCP+TLS warm-up to the active STT provider's host,
+    /// called when dictation starts recording. The first transcription request
+    /// then rides an already-open connection — DNS + TCP + TLS (~200–500 ms)
+    /// happen while the user is still speaking, instead of being added to the
+    /// first phrase's insertion latency. A cheap unauthenticated GET to the
+    /// API root is enough; the response (typically 401/404) is discarded —
+    /// only the pooled connection in `HTTPClient.session` matters.
+    static func prewarmConnection() {
+        let preferred = AppSettings.shared.sttProvider
+        let candidates: [STTProviderID] = [preferred] + STTProviderID.allCases.filter { $0 != preferred }
+        guard let provider = candidates.first(where: { $0.hasKey }) else { return }
+        let host: String
+        switch provider {
+        case .mistral: host = "https://api.mistral.ai/v1/models"
+        case .openai: host = "https://api.openai.com/v1/models"
+        case .deepgram: host = "https://api.deepgram.com/v1/projects"
+        }
+        var request = URLRequest(url: URL(string: host)!)
+        request.timeoutInterval = 5
+        Task.detached(priority: .utility) {
+            _ = try? await HTTPClient.session.data(for: request)
+        }
+    }
+
     // MARK: - OpenAI-style multipart (Mistral, OpenAI)
 
     /// nonisolated: multipart assembly copies the audio bytes — keep it off

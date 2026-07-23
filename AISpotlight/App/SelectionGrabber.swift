@@ -126,9 +126,15 @@ enum SelectionGrabber {
 
         // Let the summon chord (⌘⇧Space) physically release first — its Shift
         // must not merge into the ⌘C (⌘⇧C opens dev tools in browsers).
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        // Polled, not a fixed sleep: the chord is typically up within ~50 ms,
+        // and this wait delays the panel's appearance on screen.
+        await waitForModifierRelease(timeout: .milliseconds(300))
+        let countBeforeCopy = pasteboard.changeCount
         postKey(kVK_ANSI_C, flags: .maskCommand)
-        try? await Task.sleep(nanoseconds: 120_000_000)
+        // The copy typically lands in 30–80 ms; poll instead of a fixed
+        // 120 ms. The timeout only bites when nothing was selected (the target
+        // app never writes the pasteboard) — then we give up and move on.
+        await waitForPasteboardChange(pasteboard, from: countBeforeCopy, timeout: .milliseconds(250))
 
         defer { restore(saved, to: pasteboard) }
 
@@ -140,6 +146,30 @@ enum SelectionGrabber {
             return nil
         }
         return value
+    }
+
+    /// Polls the hardware modifier state until ⌘/⇧/⌃/⌥ are all up (10 ms
+    /// steps). Falls through at `timeout` — a stuck modifier must not hold
+    /// the panel hostage.
+    private static func waitForModifierRelease(timeout: Duration) async {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            let flags = CGEventSource.flagsState(.combinedSessionState)
+            if flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate]).isEmpty {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Polls until the pasteboard's changeCount moves past `from` (the ⌘C
+    /// landed), or gives up at `timeout` (nothing was selected).
+    private static func waitForPasteboardChange(_ pasteboard: NSPasteboard, from: Int, timeout: Duration) async {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if pasteboard.changeCount != from { return }
+            try? await Task.sleep(for: .milliseconds(15))
+        }
     }
 
     private static func restore(_ saved: String?, to pasteboard: NSPasteboard) {

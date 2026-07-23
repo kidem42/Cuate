@@ -91,11 +91,33 @@ final class DictationService: NSObject, ObservableObject {
         // Prompt for Accessibility up front (needed to paste into other apps).
         _ = TextInserter.checkAccessibility(promptIfNeeded: true)
 
+        // Open the TLS connection to the STT provider while the user is still
+        // speaking — the first phrase's transcription then skips the ~200–500 ms
+        // DNS+TCP+TLS handshake (HTTPClient.session pools the connection).
+        TranscriptionService.prewarmConnection()
+
+        // Mic already authorized (the common case): show the pill IMMEDIATELY,
+        // before the recorder spins up the audio hardware — `record()` blocks
+        // the main thread for ~50–200 ms and used to delay the widget, making
+        // the hotkey feel laggy. Speech starts after the finger leaves the key,
+        // so the recorder still catches the first word. First-ever use (system
+        // permission prompt pending) keeps the conservative order — no pill
+        // flashing behind a permission dialog.
+        let preAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        if preAuthorized {
+            phase = .recording
+            showWidget()
+        }
+
         Task { @MainActor in
-            guard await requestMicPermission() else {
-                NSSound.beep()
-                return
+            if !preAuthorized {
+                guard await requestMicPermission() else {
+                    NSSound.beep()
+                    return
+                }
             }
+            // A lightning double-tap may have cancelled while we yielded.
+            if preAuthorized, phase != .recording { return }
 
             chunkedMode = AppSettings.shared.dictationChunked
             sessionCancelled = false
@@ -113,6 +135,8 @@ final class DictationService: NSObject, ObservableObject {
                 startMetering()
             } catch {
                 NSSound.beep()
+                phase = .idle
+                hideWidget()
             }
         }
     }
@@ -250,7 +274,13 @@ final class DictationService: NSObject, ObservableObject {
     // MARK: - Stop → transcribe → post-process → paste
 
     func stopAndProcess() async {
-        guard phase == .recording, let fileURL else { return }
+        guard phase == .recording else { return }
+        guard let fileURL else {
+            // Stop arrived before the recorder finished spinning up (the pill
+            // shows optimistically) — nothing was captured, treat as cancel.
+            cancel()
+            return
+        }
         meterTimer?.invalidate()
         meterTimer = nil
         recorder?.stop()
