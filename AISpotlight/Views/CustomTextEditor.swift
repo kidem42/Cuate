@@ -16,6 +16,21 @@ final class QuoteComposerTextView: NSTextView {
         super.paste(sender)
     }
 
+    /// ⌘V is the Edit▸Paste menu item's key equivalent, and AppKit validates
+    /// the item before dispatching it. A plain-text NSTextView reports only
+    /// TEXT pasteboard types as readable, so with an image-only clipboard the
+    /// item stayed disabled and `paste(_:)` — including the image hook — never
+    /// ran (text pastes were unaffected, which made the hook look broken).
+    /// Declare paste valid whenever the clipboard holds an image the hook can
+    /// consume.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(NSText.paste(_:)), onPasteImage != nil,
+           NSImage.canInit(with: NSPasteboard.general) {
+            return true
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
     // MARK: - Terminal block caret
 
     /// Set → the system insertion point is hidden and a terminal-style

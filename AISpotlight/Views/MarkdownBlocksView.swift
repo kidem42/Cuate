@@ -172,12 +172,15 @@ struct MarkdownBlocksView: View {
                     .frame(width: 3)
                 MarkdownText(content, linkColor: linkColor)
                     .foregroundColor(palette.isGlass ? .secondary : palette.secondaryText)
-                if isHovering || justCopied {
-                    Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 9))
-                        .foregroundColor(justCopied ? .green : .secondary)
-                        .transition(.opacity)
-                }
+                // Always in the layout (fixed width) so revealing it on hover
+                // only changes opacity — the quote text never reflows. Both
+                // glyphs share the frame, so the checkmark swap doesn't nudge
+                // the text either.
+                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 9))
+                    .foregroundColor(justCopied ? .green : .secondary)
+                    .frame(width: 11, alignment: .center)
+                    .opacity(isHovering || justCopied ? 1 : 0)
             }
             .contentShape(Rectangle())
             .onHover { hovering in

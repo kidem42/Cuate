@@ -60,7 +60,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         // Warm up the active provider's model list so the saved selection is
         // available immediately (otherwise it looks "reset" until Load Models).
-        AppSettings.shared.autoLoadModelsIfNeeded(for: AppSettings.shared.chatProvider)
+        // The key-presence check reads the Keychain, and the FIRST read of the
+        // session is a securityd IPC that can BLOCK — on a locked keychain, or
+        // an ACL re-prompt after the app is re-signed — which hung launch on the
+        // main thread (see hang reports). Do that first read off-main to warm the
+        // presence cache, then run the now non-blocking auto-load on the main actor.
+        Task { @MainActor in
+            await Task.detached(priority: .userInitiated) { APIKeyStore.warmPresenceCache() }.value
+            AppSettings.shared.autoLoadModelsIfNeeded(for: AppSettings.shared.chatProvider)
+        }
 
         // Setup chat window
         setupChatWindow()

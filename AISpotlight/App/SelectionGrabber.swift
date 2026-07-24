@@ -122,7 +122,12 @@ enum SelectionGrabber {
     /// restore mechanics directly.
     static func clipboardSelection() async -> String? {
         let pasteboard = NSPasteboard.general
-        let saved = pasteboard.string(forType: .string)
+        // FULL snapshot, not just the string: the clipboard may hold an image
+        // (or file) the user copied to paste INTO the panel. Saving/restoring
+        // only the string used to DESTROY it — declareTypes below wipes the
+        // pasteboard, and with no string to put back the user was left with
+        // just our sentinel (‹aispotlight-grab-…›) and no image.
+        let saved = snapshotItems(pasteboard)
         let sentinel = "‹aispotlight-grab-\(pasteboard.changeCount)›"
         pasteboard.declareTypes([.string, transientType], owner: nil)
         pasteboard.setString(sentinel, forType: .string)
@@ -140,7 +145,7 @@ enum SelectionGrabber {
         // can't hold the panel's focus hostage. Real copies land well inside it.
         await waitForPasteboardChange(pasteboard, from: countBeforeCopy, timeout: .milliseconds(120))
 
-        defer { restore(saved, to: pasteboard) }
+        defer { restoreItems(saved, to: pasteboard) }
 
         // A non-text copy (Finder files and the like) is not a text selection.
         if pasteboard.types?.contains(.fileURL) == true { return nil }
@@ -176,12 +181,32 @@ enum SelectionGrabber {
         }
     }
 
-    private static func restore(_ saved: String?, to pasteboard: NSPasteboard) {
-        guard let saved else { return }
-        // Also transient: clipboard managers recorded the original already —
-        // re-recording the restore would duplicate their history entry.
-        pasteboard.declareTypes([.string, transientType], owner: nil)
-        pasteboard.setString(saved, forType: .string)
+    /// Deep-copies every pasteboard item (all representations) so the exact
+    /// clipboard — image and file payloads included, not just text — can be
+    /// put back after the synthesized ⌘C.
+    private static func snapshotItems(_ pasteboard: NSPasteboard) -> [NSPasteboardItem] {
+        (pasteboard.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+    }
+
+    /// Restores a snapshot taken by `snapshotItems`. Always clears first so our
+    /// sentinel never leaks (even when the original clipboard was empty). Each
+    /// restored item is marked transient so clipboard managers don't record a
+    /// duplicate of what they already captured when the user first copied.
+    private static func restoreItems(_ items: [NSPasteboardItem], to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        guard !items.isEmpty else { return }
+        for item in items {
+            item.setData(Data(), forType: transientType)
+        }
+        pasteboard.writeObjects(items)
     }
 
     private static func postKey(_ keyCode: Int, flags: CGEventFlags) {

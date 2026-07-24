@@ -120,6 +120,25 @@ enum APIKeyStore {
         presenceLock.unlock()
     }
 
+    /// Pre-populates the presence cache with a SINGLE Keychain read — meant to
+    /// run OFF the main thread. The first key read of the session is a securityd
+    /// IPC that can block (locked keychain, or an ACL re-prompt after the app is
+    /// re-signed); doing it on the main thread at launch hung the app there.
+    /// Warming it in the background keeps launch responsive, and every later
+    /// `hasKey` is then a cache hit. Safe to call redundantly.
+    static func warmPresenceCache() {
+        bundleLock.lock()
+        let bundle = loadBundleLocked()
+        bundleLock.unlock()
+        let accounts = ProviderID.allCases.map(\.rawValue)
+            + AuxKey.allCases.map { "aux." + $0.rawValue }
+        presenceLock.lock()
+        for account in accounts {
+            presenceCache[account] = (bundle[account]?.isEmpty == false)
+        }
+        presenceLock.unlock()
+    }
+
     static func key(for provider: ProviderID) -> String? {
         value(account: provider.rawValue)
     }

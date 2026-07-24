@@ -766,7 +766,9 @@ nonisolated final class MicCapture {
     private static let bandLowHz: Float = 80
     private static let bandHighHz: Float = 8000
 
-    private let engine = AVAudioEngine()
+    /// Recreated on every cold start (`ensureRunning`) — see the comment
+    /// there. Mutated only on `queue` after init.
+    private var engine = AVAudioEngine()
     private let queue = DispatchQueue(label: "aispotlight.mic.capture")
     private let state = State()
     /// Queue-confined: pending warm-window expiry.
@@ -774,10 +776,19 @@ nonisolated final class MicCapture {
     private var configObserver: NSObjectProtocol?
 
     init() {
-        // OUR engine only (object:) — a global observer used to catch every
-        // engine's configuration chatter, including the benign one posted
-        // when the engine starts on a user-selected device, and killed the
-        // dictation right after the warm-up animation.
+        observeConfigurationChanges()
+    }
+
+    /// OUR engine only (object:) — a global observer used to catch every
+    /// engine's configuration chatter, including the benign one posted
+    /// when the engine starts on a user-selected device, and killed the
+    /// dictation right after the warm-up animation. Re-registered every
+    /// time the engine is recreated, so the observer always tracks the
+    /// live instance.
+    private func observeConfigurationChanges() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+        }
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in
@@ -915,6 +926,24 @@ nonisolated final class MicCapture {
         let running = state.engineRunning
         state.lock.unlock()
         guard !running else { return }
+
+        // Cold start: ALWAYS on a fresh engine. AVAudioEngine's input node
+        // binds to the device that was current when the engine was FIRST
+        // touched and keeps that binding — device AND cached stream format —
+        // across stop(); it is never renegotiated. Unplugging/plugging
+        // headphones while idle therefore left the old engine permanently
+        // wedged: every start failed with -10868 (FormatNotSupported) until
+        // the app was relaunched. (Setting kAudioOutputUnitProperty_-
+        // CurrentDevice on the initialized unit does NOT refresh the cached
+        // format — the 3.17 attempt, disproven by the field log.) A fresh
+        // engine binds cleanly to whatever input is live right now, and its
+        // cost is trivial next to the mic hardware spin-up a cold start
+        // already pays. The warm window is untouched — a running engine
+        // never reaches this path.
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine = AVAudioEngine()
+        observeConfigurationChanges()
 
         let input = engine.inputNode
         // Selected mic; an unresolved UID (device unplugged) falls through

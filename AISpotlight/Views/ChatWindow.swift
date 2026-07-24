@@ -1257,6 +1257,10 @@ struct ChatWindow: View {
     /// ⌘V in the composer: an image on the pasteboard becomes the pending
     /// attachment (Slack/Telegram-style). Plain-text pastes fall through.
     private func handleImagePaste(_ pasteboard: NSPasteboard) -> Bool {
+        // Opt-in diagnostics: which raw types arrived (first few — browsers
+        // declare dozens) so a "nothing happened" paste report pins the source.
+        Diagnostics.log("ui", "paste types=\((pasteboard.types ?? []).prefix(6).map(\.rawValue))")
+
         // A copied image FILE (Finder ⌘C) arrives as a file URL + its name as
         // a string — the file wins over the text.
         let urlOptions: [NSPasteboard.ReadingOptionKey: Any] = [
@@ -1268,18 +1272,33 @@ struct ChatWindow: View {
             return attachImageFile(at: url)
         }
 
-        // Raster data (screenshot copy, browser "Copy Image"). TIFF is the
-        // clipboard lingua franca — normalize to PNG.
-        if let type = pasteboard.availableType(from: [.png, .tiff]),
-           let data = pasteboard.data(forType: type) {
-            let png = (type == .png) ? data : Self.pngData(from: data)
-            guard let png else { return false }
-            let timestamp = Int(Date().timeIntervalSince1970)
-            attach(data: png, mime: "image/png", filename: "pasted-\(timestamp).png")
+        // Raster data (screenshot copy, browser "Copy Image"). PNG/TIFF/JPEG
+        // are the common clipboard image types — normalize to PNG. A failure
+        // to build the PNG falls through to the NSImage path below rather than
+        // bailing (so a lazily-provided or exotic type still has a chance).
+        if let type = pasteboard.availableType(from: [.png, .tiff, Self.jpegPasteboardType]),
+           let data = pasteboard.data(forType: type),
+           let png = (type == .png) ? data : Self.pngData(from: data) {
+            attach(data: png, mime: "image/png", filename: "pasted-\(Int(Date().timeIntervalSince1970)).png")
+            return true
+        }
+
+        // Last resort: any NSImage representation on the pasteboard. Some apps
+        // vend only an NSImage object with no raw png/tiff/jpeg data type — this
+        // is the canonical way to read an image from a pasteboard, so it catches
+        // sources the explicit-type check above misses. Returns nil for a
+        // text-only clipboard, so plain-text pastes still fall through.
+        if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage,
+           let tiff = image.tiffRepresentation,
+           let png = Self.pngData(from: tiff) {
+            attach(data: png, mime: "image/png", filename: "pasted-\(Int(Date().timeIntervalSince1970)).png")
             return true
         }
         return false
     }
+
+    /// `public.jpeg` as a pasteboard type (no AppKit constant for it).
+    private static let jpegPasteboardType = NSPasteboard.PasteboardType(UTType.jpeg.identifier)
 
     /// Persists the attachment payload as a FILE in Application Support and
     /// references it from the message (`base64` stays empty). Keeping image
