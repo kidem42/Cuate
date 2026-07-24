@@ -4,7 +4,7 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 
 ## Features
 
-- **Spotlight-style floating panel** — summoned with a global hotkey from any app, opens on the screen where your cursor is, remembers its position
+- **Spotlight-style floating panel** — summoned with a global hotkey from any app, appears instantly on the keypress, opens on the screen where your cursor is, remembers its position
 - **Multi-provider chat** — OpenAI, Anthropic (Claude), Google Gemini, Mistral, DeepSeek, Kimi (Moonshot) and OpenRouter (any model by slug, with a live capability catalog); model lists are fetched live from each provider's API
 - **Local models (Ollama)** — run models on your Mac, **free and offline, no API key**: enable in Settings → General, then pick the local provider in the chat like any other. Points at Ollama by default (editable endpoint, so LM Studio / llama.cpp / vLLM / LocalAI work too via the OpenAI-compatible API). For Ollama, a built-in console manages models without the terminal: browse installed models with their capabilities (vision/tools) and live memory footprint, **download** new ones with a progress bar, **delete**, and **start/stop** (load into / unload from memory) from Settings → Local models or a status-bar submenu. Local replies get their **own token cap** (default: no limit — local tokens are free, and thinking models never get truncated mid-thought). Sending to a model that is not in memory asks first — loading costs time and RAM — and explains that the model unloads again after ~5 minutes of inactivity (pin it in Settings → Local models to keep it resident). A master switch can disable cloud providers entirely for a fully offline setup
 - **Voice input**

@@ -389,27 +389,158 @@ enum Localization {
         "ob.done": [.english: "Get Started", .spanish: "Empezar", .russian: "Начать"],
         "ob.skip": [.english: "Skip", .spanish: "Omitir", .russian: "Пропустить"],
         "ob.showTour": [.english: "Show Welcome Tour", .spanish: "Mostrar el tour de bienvenida", .russian: "Показать обзор функций"],
-        "ob.p1.title": [.english: "AI anywhere on your Mac", .spanish: "IA en cualquier lugar de tu Mac", .russian: "ИИ в любом месте вашего Mac"],
-        "ob.p1.body": [.english: "AISpotlight lives in the menu bar and appears over any app with one hotkey, Spotlight-style. Ask anything, then press Esc or click away to dismiss.", .spanish: "AISpotlight vive en la barra de menús y aparece sobre cualquier app con un atajo, al estilo Spotlight. Pregunta lo que sea y haz clic fuera para cerrarlo.", .russian: "AISpotlight живёт в статус-баре и появляется поверх любого приложения по хоткею, как Spotlight. Спросите что угодно; клик мимо окна скрывает панель."],
-        "ob.p2.title": [.english: "Bring your own keys", .spanish: "Usa tus propias claves", .russian: "Ваши собственные ключи"],
-        "ob.p2.body": [.english: "Works with OpenAI, Claude, Gemini, Mistral and DeepSeek — add any API keys in Settings → API Keys, load the model list and pick a model. Keys are stored only in the macOS Keychain on this device.", .spanish: "Funciona con OpenAI, Claude, Gemini, Mistral y DeepSeek: añade tus claves en Ajustes → Claves API, carga la lista de modelos y elige uno. Las claves se guardan solo en el Llavero de macOS de este equipo.", .russian: "Работает с OpenAI, Claude, Gemini, Mistral и DeepSeek: добавьте ключи в Настройки → Ключи API, загрузите список моделей и выберите модель. Ключи хранятся только в Связке ключей macOS на этом устройстве."],
-        "ob.p2.note": [.english: "For all features to work, add at least one chat key; a Mistral key additionally covers voice and OCR (voice also works with OpenAI or Deepgram).", .spanish: "Para que todo funcione, añade al menos una clave de chat; la de Mistral cubre además voz y OCR (la voz también funciona con OpenAI o Deepgram).", .russian: "Чтобы работали все функции, добавьте хотя бы один ключ для чата; ключ Mistral дополнительно покрывает голос и OCR (голос также работает с OpenAI или Deepgram)."],
-        "ob.p3.title": [.english: "Screenshots & OCR", .spanish: "Capturas y OCR", .russian: "Скриншоты и OCR"],
-        "ob.p3.body": [.english: "Capture the whole screen or a selected area straight into the chat — ask questions about what's on screen, or press “Extract Text” to turn any screenshot into structured Markdown.", .spanish: "Captura toda la pantalla o un área directamente al chat: pregunta sobre lo que ves o pulsa “Extraer texto” para convertir la captura en Markdown estructurado.", .russian: "Скриншот всего экрана или выделенной области попадает прямо в чат: задавайте вопросы о том, что на экране, или нажмите «Извлечь текст», чтобы получить структурированный Markdown."],
-        "ob.p4.title": [.english: "Voice messages", .spanish: "Mensajes de voz", .russian: "Голосовые сообщения"],
-        "ob.p4.body": [.english: "Record with the mic button — speech is transcribed and sent to the model. Pick the transcription provider in Settings → Voice: Mistral Voxtral, OpenAI or Deepgram. While recording: Space sends, double-Space or Esc cancels.", .spanish: "Graba con el botón del micrófono: la voz se transcribe y se envía al modelo. Elige el proveedor de transcripción en Ajustes → Voz: Mistral Voxtral, OpenAI o Deepgram. Durante la grabación: Espacio envía, doble Espacio o Esc cancela.", .russian: "Записывайте кнопкой микрофона: речь распознаётся и уходит модели. Провайдер распознавания выбирается в Настройки → Голос: Mistral Voxtral, OpenAI или Deepgram. Во время записи: Пробел — отправить, двойной Пробел или Esc — отмена."],
-        "ob.p5.title": [.english: "Dictate into any app", .spanish: "Dicta en cualquier app", .russian: "Диктовка в любое приложение"],
-        "ob.p5.body": [.english: "Press the dictation hotkey in any text field — a pill appears under the camera, and the recognized (or translated) text is typed phrase by phrase right where your cursor is, while you speak. In translate mode, click the language badge on the pill to switch the target language mid-dictation. Requires the Accessibility permission.", .spanish: "Pulsa el atajo de dictado en cualquier campo de texto: aparece una pastilla bajo la cámara y el texto reconocido (o traducido) se escribe frase a frase justo donde está el cursor, mientras hablas. En modo traducción, haz clic en la insignia del idioma de la pastilla para cambiar el idioma de destino sin dejar de dictar. Requiere el permiso de Accesibilidad.", .russian: "Нажмите хоткей диктовки в любом текстовом поле: под камерой появится пилюля, а распознанный (или переведённый) текст будет впечатываться фраза за фразой прямо туда, где курсор, — пока вы говорите. В режиме перевода кликните по бейджу языка на пилюле, чтобы сменить язык, не прерывая диктовку. Нужно разрешение «Универсальный доступ»."],
-        // New pages use semantic keys (not positional ob.pN) so inserting
-        // pages never renumbers existing strings.
-        "ob.selection.title": [.english: "Select → summon → ask", .spanish: "Selecciona → invoca → pregunta", .russian: "Выделил → вызвал → спросил"],
-        "ob.selection.body": [.english: "Select text in any app and press the panel hotkey — the selection lands in the input field as an editable quote, even in WhatsApp, Telegram or Slack. Add an instruction and hit Enter: with a translator preset that's instant translation of anything you select.", .spanish: "Selecciona texto en cualquier app y pulsa el atajo del panel: la selección aparece en el campo de entrada como una cita editable, incluso en WhatsApp, Telegram o Slack. Añade una instrucción y pulsa Enter: con un preajuste de traductor es traducción instantánea de cualquier selección.", .russian: "Выделите текст в любом приложении и нажмите хоткей панели — выделенное появится в поле ввода редактируемой цитатой, даже в WhatsApp, Telegram и Slack. Добавьте инструкцию и нажмите Enter: с пресетом-переводчиком это мгновенный перевод любого выделения."],
-        "ob.layoutfix.title": [.english: "Keyboard layout fixer", .spanish: "Corrección de la distribución", .russian: "Исправление раскладки"],
-        "ob.layoutfix.body": [.english: "Typed ghbdtn instead of привет? LayoutFix converts text typed in the wrong keyboard layout (EN/RU/ES) — automatically as you type, or by hotkey for the selection. Off by default: enable it in Settings → General.", .spanish: "¿Escribiste ghbdtn en vez de привет? LayoutFix convierte el texto escrito con la distribución equivocada (EN/RU/ES): automáticamente al escribir o con un atajo para la selección. Desactivado por defecto: actívalo en Ajustes → General.", .russian: "Набрали ghbdtn вместо привет? LayoutFix конвертирует текст, набранный не в той раскладке (EN/RU/ES): автоматически при наборе или по хоткею для выделенного. По умолчанию выключен — включите в Настройки → Общие."],
-        "ob.layoutfix.flip": [.english: "Fix selection", .spanish: "Corregir selección", .russian: "Исправить выделение"],
-        "ob.layoutfix.smart": [.english: "Smart fix (AI)", .spanish: "Corrección inteligente (IA)", .russian: "Умное исправление (ИИ)"],
-        "ob.p6.title": [.english: "Web search & more", .spanish: "Búsqueda web y más", .russian: "Веб-поиск и другое"],
-        "ob.p6.body": [.english: "Add a Brave key and models can search the web on their own and cite their sources. Switch providers and prompt presets right from the panel header, click monospace values, quotes and code blocks to copy them instantly, and retry any failed request with one click.", .spanish: "Añade una clave de Brave y los modelos buscan en la web por sí mismos y citan sus fuentes. Cambia de proveedor y de preajuste desde la cabecera del panel, haz clic en valores monoespaciados, citas y bloques de código para copiarlos al instante, y reintenta cualquier petición fallida con un clic.", .russian: "Добавьте ключ Brave — модели смогут сами искать в интернете и указывать источники. Провайдер и пресет промпта переключаются в шапке панели, клик по моноширинным значениям, цитатам и код-блокам мгновенно копирует их, а упавший запрос повторяется одной кнопкой."],
+        // Page captions — features only, no provider or model names.
+        "ob.tour.chat.title": [
+            .english: "Ask anything, anywhere",
+            .spanish: "Pregunta lo que sea, donde sea",
+            .russian: "Спросите что угодно, где угодно"
+        ],
+        "ob.tour.chat.body": [
+            .english: "AISpotlight lives in the menu bar and opens over any app. Ask, read the answer, press Esc.",
+            .spanish: "AISpotlight vive en la barra de menús y se abre sobre cualquier app. Pregunta, lee la respuesta y pulsa Esc.",
+            .russian: "AISpotlight живёт в строке меню и открывается поверх любого приложения. Спросили — получили ответ — Esc."
+        ],
+        "ob.tour.shot.title": [
+            .english: "Capture a table, get a table",
+            .spanish: "Captura una tabla y obtén una tabla",
+            .russian: "Сняли таблицу — получили таблицу"
+        ],
+        "ob.tour.shot.body": [
+            .english: "Drag a region and it lands in the chat. “Extract Text” turns a screenshot of a table into a real table — then just ask about the numbers.",
+            .spanish: "Arrastra una zona y aparecerá en el chat. “Extraer texto” convierte la captura de una tabla en una tabla real, y luego solo pregunta por los números.",
+            .russian: "Выделите кусок экрана: он попадёт в чат. «Извлечь текст» превращает снимок таблицы в настоящую таблицу — и по ней сразу можно спрашивать."
+        ],
+        "ob.tour.dict.title": [
+            .english: "You speak English, it types Spanish",
+            .spanish: "Hablas en inglés, se escribe en español",
+            .russian: "Говорите по-английски — пишется по-испански"
+        ],
+        "ob.tour.dict.body": [
+            .english: "A pill drops under the camera and the translation is typed where the cursor is, phrase by phrase, while you speak. The other app never notices.",
+            .spanish: "Una pastilla aparece bajo la cámara y la traducción se escribe donde está el cursor, frase a frase, mientras hablas. La otra app no nota nada.",
+            .russian: "Пилюля появляется под камерой, а перевод впечатывается туда, где стоит курсор, — фраза за фразой, пока вы говорите. Чужое приложение ничего не замечает."
+        ],
+        "ob.tour.world.title": [
+            .english: "One moment, every city",
+            .spanish: "Un instante, todas las ciudades",
+            .russian: "Один момент — сразу во всех городах"
+        ],
+        "ob.tour.world.body": [
+            .english: "A 24-hour grid across your cities: one vertical slice is the same instant everywhere. Click a half-hour and say what to plan — the event lands in Calendar.",
+            .spanish: "Una cuadrícula de 24 horas con tus ciudades: un corte vertical es el mismo instante en todas. Haz clic en una media hora y di qué planificar: el evento se crea en Calendario.",
+            .russian: "Сетка суток по вашим городам: вертикальный срез — это один и тот же момент везде. Клик по получасу — скажите, что запланировать, и встреча появится в Календаре."
+        ],
+        "ob.tour.image.title": [
+            .english: "Three edits for any image",
+            .spanish: "Tres retoques para cualquier imagen",
+            .russian: "Три операции с любой картинкой"
+        ],
+        "ob.tour.image.body": [
+            .english: "Attach a picture and the actions bar appears: remove the background, upscale ×4, or brush over something to erase it.",
+            .spanish: "Adjunta una imagen y aparecerá la barra de acciones: quitar el fondo, escalar ×4 o pintar sobre algo para borrarlo.",
+            .russian: "Прикрепите изображение — появится панель действий: убрать фон, апскейл ×4 или закрасить лишнее, чтобы стереть."
+        ],
+
+        // Step rail labels
+        "ob.step.chat": [.english: "Chat", .spanish: "Chat", .russian: "Чат"],
+        "ob.step.shot": [.english: "Capture", .spanish: "Captura", .russian: "Скриншот"],
+        "ob.step.dict": [.english: "Dictation", .spanish: "Dictado", .russian: "Диктовка"],
+        "ob.step.world": [.english: "World time", .spanish: "Hora mundial", .russian: "Мировое время"],
+        "ob.step.image": [.english: "Images", .spanish: "Imágenes", .russian: "Картинки"],
+        "ob.replay": [.english: "Replay", .spanish: "Repetir", .russian: "Ещё раз"],
+
+        // MARK: Onboarding scenes (mock UI inside the animations)
+        "obs.mb.file": [.english: "File", .spanish: "Archivo", .russian: "Файл"],
+        "obs.mb.edit": [.english: "Edit", .spanish: "Edición", .russian: "Правка"],
+        "obs.mb.view": [.english: "View", .spanish: "Visualización", .russian: "Вид"],
+        "obs.s1.app": [.english: "Mail", .spanish: "Correo", .russian: "Почта"],
+        "obs.s1.winTitle": [.english: "Mail — Inbox", .spanish: "Correo — Entrada", .russian: "Почта — Входящие"],
+        "obs.s1.q": [
+            .english: "What's the weather in Barcelona today?",
+            .spanish: "¿Qué tiempo hace hoy en Barcelona?",
+            .russian: "Какая погода сегодня в Барселоне?"
+        ],
+        "obs.s1.searching": [.english: "Searching the web…", .spanish: "Buscando en la web…", .russian: "Ищу в интернете…"],
+        "obs.s1.a1": [
+            .english: "Right now 26 °C, clear, wind 12 km/h.",
+            .spanish: "Ahora 26 °C, despejado, viento 12 km/h.",
+            .russian: "Сейчас +26 °C, ясно, ветер 12 км/ч."
+        ],
+        "obs.s1.a2": [
+            .english: "By evening 21 °C, no rain expected.",
+            .spanish: "Por la tarde 21 °C, sin lluvia.",
+            .russian: "К вечеру +21 °C, дождя не будет."
+        ],
+        "obs.s1.ph": [.english: "Ask anything…", .spanish: "Pregunta lo que sea…", .russian: "Спросите что угодно…"],
+
+        "obs.s2.winTitle": [.english: "Q3-report.numbers", .spanish: "Informe-Q3.numbers", .russian: "Q3-отчёт.numbers"],
+        "obs.s2.h.channel": [.english: "Channel", .spanish: "Canal", .russian: "Канал"],
+        "obs.s2.r1": [.english: "Direct sales", .spanish: "Ventas directas", .russian: "Прямые продажи"],
+        "obs.s2.r2": [.english: "Partners", .spanish: "Socios", .russian: "Партнёры"],
+        "obs.s2.r3": [.english: "Subscriptions", .spanish: "Suscripciones", .russian: "Подписки"],
+        "obs.s2.total": [.english: "Total", .spanish: "Total", .russian: "Итого"],
+        "obs.s2.recognizing": [.english: "Recognizing the table…", .spanish: "Reconociendo la tabla…", .russian: "Распознаю таблицу…"],
+        "obs.s2.q": [.english: "Calculate the growth vs Q2", .spanish: "Calcula el crecimiento frente al Q2", .russian: "Посчитай прирост к Q2"],
+        "obs.s2.a": [
+            .english: "Total 12.4M — 18 % above Q2.",
+            .spanish: "Total 12,4 M: un 18 % más que el Q2.",
+            .russian: "Итого 12,4 млн — на 18 % больше Q2."
+        ],
+
+        "obs.s3.inserted": [
+            .english: "typed at the cursor — the other app never noticed",
+            .spanish: "escrito donde estaba el cursor: la otra app no notó nada",
+            .russian: "вставлено на месте курсора — приложение ничего не заметило"
+        ],
+        "obs.s3.saying": [.english: "you say:", .spanish: "dices:", .russian: "вы говорите:"],
+
+        "obs.s4.c1": [.english: "Moscow", .spanish: "Moscú", .russian: "Москва"],
+        "obs.s4.c1c": [.english: "Russia", .spanish: "Rusia", .russian: "Россия"],
+        "obs.s4.c2": [.english: "London", .spanish: "Londres", .russian: "Лондон"],
+        "obs.s4.c2c": [.english: "United Kingdom", .spanish: "Reino Unido", .russian: "Великобритания"],
+        "obs.s4.c3": [.english: "New York", .spanish: "Nueva York", .russian: "Нью-Йорк"],
+        "obs.s4.c3c": [.english: "United States", .spanish: "EE. UU.", .russian: "США"],
+        "obs.s4.c4": [.english: "Tokyo", .spanish: "Tokio", .russian: "Токио"],
+        "obs.s4.c4c": [.english: "Japan", .spanish: "Japón", .russian: "Япония"],
+        "obs.s4.date": [.english: "Thu, Jul 23", .spanish: "jue, 23 jul", .russian: "Чт, 23 июля"],
+        "obs.s4.chipThu": [.english: "THU", .spanish: "JUE", .russian: "ЧТ"],
+        "obs.s4.chipFri": [.english: "FRI", .spanish: "VIE", .russian: "ПТ"],
+        "obs.s4.chipMon": [.english: "JUL", .spanish: "JUL", .russian: "ИЮЛЬ"],
+        "obs.s4.stripSel": [.english: "Jul 23", .spanish: "23 jul", .russian: "23 июля"],
+        "obs.s4.meeting": [.english: "New event · 15:30", .spanish: "Nuevo evento · 15:30", .russian: "Новая встреча · 15:30"],
+        "obs.s4.meetingTitle": [
+            .english: "Sync with London and Tokyo",
+            .spanish: "Reunión con Londres y Tokio",
+            .russian: "Созвон с Лондоном и Токио"
+        ],
+        "obs.s4.create": [.english: "Create", .spanish: "Crear", .russian: "Создать"],
+
+        "obs.s5.r1": [
+            .english: "Background removed — PNG with transparency",
+            .spanish: "Fondo eliminado: PNG con transparencia",
+            .russian: "Фон удалён — PNG с прозрачностью"
+        ],
+        "obs.s5.r2": [
+            .english: "Upscaled ×4 — 2048 × 1536",
+            .spanish: "Escalado ×4: 2048 × 1536",
+            .russian: "Увеличено ×4 — 2048 × 1536"
+        ],
+        "obs.s5.r3": [
+            .english: "Object removed — the gap filled in",
+            .spanish: "Objeto eliminado — hueco rellenado",
+            .russian: "Объект удалён — фон восстановлен"
+        ],
+        "obs.s5.note": [
+            .english: "Every result comes back into the chat as a ready file — save it or keep editing.",
+            .spanish: "Cada resultado vuelve al chat como un archivo listo: guárdalo o sigue editando.",
+            .russian: "Каждый результат возвращается в чат готовым файлом — сохраните или продолжайте править."
+        ],
+        "obs.s5.ph": [
+            .english: "Or just ask about the picture…",
+            .spanish: "O pregunta por la imagen…",
+            .russian: "Или просто спросите про картинку…"
+        ],
+
         "panel.extractText": [.english: "Extract Text", .spanish: "Extraer texto", .russian: "Извлечь текст"],
         "panel.extracting": [.english: "Extracting…", .spanish: "Extrayendo…", .russian: "Извлечение…"],
         "panel.noProviderKey": [.english: "No API key for the active provider. Open the status bar icon → Settings… to add your API key and load the model list.", .spanish: "No hay clave API para el proveedor activo. Abre el icono de la barra de estado → Ajustes… para añadir tu clave y cargar los modelos.", .russian: "Нет ключа API для активного провайдера. Откройте иконку в статус-баре → Настройки…, добавьте ключ и загрузите список моделей."],

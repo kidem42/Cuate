@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Онбординг AISpotlight — стенд</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#E9E9ED; color:#15161A; padding:32px 28px 64px;
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif}
+  h1{font-size:22px; font-weight:600; letter-spacing:-.01em}
+  .lede{color:#5A5F6A; max-width:74ch; margin-top:6px; font-size:13.5px}
+  .grid{display:flex; gap:26px; align-items:flex-start; margin-top:26px; flex-wrap:wrap}
+  .col{display:flex; flex-direction:column; gap:22px}
+  .card{background:#fff; border-radius:12px; box-shadow:0 18px 40px -22px rgba(12,14,20,.55); overflow:hidden}
+  .cap{display:flex; align-items:baseline; gap:8px; padding:9px 13px;
+    border-bottom:1px solid rgba(0,0,0,.08); font-size:12px; font-weight:600}
+  .cap span{font-weight:400; color:#7A7F8A; font-size:11.5px}
+  iframe{display:block; border:0; width:560px}
+</style>
+<h1>Онбординг AISpotlight — 5 сцен в движении</h1>
+<p class="lede">
+  Пересобирается командой <code>python3 design/onboarding/build_cards.py</code>.
+  У каждой сцены снизу плеер: пауза и перетаскивание по шкале разбирают движение по кадрам,
+  засечки — ключевые моменты. В окне тура страницы листаются кнопками, подписи — RU/EN.
+</p>
+<div class="grid">
+  <div class="col">
+    <div class="card"><div class="cap">0 · Окно тура целиком <span>560×640</span></div>
+      <iframe src="onboarding/tour/shell.html" height="640" title="Окно тура"></iframe></div>
+  </div>
+  <div class="col"><div class="card"><div class="cap">1 · Чат <span>⇧⌘Space → панель → веб-поиск → ответ со ссылкой</span></div><iframe src="onboarding/scenes/1-chat.html" height="352" title="1 · Чат"></iframe></div><div class="card"><div class="cap">2 · Скриншот области → таблица <span>⇧⌘D → рамка по таблице → распознавание → вопрос по данным</span></div><iframe src="onboarding/scenes/2-area-shot.html" height="352" title="2 · Скриншот области → таблица"></iframe></div><div class="card"><div class="cap">3 · Диктовка с переводом <span>⌥⇧Space → пилюля под камерой → английская речь, испанский текст</span></div><iframe src="onboarding/scenes/3-dictation.html" height="352" title="3 · Диктовка с переводом"></iframe></div></div>
+  <div class="col"><div class="card"><div class="cap">4 · Мировое время <span>меню → сетка суток → колонка = один момент → встреча в календаре</span></div><iframe src="onboarding/scenes/4-world-time.html" height="352" title="4 · Мировое время"></iframe></div><div class="card"><div class="cap">5 · Картинки: три операции <span>фон → апскейл ×4 → удаление объектов, на одном снимке</span></div><iframe src="onboarding/scenes/5-image-ops.html" height="352" title="5 · Картинки: три операции"></iframe></div></div>
+</div>

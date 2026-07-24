@@ -885,10 +885,6 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
-
-            Button(L("ob.showTour")) {
-                NotificationCenter.default.post(name: .showOnboarding, object: nil)
-            }
         }
         // Chat-panel visual theme (Blueprint, Terminal, Synthwave, …) —
         // a grid of clickable mini-previews in its own block.
@@ -908,6 +904,9 @@ struct SettingsView: View {
 
     private var generalSection: some View {
         Section {
+            Button(L("ob.showTour")) {
+                NotificationCenter.default.post(name: .showOnboarding, object: nil)
+            }
             Toggle(L("general.launchAtLogin"), isOn: $settings.launchAtLogin)
             VStack(alignment: .leading, spacing: 3) {
                 Toggle(L("general.prefillSelection"), isOn: $settings.prefillFromSelection)

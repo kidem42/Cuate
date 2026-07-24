@@ -35,6 +35,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+#if DEBUG
+        // Dev-only: --onboarding-shots <dir> renders the tour and exits.
+        OnboardingShotExport.runIfRequested()
+#endif
+
         // Opt-in logging + hang watchdog — first, so launch events are captured.
         Diagnostics.startIfEnabled()
         Diagnostics.log("app", "launch")
@@ -849,24 +854,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         if window.isVisible {
             window.orderOut(nil)
-        } else if AppSettings.shared.prefillFromSelection {
-            // Capture the selection while the other app is still frontmost —
-            // once our panel activates, a synthesized ⌘C would land on us.
-            Task { @MainActor in
-                appState.pendingInputText = await SelectionGrabber.grab()
-                showChatWindow()
-            }
         } else {
-            showChatWindow()
+            showChatWindow(grabSelection: AppSettings.shared.prefillFromSelection)
         }
     }
 
-    private func showChatWindow() {
+    /// Summons the panel. When `grabSelection` is set, the selection capture
+    /// (AX read + ⌘C fallback) must run while the *other* app is still
+    /// frontmost — so we put the window on screen WITHOUT activating first
+    /// (instant, never blocked on the grab), capture, then take key focus.
+    /// The composer picks up `pendingInputText` reactively, so the quote can
+    /// land a beat after the window without holding up its appearance.
+    private func showChatWindow(grabSelection: Bool = false) {
         guard let window = chatWindow else { return }
 
-        Diagnostics.log("ui", "panel.show active=\(NSApp.isActive)")
+        Diagnostics.log("ui", "panel.show active=\(NSApp.isActive) grab=\(grabSelection)")
         positionPanelForShow(window)
 
+        guard grabSelection else {
+            activatePanel(window)
+            return
+        }
+
+        // Visible immediately, but NOT key: the frontmost app keeps focus so
+        // the AX read / synthesized ⌘C target it, never our own panel.
+        window.orderFrontRegardless()
+        Task { @MainActor in
+            if let text = await SelectionGrabber.grab() {
+                appState.pendingInputText = text
+            }
+            activatePanel(window)
+        }
+    }
+
+    /// Takes key focus for the already-positioned panel and tells the composer
+    /// to focus its input.
+    private func activatePanel(_ window: NSWindow) {
         // Cooperative activation (macOS 14+) can be silently DENIED for an
         // accessory app summoned by a global hotkey — the panel still gets
         // key status and accepts typing, but the app stays formally inactive
@@ -878,8 +901,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
         window.makeKeyAndOrderFront(nil)
 
-        // Notify ChatWindow to focus the input field
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        // Notify ChatWindow to focus the input field. Deferred one runloop
+        // tick so first-responder is requested after the window is key.
+        DispatchQueue.main.async {
             NotificationCenter.default.post(name: .chatWindowDidBecomeVisible, object: nil)
             Diagnostics.log("ui", "panel.shown active=\(NSApp.isActive) key=\(window.isKeyWindow)")
         }

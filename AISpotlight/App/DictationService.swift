@@ -735,6 +735,13 @@ private struct RunningLine: View {
 /// block the caller — a cold Bluetooth start takes seconds and must not
 /// freeze the warm-up animation. The tap callback runs on the audio thread
 /// and only touches lock-guarded state. UI callbacks fire on the main thread.
+/// Recoverable capture failures — thrown (and caught) instead of letting
+/// AVFAudio abort the process.
+enum MicCaptureError: Error {
+    /// The input node reported an empty format (device switching / not ready).
+    case deviceNotReady
+}
+
 nonisolated final class MicCapture {
 
     /// Fired once per recording session when the first buffer actually
@@ -921,7 +928,15 @@ nonisolated final class MicCapture {
                                  UInt32(MemoryLayout<AudioDeviceID>.size))
         }
 
+        // The format the node reports right after a device switch (or before a
+        // just-selected mic is ready) can be empty. Installing a tap with a
+        // 0-channel / 0 Hz format aborts the whole process inside AVFAudio, so
+        // bail cleanly instead — the configuration-change observer rebuilds the
+        // tap once the device settles.
         let format = input.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            throw MicCaptureError.deviceNotReady
+        }
         state.lock.lock()
         state.sampleRate = Float(format.sampleRate)
         if state.fft == nil {
@@ -934,7 +949,13 @@ nonisolated final class MicCapture {
 
         input.removeTap(onBus: 0) // stale tap from a previous device/format
         let st = state
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+        // Pass nil, not `format`: switching the input device reconfigures the
+        // node asynchronously, so an explicit format read a moment earlier can
+        // be stale by the time the tap is installed — AVFAudio then aborts with
+        // "Failed to create tap due to format mismatch". nil binds the tap to
+        // the node's live format atomically, immune to that race. (The buffer
+        // carries its own format; `handle` reads the rate from it.)
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
             guard let self else { return }
             Self.handle(buffer: buffer, state: st) { db, spectrum, isFirst in
                 DispatchQueue.main.async {
@@ -953,13 +974,20 @@ nonisolated final class MicCapture {
 
     private func makeFile(at url: URL) throws -> AVAudioFile {
         let format = engine.inputNode.outputFormat(forBus: 0)
+        // AAC's maximum bitrate scales with sample rate × channels. A fixed
+        // 64 kbps is fine at 44.1/48 kHz but the encoder rejects it (error
+        // '!dat') at the 16 kHz — or 8 kHz — mono that a Bluetooth headset mic
+        // reports over HFP, i.e. exactly when a single earbud is the input.
+        // Scale the target to the format so any rate encodes.
+        let channels = max(1, Int(format.channelCount))
+        let bitRate = min(64_000, Int(format.sampleRate) * channels * 2)
         return try AVAudioFile(
             forWriting: url,
             settings: [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: format.sampleRate,
-                AVNumberOfChannelsKey: Int(format.channelCount),
-                AVEncoderBitRateKey: 64000,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: bitRate,
             ],
             commonFormat: format.commonFormat,
             interleaved: format.isInterleaved
@@ -1007,6 +1035,11 @@ nonisolated final class MicCapture {
             state.awaitingFirstBuffer = false
             isFirst = true
         }
+        // The tap is installed with a nil format, so the true rate is whatever
+        // the node settled on — take it from the buffer, keeping the FFT bins
+        // honest regardless of what was read at install time.
+        let bufRate = Float(buffer.format.sampleRate)
+        if bufRate > 0 { state.sampleRate = bufRate }
         if let file = state.file {
             try? file.write(from: buffer)
         }

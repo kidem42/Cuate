@@ -96,6 +96,9 @@ enum SelectionGrabber {
 
     private static func axSelection() -> AXSelection {
         let systemWide = AXUIElementCreateSystemWide()
+        // Bound the synchronous cross-process AX calls: a busy/hung frontmost
+        // app must not stall the panel's focus handoff.
+        AXUIElementSetMessagingTimeout(systemWide, 0.2)
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
               let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
@@ -131,10 +134,11 @@ enum SelectionGrabber {
         await waitForModifierRelease(timeout: .milliseconds(300))
         let countBeforeCopy = pasteboard.changeCount
         postKey(kVK_ANSI_C, flags: .maskCommand)
-        // The copy typically lands in 30–80 ms; poll instead of a fixed
-        // 120 ms. The timeout only bites when nothing was selected (the target
-        // app never writes the pasteboard) — then we give up and move on.
-        await waitForPasteboardChange(pasteboard, from: countBeforeCopy, timeout: .milliseconds(250))
+        // The copy typically lands in 30–80 ms; poll instead of a fixed wait.
+        // The timeout only bites when nothing was selected (the target app
+        // never writes the pasteboard) — kept tight (120 ms) so an empty grab
+        // can't hold the panel's focus hostage. Real copies land well inside it.
+        await waitForPasteboardChange(pasteboard, from: countBeforeCopy, timeout: .milliseconds(120))
 
         defer { restore(saved, to: pasteboard) }
 
