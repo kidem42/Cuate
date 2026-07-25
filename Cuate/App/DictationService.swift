@@ -46,6 +46,10 @@ final class DictationService: NSObject, ObservableObject {
     /// Bluetooth profile flaps can hold the input hostage for several
     /// seconds; the growing backoff below spans ~8 s in total.
     private static let maxCaptureRetries = 8
+    /// Mid-recording engine deaths recovered this session (see
+    /// `recoverFromMidRecordingDeath`).
+    private var engineDeaths = 0
+    private static let maxEngineDeaths = 5
     /// Normalized 0…1 magnitudes of `MicCapture.bandCount` log-spaced voice
     /// bands — the pill's equalizer renders the REAL input spectrum.
     @Published private(set) var spectrum: [Float] = Array(repeating: 0, count: MicCapture.bandCount)
@@ -155,6 +159,13 @@ final class DictationService: NSObject, ObservableObject {
             // so keep the session alive in its warm-up state and retry until
             // the device settles.
             if self.retryCaptureDuringWarmup("engine.died") { return }
+            // Death AFTER audio flowed: same flap, one negotiation later
+            // (field log: retried start runs ~0.8 s of real capture, then the
+            // route reconfigures again). Treat it as a forced phrase boundary
+            // — salvage the fragment into the pipeline and keep the session
+            // recording on a fresh segment — instead of ending the dictation
+            // with a stub.
+            if self.recoverFromMidRecordingDeath() { return }
             Task { @MainActor in await self.stopAndProcess() }
         }
     }
@@ -216,6 +227,7 @@ final class DictationService: NSObject, ObservableObject {
             chunkedMode = AppSettings.shared.dictationChunked
             sessionCancelled = false
             captureRetries = 0
+            engineDeaths = 0
             processingChain = nil
             speechDetected = false
             silenceBegan = nil
@@ -249,6 +261,46 @@ final class DictationService: NSObject, ObservableObject {
                   let url = self.fileURL else { return }
             self.capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
         }
+        return true
+    }
+
+    /// Engine death after real audio arrived = the device flap outlived the
+    /// warm-up. The captured fragment is queued for transcription exactly
+    /// like a phrase boundary, and capture restarts on a fresh segment —
+    /// the session keeps going instead of ending on a stub. Bounded per
+    /// session so a hopeless device eventually surfaces the failure.
+    /// Returns whether the session was kept alive.
+    private func recoverFromMidRecordingDeath() -> Bool {
+        guard phase == .recording, engineDeaths < Self.maxEngineDeaths,
+              let finishedURL = fileURL else { return false }
+        engineDeaths += 1
+        Diagnostics.log("dictation", "capture.recover #\(engineDeaths): salvage segment, restart capture")
+
+        // Non-chunked sessions degrade to phrase-by-phrase from here on:
+        // fragments across an engine death cannot be joined into one file,
+        // and the ordered pipeline already knows how to type them in order.
+        chunkedMode = true
+
+        // Back to the warm-up state: pill shows dots, and if the restarted
+        // engine dies before audio flows again, the warm-up retry ladder
+        // (fresh budget) handles it with backoff.
+        micReady = false
+        captureRetries = 0
+
+        let url = Self.segmentURL()
+        fileURL = url
+        segmentStart = Date()
+        speechDetected = false
+        silenceBegan = nil
+
+        // endRecording on the (already dead) engine is a barrier on the
+        // capture queue: its completion runs after the finished file's
+        // handle is released, so the fragment is finalized and safe to
+        // upload. The subsequent beginRecording is queued behind it.
+        capture.endRecording(keepWarmSeconds: 0) { [weak self] in
+            self?.enqueueSegment(finishedURL)
+        }
+        capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
         return true
     }
 
