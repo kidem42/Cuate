@@ -114,10 +114,12 @@ enum WorldTimeStrings {
         "wt.work.header": [.english: "Working hours", .spanish: "Horario laboral", .russian: "Рабочие часы"],
         "wt.work.start": [.english: "Start", .spanish: "Inicio", .russian: "Начало"],
         "wt.work.end": [.english: "End", .spanish: "Fin", .russian: "Конец"],
+        "wt.work.show": [.english: "Highlight working hours", .spanish: "Resaltar el horario laboral", .russian: "Выделять рабочие часы"],
         "wt.work.caption": [
-            .english: "Working hours are shown as light cells, night as dark ones — the quickest way to spot a meeting slot that suits everyone.",
-            .spanish: "Las horas laborales se muestran como celdas claras y la noche como oscuras — la forma más rápida de encontrar un hueco que convenga a todos.",
-            .russian: "Рабочие часы показаны светлыми ячейками, ночь — тёмными: так быстрее всего найти слот для встречи, удобный всем."
+            .english: "Working hours are shown as light cells, night as dark ones — the quickest way to spot a meeting slot that suits everyone. Switch it off to colour the grid by day and night alone.",
+            .spanish: "Las horas laborales se muestran como celdas claras y la noche como oscuras — la forma más rápida de encontrar un hueco que convenga a todos. Desactívalo para colorear la cuadrícula solo por día y noche.",
+            .russian: "Рабочие часы показаны светлыми ячейками, ночь — тёмными: так быстрее всего найти слот для встречи, удобный всем. Выключите — и сетка будет раскрашена только на день и ночь."
         ],
+        "wt.settingsHelp": [.english: "World Time settings", .spanish: "Ajustes de Hora mundial", .russian: "Настройки мирового времени"],
     ]
 }

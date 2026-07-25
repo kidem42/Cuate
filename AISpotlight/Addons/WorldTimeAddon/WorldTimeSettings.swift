@@ -2,6 +2,21 @@ import Foundation
 import Combine
 import Carbon
 
+/// One row of the grid: a zone, plus which city the user asked for.
+///
+/// The identity is the ROW, not the zone — the same zone can appear twice
+/// under two different city names (San Francisco and Los Angeles keep the
+/// same clock), and reordering, home and removal all have to tell those apart.
+struct WorldTimeRow: Codable, Identifiable, Hashable {
+    let id: UUID
+    let zoneID: String
+    /// English alias key from `WorldTimeCatalog` when the user picked a city
+    /// that is not its zone's exemplar; `nil` means "use the zone's own
+    /// exemplar city". Stored as the key, not as the finished label, so the
+    /// row still follows the interface language.
+    var alias: String?
+}
+
 extension Notification.Name {
     /// Posted when the addon's enable flag changes (the host refreshes the
     /// status-bar menu that gates on it). Kept separate from app-wide
@@ -64,24 +79,51 @@ final class WorldTimeSettings: ObservableObject {
         }
     }
 
-    // MARK: - City list (ordered timezone identifiers)
+    // MARK: - City list
 
     /// Rows of the grid, top to bottom. The home row can be anywhere in the
     /// list — the home city stays wherever the user dragged it.
-    @Published var zoneIDs: [String] {
-        didSet { defaults.set(zoneIDs, forKey: "worldTime.zoneIDs") }
+    ///
+    /// A ROW, not a zone: several cities share one IANA zone (San Francisco,
+    /// Seattle and Los Angeles are all `America/Los_Angeles`), and someone who
+    /// looks up San Francisco wants a row that says San Francisco — whether or
+    /// not Los Angeles is already there. Duplicated zones are the user's call
+    /// to make and to undo.
+    @Published var rows: [WorldTimeRow] {
+        didSet {
+            if let data = try? JSONEncoder().encode(rows) {
+                defaults.set(data, forKey: "worldTime.rows")
+            }
+        }
     }
 
-    /// The reference zone: the grid's columns are the 24 hours of the
-    /// selected day in THIS zone, all other rows align to it.
-    @Published var homeZoneID: String {
-        didSet { defaults.set(homeZoneID, forKey: "worldTime.homeZoneID") }
+    /// The reference row: the grid's columns are the 24 hours of the selected
+    /// day in ITS zone, all other rows align to it. Identified by row rather
+    /// than by zone — with two rows on the same zone, "home" has to name one
+    /// of them or the house marker lands on whichever sorts first.
+    @Published var homeRowID: UUID {
+        didSet { defaults.set(homeRowID.uuidString, forKey: "worldTime.homeRowID") }
+    }
+
+    /// Zone of the home row — everything that does time math reads this.
+    var homeZoneID: String {
+        rows.first { $0.id == homeRowID }?.zoneID
+            ?? rows.first?.zoneID
+            ?? TimeZone.current.identifier
     }
 
     // MARK: - Display
 
     @Published var timeFormat: WorldTimeFormat {
         didSet { defaults.set(timeFormat.rawValue, forKey: "worldTime.timeFormat") }
+    }
+
+    /// Whether the grid distinguishes working hours at all. Off, the palette
+    /// collapses to day vs. night — for people who only want to know whether
+    /// it is the middle of someone's night, not whether it is their office
+    /// hours. Defaults to on so existing setups keep the planner colouring.
+    @Published var showWorkHours: Bool {
+        didSet { defaults.set(showWorkHours, forKey: "worldTime.showWorkHours") }
     }
 
     /// Working-hours window used for cell coloring (work / shoulder / night).
@@ -112,17 +154,22 @@ final class WorldTimeSettings: ObservableObject {
 
     // MARK: - Helpers
 
-    func addZone(_ id: String) {
-        guard !zoneIDs.contains(id) else { return }
-        zoneIDs.append(id)
+    /// Appends a row. No de-duplication by zone: two cities that happen to
+    /// share a clock are still two cities, and silently swallowing the second
+    /// one is what made picking San Francisco next to Los Angeles look broken.
+    /// `alias` is the catalog's English alias key when the user picked a city
+    /// that isn't its zone's exemplar; the display name is resolved from it at
+    /// render time so it follows the interface language.
+    func addRow(zoneID: String, alias: String? = nil) {
+        rows.append(WorldTimeRow(id: UUID(), zoneID: zoneID, alias: alias))
     }
 
-    func removeZone(_ id: String) {
-        zoneIDs.removeAll { $0 == id }
-        // Removing the home row: the first remaining city inherits home, so
-        // the grid always has a reference zone.
-        if homeZoneID == id, let first = zoneIDs.first {
-            homeZoneID = first
+    func removeRow(_ id: UUID) {
+        rows.removeAll { $0.id == id }
+        // Removing the home row: the first remaining row inherits home, so the
+        // grid always has a reference zone.
+        if homeRowID == id, let first = rows.first {
+            homeRowID = first.id
         }
     }
 
@@ -133,10 +180,28 @@ final class WorldTimeSettings: ObservableObject {
         // menu item is used — nothing changes for existing users' workflows.
         enabled = defaults.object(forKey: "worldTime.enabled") as? Bool ?? true
         let current = TimeZone.current.identifier
-        let stored = defaults.stringArray(forKey: "worldTime.zoneIDs") ?? []
-        zoneIDs = stored.isEmpty ? [current] : stored
-        let home = defaults.string(forKey: "worldTime.homeZoneID") ?? current
-        homeZoneID = (stored.isEmpty || stored.contains(home)) ? home : (stored.first ?? current)
+        // Rows, with a one-way migration from the pre-1.x list of bare zone
+        // identifiers so nobody's grid resets.
+        // Built into a local first: `self` is off limits until every stored
+        // property is initialized.
+        let restored: [WorldTimeRow]
+        if let data = defaults.data(forKey: "worldTime.rows"),
+           let decoded = try? JSONDecoder().decode([WorldTimeRow].self, from: data), !decoded.isEmpty {
+            restored = decoded
+        } else {
+            let legacy = defaults.stringArray(forKey: "worldTime.zoneIDs") ?? []
+            let zones = legacy.isEmpty ? [current] : legacy
+            restored = zones.map { WorldTimeRow(id: UUID(), zoneID: $0, alias: nil) }
+        }
+        rows = restored
+        // Home: the stored row if it still exists, else the row carrying the
+        // legacy home zone, else the top row.
+        let storedHome = defaults.string(forKey: "worldTime.homeRowID").flatMap(UUID.init(uuidString:))
+        let legacyHomeZone = defaults.string(forKey: "worldTime.homeZoneID") ?? current
+        homeRowID = restored.first { $0.id == storedHome }?.id
+            ?? restored.first { $0.zoneID == legacyHomeZone }?.id
+            ?? restored.first?.id
+            ?? UUID()
         timeFormat = defaults.string(forKey: "worldTime.timeFormat")
             .flatMap(WorldTimeFormat.init(rawValue:)) ?? .system
         hotkey = defaults.data(forKey: "worldTime.hotkey")
@@ -148,5 +213,8 @@ final class WorldTimeSettings: ObservableObject {
         // active (work) hour.
         workStartHour = start ?? 8
         workEndHour = end ?? 18
+        // Absent for everyone who installed before the switch existed — they
+        // have been looking at the working-hours palette all along.
+        showWorkHours = defaults.object(forKey: "worldTime.showWorkHours") as? Bool ?? true
     }
 }

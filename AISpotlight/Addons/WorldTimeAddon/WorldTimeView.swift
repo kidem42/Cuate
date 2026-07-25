@@ -34,11 +34,13 @@ struct WorldTimeView: View {
     @State private var dayStart: Date = .now
     @State private var selectedColumn: Int? = nil
     @State private var hoverColumn: Int? = nil
-    @State private var draggingZone: String? = nil
+    @State private var draggingRow: UUID? = nil
     @State private var dragTranslation: CGFloat = 0
     @State private var now: Date = .now
     @State private var searchText = ""
     @State private var searchResults: [WorldTimeCity] = []
+    /// Keyboard selection in the search results (↓/↑ move it, Enter adds).
+    @State private var highlightIndex = 0
     @State private var showDatePicker = false
     @State private var busyBlocks: [BusyBlock] = []
     @State private var hoveredBusyID: String? = nil
@@ -202,9 +204,18 @@ struct WorldTimeView: View {
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
             formatToggle
-            Text(WTL("wt.escHint"))
-                .font(.system(size: 10))
-                .foregroundStyle(wt.isGlass ? AnyShapeStyle(.tertiary) : AnyShapeStyle(wt.secondary.opacity(0.7)))
+            // Straight to this panel's own settings tab — zones and working
+            // hours were only reachable through the status-bar menu.
+            // Themed, unlike the chat panel's grey one: this panel dresses
+            // every control in the active theme's ink, and a grey gear was the
+            // one element standing outside it. (The "esc closes" caption used
+            // to live here — the ✕ in the corner says the same thing.)
+            SettingsGearButton(
+                tab: .worldTime,
+                color: wt.isGlass ? .secondary : wt.link,
+                size: 13,
+                help: WTL("wt.settingsHelp")
+            )
         }
     }
 
@@ -216,8 +227,15 @@ struct WorldTimeView: View {
             TextField(WTL("wt.search.placeholder"), text: $searchText)
                 .textFieldStyle(.plain)
                 .frame(width: 230)
+                // Type, arrow down, Enter — without leaving the keyboard.
+                // The arrows would otherwise just walk the caret through the
+                // text, which in a field holding a city name is useless.
+                .onKeyPress(.downArrow) { moveHighlight(by: 1); return .handled }
+                .onKeyPress(.upArrow) { moveHighlight(by: -1); return .handled }
                 .onSubmit {
-                    if let first = searchResults.first { add(first) }
+                    if searchResults.indices.contains(highlightIndex) {
+                        add(searchResults[highlightIndex])
+                    }
                 }
         }
         .padding(.horizontal, 10)
@@ -225,6 +243,7 @@ struct WorldTimeView: View {
         .background(wt.capsule, in: Capsule())
         .onChange(of: searchText) { _, text in
             searchResults = WorldTimeCatalog.search(text)
+            highlightIndex = 0 // a new query starts from the top again
         }
         .popover(isPresented: Binding(
             get: { !searchText.isEmpty },
@@ -241,15 +260,23 @@ struct WorldTimeView: View {
                     .foregroundStyle(.secondary)
                     .padding(8)
             } else {
-                ForEach(searchResults) { city in
+                // Index-keyed: an aliased city carries the SAME zone id as its
+                // host (San Francisco and Los Angeles are both
+                // America/Los_Angeles), and two rows sharing an identity make
+                // a ForEach drop one of them.
+                ForEach(Array(searchResults.enumerated()), id: \.offset) { index, city in
                     Button {
                         add(city)
                     } label: {
                         HStack {
                             Text(city.name)
-                            if !city.country.isEmpty {
-                                Text(city.country)
-                                    .foregroundStyle(.secondary)
+                            // For an alias, name the zone it actually rides on
+                            // — otherwise picking "San Francisco" and getting a
+                            // row labelled "Los Angeles" looks like a bug.
+                            if let host = city.aliasOf {
+                                Text(host).foregroundStyle(.secondary)
+                            } else if !city.country.isEmpty {
+                                Text(city.country).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Text(offsetLabel(for: city.zoneID) ?? "")
@@ -262,6 +289,12 @@ struct WorldTimeView: View {
                     .buttonStyle(.plain)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(index == highlightIndex
+                                  ? (wt.isGlass ? Color.primary.opacity(0.10) : wt.link.opacity(0.16))
+                                  : .clear)
+                    )
                 }
             }
         }
@@ -270,9 +303,19 @@ struct WorldTimeView: View {
     }
 
     private func add(_ city: WorldTimeCity) {
-        settings.addZone(city.zoneID)
+        // An aliased pick stores its alias key, so the row carries the name the
+        // user searched for. Two rows on one zone are allowed on purpose: the
+        // user decides whether San Francisco next to Los Angeles is redundant.
+        settings.addRow(zoneID: city.zoneID, alias: city.aliasOf == nil ? nil : city.aliasKey)
         searchText = ""
         searchResults = []
+    }
+
+    /// Moves the keyboard highlight through the results, stopping at the ends
+    /// rather than wrapping — wrapping past the last hit reads as a glitch.
+    private func moveHighlight(by delta: Int) {
+        guard !searchResults.isEmpty else { return }
+        highlightIndex = min(max(highlightIndex + delta, 0), searchResults.count - 1)
     }
 
     /// 12/24-hour segmented toggle. The glass theme keeps the system
@@ -518,7 +561,7 @@ struct WorldTimeView: View {
 
     private var grid: some View {
         Group {
-            if settings.zoneIDs.isEmpty {
+            if settings.rows.isEmpty {
                 VStack {
                     Spacer()
                     Text(WTL("wt.empty"))
@@ -531,8 +574,8 @@ struct WorldTimeView: View {
                 // (a flexible sibling below it was stealing half the space
                 // and forcing a scrollbar). The panel window resizes instead.
                 VStack(spacing: Self.rowSpacing) {
-                    ForEach(settings.zoneIDs, id: \.self) { zoneID in
-                        cityRow(zoneID)
+                    ForEach(settings.rows) { row in
+                        cityRow(row)
                     }
                 }
                 // The column frame: one rectangle through ALL rows,
@@ -591,18 +634,9 @@ struct WorldTimeView: View {
                     .position(x: Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5),
                               y: geo.size.height / 2)
                     .shadow(color: wt.selGlow ?? .clear, radius: wt.selGlow == nil ? 0 : 6)
-                // The half-hour divider: one dashed line down the WHOLE
-                // selected column (like the frame), only while the cursor is
-                // over the column.
-                if slotCreationAvailable && hoverSlot?.column == sel {
-                    Path { path in
-                        let x = Self.headerWidth + cellWidth * (CGFloat(sel) + 0.5)
-                        path.move(to: CGPoint(x: x, y: -3))
-                        path.addLine(to: CGPoint(x: x, y: geo.size.height + 3))
-                    }
-                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2.5]))
-                    .foregroundStyle(wt.isGlass ? Color.primary.opacity(0.4) : wt.selStroke.opacity(0.45))
-                }
+                // (No half-hour divider: the two hoverable halves already show
+                // where the hour splits, and a dashed rule down the full
+                // column was one line too many over an otherwise calm grid.)
             }
         }
         .allowsHitTesting(false)
@@ -614,13 +648,13 @@ struct WorldTimeView: View {
     /// Live offset of a row while another row is being dragged over it:
     /// the dragged row follows the cursor, its neighbors slide out of the
     /// way by exactly one stride.
-    private func rowOffset(for zoneID: String) -> CGFloat {
-        guard let dragging = draggingZone,
-              let from = settings.zoneIDs.firstIndex(of: dragging),
-              let index = settings.zoneIDs.firstIndex(of: zoneID) else { return 0 }
-        if zoneID == dragging { return dragTranslation }
+    private func rowOffset(for rowID: UUID) -> CGFloat {
+        guard let dragging = draggingRow,
+              let from = settings.rows.firstIndex(where: { $0.id == dragging }),
+              let index = settings.rows.firstIndex(where: { $0.id == rowID }) else { return 0 }
+        if rowID == dragging { return dragTranslation }
         let shift = Int((dragTranslation / rowStride).rounded())
-        let to = max(0, min(settings.zoneIDs.count - 1, from + shift))
+        let to = max(0, min(settings.rows.count - 1, from + shift))
         if from < to, index > from, index <= to { return -rowStride }
         if to < from, index >= to, index < from { return rowStride }
         return 0
@@ -628,24 +662,24 @@ struct WorldTimeView: View {
 
     private func finishRowDrag() {
         defer {
-            draggingZone = nil
+            draggingRow = nil
             dragTranslation = 0
         }
-        guard let dragging = draggingZone,
-              let from = settings.zoneIDs.firstIndex(of: dragging) else { return }
+        guard let dragging = draggingRow,
+              let from = settings.rows.firstIndex(where: { $0.id == dragging }) else { return }
         let shift = Int((dragTranslation / rowStride).rounded())
-        let to = max(0, min(settings.zoneIDs.count - 1, from + shift))
+        let to = max(0, min(settings.rows.count - 1, from + shift))
         guard to != from else { return }
-        settings.zoneIDs.move(fromOffsets: IndexSet(integer: from),
-                              toOffset: to > from ? to + 1 : to)
+        settings.rows.move(fromOffsets: IndexSet(integer: from),
+                           toOffset: to > from ? to + 1 : to)
     }
 
-    private func cityRow(_ zoneID: String) -> some View {
-        let zone = TimeZone(identifier: zoneID) ?? .current
-        let isHome = zoneID == settings.homeZoneID
-        let isDragging = draggingZone == zoneID
+    private func cityRow(_ row: WorldTimeRow) -> some View {
+        let zone = TimeZone(identifier: row.zoneID) ?? .current
+        let isHome = row.id == settings.homeRowID
+        let isDragging = draggingRow == row.id
         return HStack(spacing: 0) {
-            rowHeader(zoneID: zoneID, zone: zone, isHome: isHome)
+            rowHeader(row: row, zone: zone, isHome: isHome)
                 .frame(width: Self.headerWidth, alignment: .leading)
                 .contentShape(Rectangle())
                 // Rows are dragged by their header — a manual
@@ -654,34 +688,34 @@ struct WorldTimeView: View {
                 .gesture(
                     DragGesture(minimumDistance: 4)
                         .onChanged { value in
-                            draggingZone = zoneID
+                            draggingRow = row.id
                             dragTranslation = value.translation.height
                         }
                         .onEnded { _ in finishRowDrag() }
                 )
                 // Double-click the header = make this the home city (the
                 // context menu has the same action for discoverability).
-                .onTapGesture(count: 2) { settings.homeZoneID = zoneID }
+                .onTapGesture(count: 2) { settings.homeRowID = row.id }
             hourBand(zone: zone)
         }
         .frame(height: Self.rowHeight)
         .opacity(isDragging ? 0.75 : 1)
-        .offset(y: rowOffset(for: zoneID))
+        .offset(y: rowOffset(for: row.id))
         .zIndex(isDragging ? 2 : 0)
         // The dragged row tracks the cursor raw; its neighbors animate as
         // they make room.
-        .animation(isDragging ? nil : .easeInOut(duration: 0.14), value: rowOffset(for: zoneID))
+        .animation(isDragging ? nil : .easeInOut(duration: 0.14), value: rowOffset(for: row.id))
         .contentShape(Rectangle())
         .contextMenu {
             Button {
-                settings.homeZoneID = zoneID
+                settings.homeRowID = row.id
             } label: {
                 Label(WTL("wt.row.setHome"), systemImage: "house")
             }
             .disabled(isHome)
             Divider()
             Button(role: .destructive) {
-                settings.removeZone(zoneID)
+                settings.removeRow(row.id)
             } label: {
                 Label(WTL("wt.row.remove"), systemImage: "trash")
             }
@@ -690,8 +724,13 @@ struct WorldTimeView: View {
 
     // MARK: - Row header
 
-    private func rowHeader(zoneID: String, zone: TimeZone, isHome: Bool) -> some View {
+    private func rowHeader(row: WorldTimeRow, zone: TimeZone, isHome: Bool) -> some View {
+        let zoneID = row.zoneID
         let city = WorldTimeCatalog.city(for: zoneID)
+        // The row is labelled with the city the user actually picked: someone
+        // who looked up San Francisco gets "San Francisco", not the zone's
+        // exemplar "Los Angeles".
+        let title = row.alias.map { WorldTimeCatalog.aliasDisplayName($0) } ?? city.name
         // No hover buttons on the left edge — home/remove live in the
         // right-click menu (and double-click sets home), so the header
         // starts right at the offset column.
@@ -715,7 +754,7 @@ struct WorldTimeView: View {
                 HStack(spacing: 5) {
                     // The name wins the space fight — the clock and badge
                     // compress before "Москва" becomes "Мос…".
-                    Text(city.name)
+                    Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(wt.isGlass ? AnyShapeStyle(.primary) : AnyShapeStyle(wt.text))
                         .lineLimit(1)
@@ -875,8 +914,8 @@ struct WorldTimeView: View {
         .onTapGesture { selectedColumn = index }
         .onHover { hoverColumn = $0 ? index : (hoverColumn == index ? nil : hoverColumn) }
         // Inside the SELECTED column (and only with the CalendarAddon live):
-        // hover splits the hour with a dashed line into :00 / :30 halves;
-        // clicking a half opens the slot composer right there.
+        // each hour offers its :00 and :30 halves; clicking a half opens the
+        // slot composer right there.
         .overlay {
             if slotCreationAvailable && selectedColumn == index {
                 slotSplitOverlay(zoneID: zone.identifier, column: index)
@@ -957,9 +996,14 @@ struct WorldTimeView: View {
     private enum CellKind { case night, shoulder, work }
 
     /// Cell coloring: dark night, pale shoulder, light working hours — the
-    /// classic day-planner palette translated into glass tints.
+    /// classic day-planner palette translated into glass tints. With working
+    /// hours switched off it collapses to two states: the whole daylight band
+    /// takes the LIGHT tint and only night stays dark. The point of switching
+    /// the band off is to stop caring which hours are office hours — leaving
+    /// the shoulder wash on would have kept exactly that distinction on screen.
     private func cellKind(hour: Int) -> CellKind {
         if hour < 6 || hour >= 22 { return .night }
+        guard settings.showWorkHours else { return .work }
         if hour >= settings.workStartHour && hour < settings.workEndHour { return .work }
         return .shoulder
     }

@@ -30,11 +30,16 @@ struct WorldTimeSettingsView: View {
             }
 
             Section {
-                Picker(WTL("wt.work.start"), selection: $settings.workStartHour) {
-                    ForEach(5..<13, id: \.self) { Text(hourLabel($0)).tag($0) }
-                }
-                Picker(WTL("wt.work.end"), selection: $settings.workEndHour) {
-                    ForEach(14..<22, id: \.self) { Text(hourLabel($0)).tag($0) }
+                Toggle(WTL("wt.work.show"), isOn: $settings.showWorkHours)
+                // The range only means anything while the band is shown —
+                // hidden rather than disabled, so "off" leaves nothing behind.
+                if settings.showWorkHours {
+                    Picker(WTL("wt.work.start"), selection: $settings.workStartHour) {
+                        ForEach(5..<13, id: \.self) { Text(hourLabel($0)).tag($0) }
+                    }
+                    Picker(WTL("wt.work.end"), selection: $settings.workEndHour) {
+                        ForEach(14..<22, id: \.self) { Text(hourLabel($0)).tag($0) }
+                    }
                 }
             } header: {
                 Text(WTL("wt.work.header"))

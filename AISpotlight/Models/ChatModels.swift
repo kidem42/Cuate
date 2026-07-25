@@ -551,6 +551,11 @@ class ChatStore: ObservableObject {
     }
 
     /// Replaces the text of an existing message.
+    ///
+    /// Deliberately ASYNC, even when called from the main thread: the streamed
+    /// reply flushes from inside the `for await` loop, and applying the store
+    /// mutation inline made that loop wait on a SwiftUI transaction per flush —
+    /// chunks were consumed slower and the reply visibly crawled.
     func setText(_ text: String, for messageID: UUID) {
         DispatchQueue.main.async {
             guard let index = self.messages.firstIndex(where: { $0.id == messageID }) else { return }

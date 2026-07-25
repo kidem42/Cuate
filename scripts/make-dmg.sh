@@ -74,7 +74,7 @@ echo "==> Staging DMG contents…"
 rm -rf "$STAGE"; mkdir -p "$STAGE/.background"
 cp -R "$RELEASE_APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-cp "scripts/dmg-readme.txt" "$STAGE/Read me.txt"
+cp "scripts/dmg-readme.txt" "$STAGE/How to open — read me.txt"
 
 echo "==> Generating background image (1x + 2x → Retina TIFF)…"
 swift - "$STAGE/.background" "$VERSION" <<'SWIFT'
@@ -149,6 +149,16 @@ func render(scale: Int, to path: String) {
         .foregroundColor: NSColor(calibratedWhite: 0.42, alpha: 1),
         .paragraphStyle: pc
     ])
+    // A Finder window paints a BACKGROUND IMAGE — nothing in it can be
+    // selected or copied, this line included. The one place the command can
+    // actually be copied from is the text file sitting in the window, so say
+    // so rather than leaving people to retype it by hand.
+    "(open “How to open — read me” to copy this command)".draw(
+        in: NSRect(x: 0, y: 24, width: W, height: 14), withAttributes: [
+        .font: NSFont.systemFont(ofSize: 10, weight: .regular),
+        .foregroundColor: NSColor(calibratedWhite: 0.58, alpha: 1),
+        .paragraphStyle: pc
+    ])
 
     NSGraphicsContext.restoreGraphicsState()
     if let png = rep.representation(using: .png, properties: [:]) {
@@ -199,7 +209,7 @@ tell application "Finder"
         set background picture of theViewOptions to file ".background:background.tiff"
         set position of item "$APP_NAME.app" of container window to {150, 190}
         set position of item "Applications" of container window to {450, 190}
-        set position of item "Read me.txt" of container window to {527, 320}
+        set position of item "How to open — read me.txt" of container window to {520, 300}
         close
         open
         update without registering applications

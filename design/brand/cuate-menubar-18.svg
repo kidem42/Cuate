@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18" width="18" height="18" role="img" aria-label="Cuate">
+  <title>Cuate — menu bar template glyph, idle</title>
+  <desc>Two identical halves of one disc (r 7.35, cut at -38 degrees) slid past each other:
+  shear 1.6 along the cut, gap 0.80 across it. The silhouette is deliberately not a circle —
+  a filled disc with a diagonal slot reads as a prohibition sign, and a crescent reads as
+  Do Not Disturb. Template image: alpha only, AppKit tints it.</desc>
+  <path fill="currentColor" d="M 16.545 4.120 A 7.35 7.35 0 0 1 4.961 13.170 Z"/>
+  <path fill="currentColor" d="M 13.039 4.830 A 7.35 7.35 0 0 0 1.455 13.880 Z"/>
+</svg>

@@ -51,7 +51,7 @@ struct ChatWindow: View {
     /// see `trackContentFits` for why the intent monitor needs it.
     @State private var scrollContentFits = true
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
-    @State private var voiceKeyMonitor: Any?
+    @State private var panelKeyMonitor: Any?
     @State private var scrollIntentMonitor: Any?
     @State private var pendingVoiceSend: DispatchWorkItem?
     /// When we last auto-scrolled — used to tell a real user scroll-up from a
@@ -71,8 +71,6 @@ struct ChatWindow: View {
     @State private var visibleCount = ChatWindow.historyPageSize
     /// Guards against cascading backfills while one is restoring the scroll.
     @State private var isBackfilling = false
-    /// Pending collapse of the widened history window (see `scheduleWindowCollapse`).
-    @State private var collapseWork: DispatchWorkItem?
 
     /// Remembers the panel's content width across launches so the FIRST
     /// layout pass already uses the real bubble width — starting from the
@@ -123,6 +121,21 @@ struct ChatWindow: View {
                     // The Spacer between the zones stays click-through, so the
                     // middle of the strip still drags the window.
                     HStack(alignment: .center, spacing: 12) {
+                        // Settings, one click from the chat — the status-bar
+                        // menu was the only way in. Leads the row, ahead of the
+                        // provider switcher and set apart from it: they are
+                        // unrelated controls that happen to share a corner.
+                        SettingsGearButton(
+                            tab: .general,
+                            // Plain secondary grey in every theme — the same
+                            // ink as the provider and preset switchers, so the
+                            // header stays one quiet row instead of sprouting
+                            // a coloured accent.
+                            color: .secondary,
+                            help: L("panel.settingsHelp")
+                        )
+                        .padding(.trailing, 4)
+
                         // Quick chat-provider switcher — only providers with keys
                         let available = availableProviders
                         if available.count > 1 {
@@ -215,6 +228,24 @@ struct ChatWindow: View {
                                         && message.id == chatStore.messages.last?.id
                                 )
                                 .id(message.id)
+                                // NO animation on these rows. Two attempts at
+                                // smoothing the streamed growth were tried and
+                                // both regressed:
+                                //   · `withAnimation` at the mutation site had
+                                //     to apply the store change synchronously,
+                                //     which made the SSE loop wait on a SwiftUI
+                                //     transaction per flush — the reply itself
+                                //     crawled;
+                                //   · `.animation(_:value:)` here animated
+                                //     layout INSIDE the LazyVStack, and the
+                                //     scroll view was left showing an EMPTY
+                                //     viewport after a send until the user
+                                //     scrolled by hand, plus it fought the
+                                //     auto-scroll for the same pixels.
+                                // The stepping is a consequence of text
+                                // arriving in flushes; the fix is smaller
+                                // steps (see the adaptive coalescing below),
+                                // not animating a lazy list.
                             }
 
                             // "Thinking" indicator while waiting for the first streamed
@@ -273,7 +304,6 @@ struct ChatWindow: View {
                     .trackNearBottom { nearBottom in
                         if nearBottom {
                             isNearBottom = true
-                            scheduleWindowCollapse()
                         } else if Date().timeIntervalSince(lastAutoScroll) > 0.5 {
                             // Only a scroll-up that happens well after our own
                             // auto-scroll counts as the user leaving the bottom.
@@ -374,7 +404,19 @@ struct ChatWindow: View {
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
-                        // Every time the panel is summoned, show the newest message.
+                        // Every time the panel is summoned, show the newest
+                        // message — and take the chance to drop the history
+                        // window back to one page. Reading history widens it
+                        // and nothing else ever narrows it again, but doing
+                        // that WHILE the panel is open pulls rows out from
+                        // under a live viewport: the scroll view was left
+                        // showing an empty area until the user scrolled by
+                        // hand. Between summons there is no viewport to
+                        // disturb, and the bottom anchor lands the fresh
+                        // window on the newest message anyway.
+                        if visibleCount > Self.historyPageSize {
+                            visibleCount = Self.historyPageSize
+                        }
                         DispatchQueue.main.async {
                             scrollToBottom(proxy, pace: .instant)
                         }
@@ -594,7 +636,7 @@ struct ChatWindow: View {
             }
             refreshAvailableProviders()
             self.pendingAttachment = appState.pendingAttachment
-            installVoiceKeyMonitor()
+            installPanelKeyMonitor()
             installScrollIntentMonitor()
             ChatWindowBridge.chatStore = chatStore // ImageAddon (Addons/ImageAddon)
             // Safety net: ChatStore.init resolved the conversation from
@@ -606,9 +648,9 @@ struct ChatWindow: View {
             // The root view lives as long as the panel, so this normally never
             // fires — but if the hosting view is ever torn down, leaked
             // monitors would keep intercepting Space/scroll for a dead view.
-            if let monitor = voiceKeyMonitor {
+            if let monitor = panelKeyMonitor {
                 NSEvent.removeMonitor(monitor)
-                voiceKeyMonitor = nil
+                panelKeyMonitor = nil
             }
             if let monitor = scrollIntentMonitor {
                 NSEvent.removeMonitor(monitor)
@@ -890,39 +932,6 @@ struct ChatWindow: View {
         }
     }
 
-    /// Shrinks the rendered window back to a single page once the user is
-    /// parked at the newest message again.
-    ///
-    /// Reading history widens the window a page at a time — and it used to stay
-    /// wide for the rest of the session, because nothing ever reset it. The
-    /// rows themselves stay cheap (a LazyVStack only builds what is near the
-    /// viewport — measured: +200 rows in the window cost ~3 MB), but the
-    /// per-item passes are not lazy: `updateItemPhases`, `measureEstimates` and
-    /// `applyNodes` walk EVERY item of the list on every transaction — and in
-    /// the field hang report those three are most of a main thread pinned at
-    /// 100% while a message was being sent. Bounding the list bounds that work.
-    /// The full history stays in the store (and in the API context); this is
-    /// purely how much of it is in the view tree, and scrolling up pages it
-    /// back in.
-    private func scheduleWindowCollapse() {
-        collapseWork?.cancel()
-        guard visibleCount > Self.historyPageSize else { return }
-        let work = DispatchWorkItem {
-            // Only while genuinely idle at the bottom of a scrollable chat: over
-            // content that FITS the viewport the backfill trigger is on screen,
-            // so collapsing would just re-trigger it in a loop.
-            guard isNearBottom, !isBackfilling, !scrollContentFits,
-                  !chatStore.isLoading, visibleCount > Self.historyPageSize else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                visibleCount = Self.historyPageSize
-            }
-        }
-        collapseWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
-    }
-
     /// Stores the probed viewport width; persisted so the next launch's first
     /// layout starts from the real width instead of the fallback.
     private func updateContainerWidth(_ width: CGFloat) {
@@ -1174,6 +1183,12 @@ struct ChatWindow: View {
                     // Full-text replace also covers the return mid-stream:
                     // the store's copy (reloaded from disk) holds only the
                     // partial text flushed before the switch-away.
+                    //
+                    // NOT animated. Wrapping this in `withAnimation` to smooth
+                    // the line-by-line growth also interpolates the bubble's
+                    // WIDTH, and with a fresh target every flush the bubble
+                    // inflates like a balloon for the whole reply — the answer
+                    // reads as slow even though it arrives at the same speed.
                     chatStore.setText(current.text, for: current.id)
                 } else {
                     chatStore.appendNow(current)
@@ -1205,7 +1220,25 @@ struct ChatWindow: View {
                         pendingText += chunk
                         // The first chunk flushes immediately so the bubble
                         // appears the moment text starts flowing.
-                        if reply == nil || lastFlush.duration(to: .now) > .milliseconds(120) {
+                        //
+                        // Adaptive coalescing. The 120 ms window exists to bound
+                        // cost when tokens pour in — a per-token flush is what
+                        // made long replies O(answer²) and froze the panel. But
+                        // it is sized for a FAST model: at ~390 chars/s it
+                        // holds a whole line, while a slow one (~20 chars/s,
+                        // measured on kimi-k3) fills it with three characters
+                        // and the window only adds latency. So a small pending
+                        // buffer — which is itself the signal that the stream
+                        // is slow — is let through sooner, and the text creeps
+                        // in steadily instead of in visible clumps.
+                        //
+                        // 80 ms is the floor: below that the publish rate stops
+                        // buying visible smoothness and only costs main-thread
+                        // work on a list that is already re-diffed per flush.
+                        let waited = lastFlush.duration(to: .now)
+                        if reply == nil
+                            || waited > .milliseconds(120)
+                            || (pendingText.count <= 16 && waited > .milliseconds(80)) {
                             flush()
                         }
                     case .status(let status):
@@ -1286,7 +1319,7 @@ struct ChatWindow: View {
     /// floating panel: the dialog takes key status, and a free-standing
     /// dialog would trigger the panel's auto-hide (see `hideChatWindow`).
     private func presentAttachOpenPanel() {
-        guard let window = NSApp.windows.first(where: { $0 is FloatingPanelWindow }) else { return }
+        guard let window = FloatingPanelWindow.chatPanel else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -1465,21 +1498,27 @@ struct ChatWindow: View {
             // Only when the content can actually scroll: over a fitting chat a
             // wheel-up changes no geometry, so nothing would ever re-arm
             // auto-follow — it would stay off until the next sent message.
-            if event.window is FloatingPanelWindow, event.scrollingDeltaY > 0, !scrollContentFits {
+            if (event.window as? FloatingPanelWindow)?.role == .chat,
+               event.scrollingDeltaY > 0, !scrollContentFits {
                 isNearBottom = false // trackNearBottom re-arms it at the bottom
             }
             return event
         }
     }
 
-    // MARK: - Keyboard control while recording (Space / double-Space / Esc)
+    // MARK: - Panel keyboard control (Space / double-Space / Esc)
 
-    /// While recording, Space stops (send after a short grace window),
-    /// a second Space within that window cancels, Esc cancels immediately.
-    /// The text editor is disabled during recording, so Space is free.
-    private func installVoiceKeyMonitor() {
-        guard voiceKeyMonitor == nil else { return }
-        voiceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+    /// While recording, Space stops (send after a short grace window) and a
+    /// second Space within that window cancels; the text editor is disabled
+    /// during recording, so Space is free. Esc cancels a recording, and
+    /// dismisses the panel when there is none.
+    ///
+    /// One monitor rather than several: Esc has to mean "cancel the recording"
+    /// BEFORE it can mean "close the panel", and separate monitors would leave
+    /// that precedence to the order AppKit happens to call them in.
+    private func installPanelKeyMonitor() {
+        guard panelKeyMonitor == nil else { return }
+        panelKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let plainKey = event.modifierFlags
                 .intersection([.command, .option, .control, .shift])
                 .isEmpty
@@ -1495,10 +1534,24 @@ struct ChatWindow: View {
                     return nil
                 }
             }
-            // Esc (keyCode 53) — instant cancel while recording
-            if event.keyCode == 53, audioRecorder.isRecording {
-                audioRecorder.cancelRecording()
-                return nil
+            // Esc (keyCode 53): cancels a recording if one is running, and
+            // otherwise dismisses the panel — the same thing clicking away
+            // does, and what the World Time panel already does. A borderless
+            // window has no close button, so without this the only way out
+            // with the panel focused is the hotkey.
+            if event.keyCode == 53 {
+                if audioRecorder.isRecording {
+                    audioRecorder.cancelRecording()
+                    return nil
+                }
+                if let panel = FloatingPanelWindow.chatPanel,
+                   panel.isKeyWindow,
+                   // A system dialog presented as our sheet owns Esc: dismissing
+                   // the panel under it would strand the sheet.
+                   panel.attachedSheet == nil {
+                    panel.orderOut(nil)
+                    return nil
+                }
             }
             return event
         }

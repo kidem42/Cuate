@@ -602,6 +602,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.hidesOnDeactivate = false
             window.allowsToolTipsWhenApplicationIsInactive = true
+            window.role = .worldTime
             window.contentView = container
             window.setFrameAutosaveName(Self.worldTimeFrameName)
             worldTimeWindow = window
@@ -769,6 +770,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
+        window.role = .chat
         window.contentView = container
         window.delegate = self
 

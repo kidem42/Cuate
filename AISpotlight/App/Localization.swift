@@ -337,6 +337,7 @@ enum Localization {
         "panel.newChat": [.english: "New chat", .spanish: "Nuevo chat", .russian: "Новый чат"],
         "panel.presetHelp": [.english: "System prompt preset (applies to the next message)", .spanish: "Preajuste de prompt (se aplica al próximo mensaje)", .russian: "Пресет промпта (применится к следующему сообщению)"],
         "panel.providerHelp": [.english: "Chat provider (only providers with a key are shown)", .spanish: "Proveedor de chat (solo se muestran los que tienen clave)", .russian: "Провайдер чата (показаны только те, у кого есть ключ)"],
+        "panel.settingsHelp": [.english: "Settings", .spanish: "Ajustes", .russian: "Настройки"],
         "panel.welcome": [.english: "Hi! I'm your AI assistant. How can I help you today?", .spanish: "¡Hola! Soy tu asistente de IA. ¿En qué puedo ayudarte hoy?", .russian: "Привет! Я ваш ИИ-ассистент. Чем могу помочь?"],
         "panel.thinking": [.english: "Thinking…", .spanish: "Pensando…", .russian: "Думаю…"],
         "panel.searching": [.english: "Searching", .spanish: "Buscando", .russian: "Поиск"],
