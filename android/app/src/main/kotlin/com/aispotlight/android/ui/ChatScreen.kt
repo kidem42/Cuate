@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -100,6 +101,26 @@ import com.aispotlight.android.data.ChatAttachment
 import com.aispotlight.android.data.ChatMessage
 import com.aispotlight.android.data.ImageStore
 import java.io.File
+
+/**
+ * Widest the chat column is ever laid out, however much room the window has.
+ * A conversation is read like a column of text: past a comfortable measure the
+ * extra width stops helping and starts hurting — the two speakers drift to
+ * opposite edges of an 11" tablet with a void between them. Anything wider
+ * becomes margin. Phones and folded foldables never reach this cap, so their
+ * layout is untouched; the header (MainActivity's floating pills) shares it so
+ * the whole screen reads as one column.
+ */
+val ChatContentMaxWidth = 720.dp
+
+/**
+ * Width of the chat column the content actually lives in — bubbles, media and
+ * the voice player size against THIS, never against the raw window. On a
+ * tablet the two differ by a factor of two, and sizing against the window is
+ * what made every element look inflated while the conversation itself fell
+ * apart.
+ */
+val LocalChatContentWidth = androidx.compose.runtime.compositionLocalOf { 400.dp }
 
 /**
  * The chat pane: message list with streaming, thinking indicator, artifacts,
@@ -299,9 +320,23 @@ fun ChatScreen(
         }
     }
 
+    // Wide screens get MARGINS, not a wider conversation. Left to fill an 11"
+    // tablet the column pins the two speakers to opposite edges with half a
+    // screen of void between them, and the composer becomes a one-line field an
+    // arm's length wide. Capped, everything inside measures exactly as it does
+    // on a phone (where the cap never binds).
+    val contentWidth = minOf(
+        androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp,
+        ChatContentMaxWidth,
+    )
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalChatContentWidth provides contentWidth
+    ) {
     Box(modifier.fillMaxSize().then(themedModifier)) {
         // Theme ornaments (petals, sparkles, webs, papel picado) — fixed spec
         // positions with gentle animation loops, behind the chat content.
+        // Deliberately OUTSIDE the capped column: the decoration is part of the
+        // background and keeps running to the screen edges.
         ThemeDecorationsOverlay(palette.decoration, palette.dark)
         // Blueprint's reference crosses in the four panel corners.
         palette.cornerMarkColor?.let { BlueprintCornerMarks(it) }
@@ -310,7 +345,10 @@ fun ChatScreen(
         // pills — messages scroll beneath them.
         Column(
             Modifier
-                .fillMaxSize()
+                .fillMaxHeight()
+                .widthIn(max = ChatContentMaxWidth)
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
                 .systemBarsPadding()
                 .imePadding()
         ) {
@@ -666,6 +704,7 @@ fun ChatScreen(
         }
     }
     }
+    }
 
     openArtifact?.let { artifact ->
         ArtifactViewer(artifact, onDismiss = { openArtifact = null })
@@ -937,7 +976,7 @@ private fun MessageBubble(
     // the screen (capped for tablets); a voice message imposes a wide fixed
     // floor (~72%, cap 320dp) so the waveform + timestamp always get room —
     // a different minimum than text-only bubbles, which can stay tiny.
-    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val chatContentWidth = LocalChatContentWidth.current
     // Voice bubbles fold their transcript under the player (Telegram-style):
     // the voice block leads, the text expands on demand. While a spoken reply
     // is still being synthesized (`voicePending`) the same fold hides the
@@ -951,9 +990,11 @@ private fun MessageBubble(
     var transcriptExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
     // Wide-screen cap at 500dp: on an unfolded foldable or tablet a bubble
     // must not stretch into a full-width reading ribbon — the extra room
-    // becomes margin, not line length.
-    val bubbleMaxWidth = (screenWidthDp * 0.82f).dp.coerceAtMost(500.dp)
-    val voiceContentWidth = (screenWidthDp * 0.72f).dp.coerceAtMost(320.dp)
+    // becomes margin, not line length. Measured against the chat COLUMN, not
+    // the window: on a tablet the window is ~1280dp while the column is 720dp,
+    // and the proportions only mean anything against the latter.
+    val bubbleMaxWidth = (chatContentWidth * 0.82f).coerceAtMost(500.dp)
+    val voiceContentWidth = (chatContentWidth * 0.72f).coerceAtMost(320.dp)
     val context = LocalContext.current
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     // Long-press context menu (the Telegram/WhatsApp convention) + a "select
@@ -1268,16 +1309,20 @@ private fun AttachmentThumbnail(
     if (bitmap != null) {
         Box {
             // Telegram-style preview metrics: keep the image's own aspect
-            // ratio inside 300×340dp caps instead of cropping into a fixed
+            // ratio inside a width/height cap instead of cropping into a fixed
             // full-width 180dp ribbon (which on a foldable/tablet blew the
-            // photo up into a wall-to-wall sliver).
+            // photo up into a wall-to-wall sliver). The width follows the chat
+            // column but stays inside 300…360dp: a phone keeps exactly the
+            // preview it had, a tablet's wider column earns a little more.
             val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+            val previewMaxWidth = (LocalChatContentWidth.current * 0.62f)
+                .coerceIn(300.dp, 360.dp)
             Image(
                 bitmap.asImageBitmap(),
                 contentDescription = attachment.filename,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
-                    .widthIn(max = 300.dp)
+                    .widthIn(max = previewMaxWidth)
                     .heightIn(max = 340.dp)
                     .aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f)
                     .clip(RoundedCornerShape(12.dp))

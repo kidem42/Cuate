@@ -201,8 +201,13 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     // title) and the ⋮ button float over the content, which scrolls beneath
     // them. Settings keeps its classic top bar.
     val floatingHeader: @Composable () -> Unit = {
+        // Centered in the same column as the chat (ChatContentMaxWidth): pinned
+        // to the window edges on a tablet, the ⋮ ends up a hand's width away
+        // from the conversation it acts on.
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         Row(
             Modifier
+                .widthIn(max = ChatContentMaxWidth)
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -330,6 +335,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                     )
                 }
             }
+        }
         }
     }
 
