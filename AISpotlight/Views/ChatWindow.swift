@@ -45,18 +45,29 @@ struct ChatWindow: View {
     @State private var streamingTask: Task<Void, Never>?
     /// Which conversation the in-flight reply belongs to.
     @State private var streamingOrigin: ChatStore.ConversationID?
-    /// Whether the scroll position is near the newest message.
+    /// Whether the scroll position is near the newest message (reported by
+    /// the transcript engine; mirrors its pin state).
     @State private var isNearBottom = true
-    /// Whether the chat content fits the viewport (no scrolling possible) —
-    /// see `trackContentFits` for why the intent monitor needs it.
-    @State private var scrollContentFits = true
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
     @State private var panelKeyMonitor: Any?
-    @State private var scrollIntentMonitor: Any?
     @State private var pendingVoiceSend: DispatchWorkItem?
-    /// When we last auto-scrolled — used to tell a real user scroll-up from a
-    /// transient "content grew underneath us" geometry blip during streaming.
-    @State private var lastAutoScroll = Date.distantPast
+    /// Imperative handle to the transcript engine (scroll-to-bottom on send
+    /// and summon). @State so the instance survives view-struct re-inits.
+    @State private var transcriptController = TranscriptController()
+    /// Live buffer of the reply currently streaming in. NOT observed by this
+    /// view (no @ObservedObject on purpose): only the streaming bubble's
+    /// text subtree subscribes, so a flush re-renders that subtree alone.
+    @State private var liveReply = StreamingReplyModel()
+    /// Identity/timestamp stub for the streaming bubble. While set (and the
+    /// origin conversation is on screen) the transcript masks the store's
+    /// copy of this message and renders the live row in its place.
+    @State private var liveReplyStub: ChatMessage?
+    /// True from send until the first streamed text chunk (the tool/thinking
+    /// phase). Switching conversations wipes the store's isLoading/statusText
+    /// — these two remember enough to put the pill back when the user
+    /// returns to a chat whose reply is still in that phase.
+    @State private var streamingAwaitingText = false
+    @State private var streamingLastStatus: String?
     @FocusState private var isInputFocused: Bool
     @State private var textEditorHeight: CGFloat = 27 // Default height for one line
     /// Providers offered by the header switcher (see `refreshAvailableProviders`).
@@ -68,6 +79,30 @@ struct ChatWindow: View {
     /// Purely presentation — the full history stays in ChatStore (and in the
     /// API context).
     private static let historyPageSize = 30
+
+    /// How many extra working rounds one reply may request with a trailing
+    /// `<continue/>` marker (each round gets a fresh tool budget). Bounds
+    /// the auto-continuation so a marker-happy model can't loop forever.
+    private static let maxAutoContinues = 3
+
+    /// Detects a trailing `<continue/>` continuation marker and returns the
+    /// text without it. The marker is a contract taught in
+    /// `AppSettings.mandatoryPromptRules`.
+    static func strippingContinueMarker(_ text: String) -> (text: String, wantsContinuation: Bool) {
+        let markers = ["<continue/>", "<continue />"]
+        let tail = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let marker = markers.first(where: { tail.hasSuffix($0) }),
+              let range = text.range(of: marker, options: .backwards) else {
+            return (text, false)
+        }
+        var stripped = text
+        stripped.removeSubrange(range)
+        while let last = stripped.unicodeScalars.last,
+              CharacterSet.whitespacesAndNewlines.contains(last) {
+            stripped.unicodeScalars.removeLast()
+        }
+        return (stripped, true)
+    }
     @State private var visibleCount = ChatWindow.historyPageSize
     /// Guards against cascading backfills while one is restoring the scroll.
     @State private var isBackfilling = false
@@ -98,6 +133,133 @@ struct ChatWindow: View {
     /// resolves to the glass palette and leaves every surface untouched.
     private var palette: ThemePalette {
         ThemePalette.palette(for: settings.theme, scheme: colorScheme)
+    }
+
+    // MARK: - Transcript rows
+
+    /// Whether the in-flight reply is being rendered live in THIS transcript
+    /// (its origin conversation is on screen). While true, the store's copy
+    /// of the streaming message is masked and the live row stands in for it.
+    private var liveStreamOnScreen: Bool {
+        liveReplyStub != nil && streamingOrigin == chatStore.conversation
+    }
+
+    /// Rows for the transcript engine. Identity + revision give the engine
+    /// point updates: a row's SwiftUI view is rebuilt only when its revision
+    /// changes. The streaming reply is deliberately NOT part of the row
+    /// data — its store row is masked and a dedicated live row (observing
+    /// `StreamingReplyModel` internally) renders in its place, so a stream
+    /// flush re-renders one text subtree and touches no list at all.
+    private var transcriptItems: [TranscriptItem] {
+        // Rows span the viewport minus the engine's 12pt edge insets.
+        let rowWidth = max(200, bubbleContainerWidth - 24)
+        let maxBubble = max(320, bubbleContainerWidth * 0.75)
+        // Environment the hosting views can't inherit from the panel root:
+        // a change to any of it must rebuild every row.
+        var seed = Hasher()
+        seed.combine(settings.theme)
+        seed.combine(colorScheme)
+        seed.combine(rowWidth)
+        let baseRevision = seed.finalize()
+
+        var items: [TranscriptItem] = []
+
+        if chatStore.messages.count > visibleCount || chatStore.hasOlderMessages {
+            items.append(TranscriptItem(id: "backfill-spinner", revision: baseRevision) {
+                AnyView(
+                    HStack {
+                        Spacer()
+                        ThinkingEqualizer()
+                            .scaleEffect(0.8)
+                        Spacer()
+                    }
+                    .frame(width: rowWidth, height: 24)
+                )
+            })
+        }
+
+        let maskedID = liveStreamOnScreen ? liveReplyStub?.id : nil
+        for message in visibleMessages where message.id != maskedID {
+            items.append(messageItem(message, rowWidth: rowWidth,
+                                     maxBubble: maxBubble, baseRevision: baseRevision))
+        }
+
+        if liveStreamOnScreen, let stub = liveReplyStub {
+            // Constant revision on purpose: the row's CONTENT updates itself
+            // through the model — the engine never rebuilds it mid-stream.
+            let live = liveReply
+            items.append(TranscriptItem(id: "live-reply", revision: baseRevision) { [palette] in
+                AnyView(
+                    MessageRow(message: stub, maxBubbleWidth: maxBubble,
+                               isStreamingReply: true, liveModel: live)
+                        .environment(\.themePalette, palette)
+                        .fontDesign(palette.fontDesign)
+                        .frame(width: rowWidth, alignment: .leading)
+                )
+            })
+        }
+
+        if showThinkingIndicator {
+            var hasher = Hasher()
+            hasher.combine(baseRevision)
+            hasher.combine(chatStore.statusText)
+            let statusText = chatStore.statusText
+            items.append(TranscriptItem(id: "thinking-indicator", revision: hasher.finalize()) { [palette] in
+                AnyView(
+                    HStack(spacing: 8) {
+                        ThinkingEqualizer()
+                        Text(statusText ?? L("panel.thinking"))
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                        // ImageAddon: cancels a running image operation;
+                        // hidden otherwise.
+                        ImageOperationCancelButton()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .environment(\.themePalette, palette)
+                    .fontDesign(palette.fontDesign)
+                    .frame(width: rowWidth, alignment: .leading)
+                )
+            })
+        }
+
+        if let pending = pendingLocalStart {
+            items.append(TranscriptItem(id: "local-start-confirm", revision: baseRevision) { [palette] in
+                AnyView(
+                    localStartConfirmBubble(pending)
+                        .environment(\.themePalette, palette)
+                        .fontDesign(palette.fontDesign)
+                        .frame(width: rowWidth, alignment: .leading)
+                )
+            })
+        }
+
+        return items
+    }
+
+    private func messageItem(_ message: ChatMessage, rowWidth: CGFloat,
+                             maxBubble: CGFloat, baseRevision: Int) -> TranscriptItem {
+        var hasher = Hasher()
+        hasher.combine(baseRevision)
+        hasher.combine(message.text)
+        hasher.combine(message.messageType.rawValue)
+        hasher.combine(message.audioURL)
+        for attachment in message.attachments {
+            hasher.combine(attachment.id)
+            hasher.combine(attachment.fileURLString)
+            hasher.combine(attachment.ocrText)
+        }
+        return TranscriptItem(id: message.id.uuidString, revision: hasher.finalize()) { [palette] in
+            AnyView(
+                MessageRow(message: message, maxBubbleWidth: maxBubble)
+                    .environment(\.themePalette, palette)
+                    .fontDesign(palette.fontDesign)
+                    .frame(width: rowWidth, alignment: .leading)
+            )
+        }
     }
 
     var body: some View {
@@ -198,234 +360,28 @@ struct ChatWindow: View {
                 }
                 .frame(height: 22)
 
-                // Chat messages area
-                ScrollViewReader { proxy in
-                    ZStack(alignment: .bottomTrailing) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            // Backfill trigger: materializes when the user
-                            // scrolls up to the oldest rendered message, and
-                            // widens the window by another page — first from
-                            // the in-memory history, then by paging older
-                            // rows in from the store (windowed load).
-                            if chatStore.messages.count > visibleCount || chatStore.hasOlderMessages {
-                                HStack {
-                                    Spacer()
-                                    ThinkingEqualizer()
-                                        .scaleEffect(0.8)
-                                    Spacer()
-                                }
-                                .frame(height: 24)
-                                .onAppear { loadOlderMessages(proxy) }
-                            }
-
-                            ForEach(visibleMessages) { message in
-                                MessageRow(
-                                    message: message,
-                                    maxBubbleWidth: max(320, bubbleContainerWidth * 0.75),
-                                    isStreamingReply: chatStore.isLoading
-                                        && !message.isUser
-                                        && message.id == chatStore.messages.last?.id
-                                )
-                                .id(message.id)
-                                // NO animation on these rows. Two attempts at
-                                // smoothing the streamed growth were tried and
-                                // both regressed:
-                                //   · `withAnimation` at the mutation site had
-                                //     to apply the store change synchronously,
-                                //     which made the SSE loop wait on a SwiftUI
-                                //     transaction per flush — the reply itself
-                                //     crawled;
-                                //   · `.animation(_:value:)` here animated
-                                //     layout INSIDE the LazyVStack, and the
-                                //     scroll view was left showing an EMPTY
-                                //     viewport after a send until the user
-                                //     scrolled by hand, plus it fought the
-                                //     auto-scroll for the same pixels.
-                                // The stepping is a consequence of text
-                                // arriving in flushes; the fix is smaller
-                                // steps (see the adaptive coalescing below),
-                                // not animating a lazy list.
-                            }
-
-                            // "Thinking" indicator while waiting for the first streamed
-                            // chunk; also shows live tool activity (web search).
-                            if showThinkingIndicator {
-                                HStack(spacing: 8) {
-                                    ThinkingEqualizer()
-                                    Text(chatStore.statusText ?? L("panel.thinking"))
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                    // ImageAddon: cancels a running image
-                                    // operation; hidden otherwise.
-                                    ImageOperationCancelButton()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .id("thinking-indicator")
-                            }
-
-                            // In-chat "start this local model?" prompt (assistant
-                            // bubble + Yes/No), shown instead of sending straight away.
-                            if let pending = pendingLocalStart {
-                                localStartConfirmBubble(pending)
-                                    .id("local-start-confirm")
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                    }
-                    // Bottom-anchored layout: freshly (re)loaded history —
-                    // launch, conversation switch — is laid out already AT the
-                    // newest message. Post-hoc proxy.scrollTo can't do this
-                    // reliably: unrendered LazyVStack ids no-op, estimated row
-                    // heights land short, and the user sees the view travel.
-                    // While scrolled away from the bottom the anchor is
-                    // inactive, so reading history is not yanked around.
-                    .defaultScrollAnchor(.bottom)
-                    // Width probe: reads the viewport width without wrapping the
-                    // content in a GeometryReader (see `bubbleContainerWidth`).
-                    // A no-op when the width is unchanged, so a display
-                    // reconfigure that doesn't resize the window costs nothing.
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear
-                                .onAppear { updateContainerWidth(proxy.size.width) }
-                                .onChange(of: proxy.size.width) { _, newWidth in
-                                    updateContainerWidth(newWidth)
-                                }
-                        }
+                // Chat messages area — AppKit transcript engine
+                // (Views/Transcript/): point row updates, an owned scroll
+                // offset, and pin-to-bottom as an invariant re-asserted
+                // after every layout change. Replaces the SwiftUI
+                // ScrollView + LazyVStack + ScrollViewReader stack, whose
+                // scrollTo-by-id was a silent no-op for unrendered rows and
+                // needed a pile of asyncAfter re-assertions to approximate
+                // all of this.
+                ZStack(alignment: .bottomTrailing) {
+                    ChatTranscriptView(
+                        items: transcriptItems,
+                        resetToken: chatStore.conversation.storageKey,
+                        controller: transcriptController,
+                        onNearBottomChange: { isNearBottom = $0 },
+                        onViewportWidthChange: { updateContainerWidth($0) },
+                        onNeedOlder: { loadOlderMessages() }
                     )
-                    .trackContentFits { fits in
-                        scrollContentFits = fits
-                    }
-                    .trackNearBottom { nearBottom in
-                        if nearBottom {
-                            isNearBottom = true
-                        } else if Date().timeIntervalSince(lastAutoScroll) > 0.5 {
-                            // Only a scroll-up that happens well after our own
-                            // auto-scroll counts as the user leaving the bottom.
-                            // (During streaming, content growth momentarily
-                            // reports "not at bottom" right before we re-scroll —
-                            // treating that as user intent froze auto-follow.)
-                            isNearBottom = false
-                        }
-                    }
-                    .onChange(of: chatStore.messages.count) { oldCount, _ in
-                        if oldCount == 0 {
-                            // Wholesale history arrival (launch, conversation
-                            // switch): render only the newest page — combined
-                            // with the bottom-anchored layout the view OPENS
-                            // at the last message instead of travelling there.
-                            visibleCount = Self.historyPageSize
-                            isBackfilling = false
-                            scrollToBottom(proxy, pace: .instant)
-                            // The immediate scroll runs before the LazyVStack has
-                            // measured its rows; with variable-height rows the
-                            // estimated content height overshoots and leaves a
-                            // gap below the last message. Re-assert the bottom
-                            // once (and again) after layout settles — both
-                            // instant, so it reads as a single correct landing.
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                                scrollToBottom(proxy, pace: .instant)
-                            }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                scrollToBottom(proxy, pace: .instant)
-                            }
-                        } else if !isBackfilling, isNearBottom || chatStore.messages.last?.isUser == true {
-                            // Own messages always jump down; incoming ones don't
-                            // yank the view while the user is reading history.
-                            // (A store backfill PREPENDS — it also changes the
-                            // count, but must never move the viewport down.)
-                            scrollToBottom(proxy)
-                        }
-                    }
-                    .onChange(of: chatStore.messages.last?.text) {
-                        // Follow streamed text as it grows
-                        if isNearBottom {
-                            scrollToBottom(proxy, pace: .follow)
-                        }
-                    }
-                    .onChange(of: showThinkingIndicator) { _, visible in
-                        // Reveal the "Thinking…" pill when it appears below
-                        // the last message. Deferred a beat so the pill is
-                        // actually laid out (scrollTo an unrendered id is a
-                        // silent no-op in a LazyVStack) — and re-asserted once
-                        // more after layout settles: under load (tall markdown
-                        // row, attachment) 50ms is not enough and the single
-                        // attempt used to no-op, leaving the pill below the
-                        // fold. Same idiom as the history landing above.
-                        if visible, isNearBottom {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                scrollToBottom(proxy)
-                            }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                if showThinkingIndicator, isNearBottom {
-                                    scrollToBottom(proxy)
-                                }
-                            }
-                        }
-                    }
-                    .onChange(of: chatStore.statusText) { _, status in
-                        // A NEW status (image operation, web search) must
-                        // bring the progress pill into view — its text can
-                        // appear/change without the indicator toggling.
-                        guard status != nil,
-                              isNearBottom || chatStore.messages.last?.isUser == true else { return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            scrollToBottom(proxy)
-                        }
-                    }
-                    .onChange(of: pendingLocalStart != nil) { _, visible in
-                        // The local-model start confirmation appears below the
-                        // last message with NO store change (the send is
-                        // intercepted before performSend), so none of the other
-                        // scroll triggers fire. Always scroll — it answers the
-                        // user's own send. Deferred + re-asserted like the
-                        // thinking pill (scrollTo an unrendered LazyVStack id
-                        // is a silent no-op).
-                        guard visible else { return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            scrollToBottom(proxy)
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                            if pendingLocalStart != nil {
-                                scrollToBottom(proxy)
-                            }
-                        }
-                    }
-                    .onAppear {
-                        // Land on the latest message when the view first loads
-                        // persisted history (LazyVStack needs a beat to lay out).
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            scrollToBottom(proxy, pace: .instant)
-                        }
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
-                        // Every time the panel is summoned, show the newest
-                        // message — and take the chance to drop the history
-                        // window back to one page. Reading history widens it
-                        // and nothing else ever narrows it again, but doing
-                        // that WHILE the panel is open pulls rows out from
-                        // under a live viewport: the scroll view was left
-                        // showing an empty area until the user scrolled by
-                        // hand. Between summons there is no viewport to
-                        // disturb, and the bottom anchor lands the fresh
-                        // window on the newest message anyway.
-                        if visibleCount > Self.historyPageSize {
-                            visibleCount = Self.historyPageSize
-                        }
-                        DispatchQueue.main.async {
-                            scrollToBottom(proxy, pace: .instant)
-                        }
-                    }
 
                     // Floating "jump to latest" button (Telegram-style)
                     if !isNearBottom {
                         Button {
-                            scrollToBottom(proxy)
+                            transcriptController.scrollToBottom(animated: true)
                         } label: {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 13, weight: .semibold))
@@ -439,8 +395,55 @@ struct ChatWindow: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                         .help(L("panel.jumpLatest"))
                     }
+                }
+                .animation(.easeInOut(duration: 0.15), value: isNearBottom)
+                .onChange(of: chatStore.messages.count) { oldCount, _ in
+                    if oldCount == 0 {
+                        // Wholesale history arrival (launch, conversation
+                        // switch): render only the newest page — the engine
+                        // lays it out already pinned to the newest message.
+                        visibleCount = Self.historyPageSize
+                        isBackfilling = false
+                    } else if chatStore.messages.last?.isUser == true {
+                        // Own messages always jump down (and re-arm
+                        // auto-follow) even if the user was reading history.
+                        // Incoming rows never yank the view: the engine's
+                        // pin state decides, and a backfill PREPEND is
+                        // re-anchored by the engine itself.
+                        transcriptController.scrollToBottom(animated: true)
                     }
-                    .animation(.easeInOut(duration: 0.15), value: isNearBottom)
+                }
+                .onChange(of: pendingLocalStart != nil) { _, visible in
+                    // The local-model confirmation appears with NO store
+                    // change, so no other trigger fires — and it answers
+                    // the user's own send, so it always comes into view.
+                    if visible {
+                        transcriptController.scrollToBottom(animated: true)
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
+                    // Every summon shows the newest message — and drops the
+                    // history window back to one page (reading history
+                    // widens it and nothing else narrows it again; between
+                    // summons there is no viewport to disturb).
+                    if visibleCount > Self.historyPageSize {
+                        visibleCount = Self.historyPageSize
+                    }
+                    transcriptController.scrollToBottom(animated: false)
+                }
+                .onChange(of: chatStore.conversation.storageKey) {
+                    // Returning to a chat whose reply is still in the
+                    // tool/thinking phase: the switch wiped the store's
+                    // isLoading/statusText, and the stream only touches them
+                    // on events that arrive while live — until the next one,
+                    // the chat looked dead and then a reply "appeared out of
+                    // nowhere". Put the pill straight back.
+                    guard streamingAwaitingText,
+                          streamingOrigin == chatStore.conversation else { return }
+                    chatStore.setLoading(true)
+                    if let status = streamingLastStatus {
+                        chatStore.statusText = status
+                    }
                 }
 
                 // Input area (also acts as a drag region)
@@ -637,7 +640,6 @@ struct ChatWindow: View {
             refreshAvailableProviders()
             self.pendingAttachment = appState.pendingAttachment
             installPanelKeyMonitor()
-            installScrollIntentMonitor()
             ChatWindowBridge.chatStore = chatStore // ImageAddon (Addons/ImageAddon)
             // Safety net: ChatStore.init resolved the conversation from
             // UserDefaults before AppSettings' migrations could rewrite the
@@ -651,10 +653,6 @@ struct ChatWindow: View {
             if let monitor = panelKeyMonitor {
                 NSEvent.removeMonitor(monitor)
                 panelKeyMonitor = nil
-            }
-            if let monitor = scrollIntentMonitor {
-                NSEvent.removeMonitor(monitor)
-                scrollIntentMonitor = nil
             }
         }
         // The switcher's provider list is state, not a body computation — keep
@@ -851,6 +849,10 @@ struct ChatWindow: View {
         // into the fresh chat — an orphan reply to a question just erased.
         if streamingOrigin == chatStore.conversation {
             streamingTask?.cancel()
+            // Drop the live row NOW — the cancelled task unwinds a beat
+            // later, and the fresh chat must not show the orphan bubble
+            // for that beat.
+            liveReplyStub = nil
             chatStore.statusText = nil
             chatStore.setLoading(false)
         }
@@ -887,6 +889,7 @@ struct ChatWindow: View {
         // cannot resurrect the deleted file.
         if streamingOrigin == deletedID {
             streamingTask?.cancel()
+            liveReplyStub = nil
         }
         if chatStore.conversation == deletedID {
             Task { @MainActor in
@@ -907,27 +910,25 @@ struct ChatWindow: View {
         chatStore.isLoading && (chatStore.statusText != nil || chatStore.messages.last?.isUser == true)
     }
 
-    /// Widens the history window by one page and pins the viewport to the
-    /// row that was the oldest on screen — without this the prepended rows
-    /// push the content and the view visibly jumps. Two tiers: first widen
-    /// over the in-memory history; once that is exhausted, page older rows
-    /// in from the store (ChatStore keeps only a suffix window loaded).
-    private func loadOlderMessages(_ proxy: ScrollViewProxy) {
+    /// Widens the history window by one page when the user nears the top
+    /// (the engine calls this and re-anchors the viewport itself, so the
+    /// prepended rows never move what the user is reading). Two tiers:
+    /// first widen over the in-memory history; once that is exhausted,
+    /// page older rows in from the store (ChatStore keeps only a suffix
+    /// window loaded).
+    private func loadOlderMessages() {
         guard !isBackfilling else { return }
-        let anchorID = visibleMessages.first?.id
         if chatStore.messages.count > visibleCount {
             isBackfilling = true
             visibleCount = min(visibleCount + Self.historyPageSize, chatStore.messages.count)
-            restoreBackfillAnchor(proxy, anchorID)
+            DispatchQueue.main.async { isBackfilling = false }
         } else if chatStore.hasOlderMessages {
             isBackfilling = true
             chatStore.loadOlderPage(Self.historyPageSize) { added in
-                guard added > 0 else {
-                    isBackfilling = false
-                    return
+                if added > 0 {
+                    visibleCount = min(visibleCount + added, chatStore.messages.count)
                 }
-                visibleCount = min(visibleCount + added, chatStore.messages.count)
-                restoreBackfillAnchor(proxy, anchorID)
+                DispatchQueue.main.async { isBackfilling = false }
             }
         }
     }
@@ -938,68 +939,6 @@ struct ChatWindow: View {
         guard width > 0, width != bubbleContainerWidth else { return }
         bubbleContainerWidth = width
         UserDefaults.standard.set(Double(width), forKey: Self.containerWidthDefaultsKey)
-    }
-
-    /// Re-pins the viewport to the pre-backfill anchor row after the widened
-    /// window has laid out, then re-arms the backfill guard.
-    private func restoreBackfillAnchor(_ proxy: ScrollViewProxy, _ anchorID: UUID?) {
-        DispatchQueue.main.async { // after the widened window is laid out
-            if let anchorID {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(anchorID, anchor: .top)
-                }
-            }
-            DispatchQueue.main.async { isBackfilling = false }
-        }
-    }
-
-    /// How a scroll-to-bottom should move.
-    private enum ScrollPace {
-        /// Large easeOut glide — a message was appended to a visible chat.
-        case glide
-        /// Short linear tween — per-chunk stream following; successive calls
-        /// retarget the animation, so the chat scrolls continuously instead
-        /// of snapping in steps.
-        case follow
-        /// No animation at all — landing on freshly loaded history (launch,
-        /// conversation switch): the view must simply START at the bottom,
-        /// not visibly travel there.
-        case instant
-    }
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy, pace: ScrollPace = .glide) {
-        // The thinking pill and the local-start confirmation sit below the
-        // last message — when visible, they are the true bottom of the list
-        // (the confirm bubble renders below the pill, so it wins).
-        let target: AnyHashable?
-        if pendingLocalStart != nil {
-            target = "local-start-confirm"
-        } else if showThinkingIndicator {
-            target = "thinking-indicator"
-        } else {
-            target = chatStore.messages.last?.id
-        }
-        guard let target else { return }
-        lastAutoScroll = Date()
-        isNearBottom = true
-        switch pace {
-        case .glide:
-            withAnimation(.easeOut(duration: 0.3)) {
-                proxy.scrollTo(target, anchor: .bottom)
-            }
-        case .follow:
-            withAnimation(.linear(duration: 0.12)) {
-                proxy.scrollTo(target, anchor: .bottom)
-            }
-        case .instant:
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                proxy.scrollTo(target, anchor: .bottom)
-            }
-        }
     }
 
     // MARK: - Sending
@@ -1160,54 +1099,99 @@ struct ChatWindow: View {
         let origin = chatStore.conversation
         streamingOrigin = origin
 
+        // Fresh live buffer per stream: an older background stream keeps its
+        // own instance and can't write into this one's bubble.
+        let live = StreamingReplyModel()
+        liveReply = live
+        liveReplyStub = nil
+        streamingAwaitingText = true
+        streamingLastStatus = nil
+
         streamingTask = Task { @MainActor in
-            // Local canonical copy of the reply (stable UUID). The store is
-            // synced from it only while `origin` is on screen; while detached
-            // it just accumulates and is delivered at the end.
+            // Local canonical copy of the reply (stable UUID). The LIVE
+            // transcript renders from `live` (frozen segments + short tail,
+            // O(chunk) per flush — see StreamingReplyModel); the STORE sees
+            // the reply only as ~1 Hz persistence checkpoints plus the final
+            // delivery. A flush re-publishes no list and re-parses no
+            // already-final text, which is what lets it run at 30 Hz.
             var reply: ChatMessage?
             var isLive: Bool { chatStore.conversation == origin }
-            // Coalesce streamed chunks before touching the store: every
-            // mutation republishes `messages`, re-diffs the whole list and
-            // re-parses the growing bubble's Markdown — per-chunk that adds
-            // up to O(answer²) of main-thread work and froze the panel on
-            // long replies. Flushing at ~8 Hz keeps streaming visually live
-            // at a constant UI cost per second regardless of answer length.
             var pendingText = ""
             var lastFlush = ContinuousClock.now
-            func syncToStore() {
-                // Cancellation (new chat / preset deleted) must not write the
-                // partial back — the catch path still calls flush() once.
+            var lastCheckpoint = ContinuousClock.now
+
+            // Persistence checkpoint: the partial reply lands in the store
+            // (whose debounced save persists it) about once a second, so a
+            // crash or force-quit mid-stream loses ~1s of text — the same
+            // retention the old per-flush sync gave, at a fraction of the
+            // publishes. Also exactly what a mid-stream return to this chat
+            // reloads from disk. Cancellation (new chat / preset deleted)
+            // must not write the partial back.
+            func checkpoint() {
                 guard !Task.isCancelled,
-                      let current = reply, isLive, chatStore.isHistoryLoaded else { return }
+                      let current = reply, isLive, chatStore.isHistoryLoaded,
+                      lastCheckpoint.duration(to: .now) > .seconds(1) else { return }
+                lastCheckpoint = .now
                 if chatStore.messages.contains(where: { $0.id == current.id }) {
-                    // Full-text replace also covers the return mid-stream:
-                    // the store's copy (reloaded from disk) holds only the
-                    // partial text flushed before the switch-away.
-                    //
-                    // NOT animated. Wrapping this in `withAnimation` to smooth
-                    // the line-by-line growth also interpolates the bubble's
-                    // WIDTH, and with a fresh target every flush the bubble
-                    // inflates like a balloon for the whole reply — the answer
-                    // reads as slow even though it arrives at the same speed.
                     chatStore.setText(current.text, for: current.id)
                 } else {
+                    // Returned mid-stream: the reloaded history holds only
+                    // the last checkpointed partial — or none of it.
                     chatStore.appendNow(current)
                 }
             }
+
             func flush() {
                 guard !pendingText.isEmpty else { return }
                 if var current = reply {
                     current.text += pendingText
                     reply = current
                 } else {
-                    reply = ChatMessage(text: pendingText, isUser: false)
+                    let first = ChatMessage(text: pendingText, isUser: false)
+                    reply = first
+                    // Text is flowing — the tool/thinking phase is over.
+                    if liveReply === live {
+                        streamingAwaitingText = false
+                        streamingLastStatus = nil
+                    }
+                    if isLive, chatStore.isHistoryLoaded, !Task.isCancelled, liveReply === live {
+                        // Materialize both rows the moment text flows: the
+                        // store row (masked while streaming — persistence and
+                        // API context see it) and the live row that renders.
+                        liveReplyStub = first
+                        chatStore.appendNow(first)
+                    }
                 }
+                // Mid-stream return: the reply may have materialized while
+                // ANOTHER chat was on screen (the branch above skipped the
+                // stub). Once the origin is back, re-arm the live row and
+                // give the store its masked copy — otherwise the rest of
+                // the stream would render at checkpoint cadence (~1 Hz).
+                if liveReplyStub == nil, let current = reply,
+                   isLive, chatStore.isHistoryLoaded, !Task.isCancelled, liveReply === live {
+                    liveReplyStub = current
+                    if !chatStore.messages.contains(where: { $0.id == current.id }) {
+                        chatStore.appendNow(current)
+                    }
+                }
+                live.append(pendingText)
                 pendingText = ""
                 lastFlush = .now
-                syncToStore()
+                checkpoint()
             }
             do {
-                let stream = try await ChatService.streamReply(history: history, summary: summary, store: chatStore)
+                // Auto-continuation: the model may end a round with a
+                // trailing `<continue/>` marker (taught in the mandatory
+                // prompt rules) — "I need another working round". The marker
+                // is stripped, a hidden "Continue." user turn is appended to
+                // the REQUEST (never to the chat), and the next round streams
+                // into the SAME bubble with a fresh tool budget. Bounded so a
+                // marker-happy model can't loop forever.
+                var requestHistory = history
+                var round = 0
+                var lastRoundText = ""
+                roundLoop: while true {
+                let stream = try await ChatService.streamReply(history: requestHistory, summary: summary, store: chatStore)
                 for try await event in stream {
                     switch event {
                     case .text(let chunk):
@@ -1221,43 +1205,80 @@ struct ChatWindow: View {
                         // The first chunk flushes immediately so the bubble
                         // appears the moment text starts flowing.
                         //
-                        // Adaptive coalescing. The 120 ms window exists to bound
-                        // cost when tokens pour in — a per-token flush is what
-                        // made long replies O(answer²) and froze the panel. But
-                        // it is sized for a FAST model: at ~390 chars/s it
-                        // holds a whole line, while a slow one (~20 chars/s,
-                        // measured on kimi-k3) fills it with three characters
-                        // and the window only adds latency. So a small pending
-                        // buffer — which is itself the signal that the stream
-                        // is slow — is let through sooner, and the text creeps
-                        // in steadily instead of in visible clumps.
-                        //
-                        // 80 ms is the floor: below that the publish rate stops
-                        // buying visible smoothness and only costs main-thread
-                        // work on a list that is already re-diffed per flush.
-                        let waited = lastFlush.duration(to: .now)
-                        if reply == nil
-                            || waited > .milliseconds(120)
-                            || (pendingText.count <= 16 && waited > .milliseconds(80)) {
+                        // 30 Hz cadence: a flush costs O(chunk) now (the live
+                        // row is outside the list; final text is frozen), so
+                        // small frequent steps are what makes the growth read
+                        // as continuous — no scroll animation needed. The one
+                        // exception is a long UNCLOSED fence (an artifact
+                        // generating): the whole fence stays in the re-parsed
+                        // tail, so those throttle back to the old 8 Hz to
+                        // bound the per-flush parse.
+                        let interval: Duration = live.tail.utf8.count > 8192
+                            ? .milliseconds(120)
+                            : .milliseconds(33)
+                        if reply == nil || lastFlush.duration(to: .now) > interval {
                             flush()
                         }
                     case .status(let status):
                         flush() // keep text/status ordering intact
+                        if liveReply === live { streamingLastStatus = status }
                         if isLive { chatStore.statusText = status }
                     case .toolContext(let context):
-                        // Arrives once, at the end of the turn. Stored on the
+                        // Arrives once per round, at its end. Stored on the
                         // reply (never rendered) so follow-up turns keep the
-                        // search results as grounding.
+                        // search results as grounding. Rounds accumulate;
+                        // the suffix cap keeps the freshest grounding.
                         flush() // materialize `reply` if text is still pending
                         if var current = reply {
-                            current.toolContext = context
+                            let merged = [current.toolContext, context]
+                                .compactMap { $0 }
+                                .joined(separator: "\n\n")
+                            current.toolContext = String(merged.suffix(6000))
                             reply = current
                         }
                     }
                 }
                 flush()
+
+                // Continuation round? Only when the model asked for one, the
+                // budget allows, and the round actually added text (a
+                // marker-only round would spin without progress).
+                if !Task.isCancelled, round < Self.maxAutoContinues,
+                   var current = reply {
+                    let (stripped, wantsMore) = Self.strippingContinueMarker(current.text)
+                    if wantsMore, stripped != lastRoundText, !stripped.isEmpty {
+                        lastRoundText = stripped
+                        round += 1
+                        current.text = stripped + "\n\n"
+                        reply = current
+                        // Reflect the strip in the live bubble and the store
+                        // copy so the marker never survives to the final text.
+                        if liveReply === live {
+                            live.setFullText(current.text)
+                            streamingLastStatus = L("panel.thinking")
+                        }
+                        if isLive, chatStore.isHistoryLoaded,
+                           chatStore.messages.contains(where: { $0.id == current.id }) {
+                            chatStore.setText(current.text, for: current.id)
+                        }
+                        // The pill under the bubble says the work goes on.
+                        if isLive { chatStore.statusText = L("panel.thinking") }
+                        // The hidden nudge lives only in the request payload.
+                        requestHistory = history + [
+                            ChatMessage(text: current.text, isUser: false),
+                            ChatMessage(text: "Continue.", isUser: true),
+                        ]
+                        continue roundLoop
+                    }
+                }
+                break roundLoop
+                }
                 if !Task.isCancelled {
-                    if let finished = reply {
+                    if var finished = reply {
+                        // A marker that survived (continuation budget spent)
+                        // must not reach the stored message.
+                        finished.text = Self.strippingContinueMarker(finished.text).text
+                        reply = finished
                         // No-op when live and already synced; routes the reply
                         // into the origin chat's file when detached.
                         chatStore.deliver(finished, to: origin)
@@ -1289,6 +1310,17 @@ struct ChatWindow: View {
                     // history the retry would resend) is still on screen.
                     if isLive { pendingRetry = .chat }
                 }
+            }
+            // Retire the live row only AFTER the delivery above put the
+            // final text into the store row (a synchronous upsert when
+            // live): both changes land in one UI update, so the live→store
+            // row swap is invisible. Guarded — a newer stream may already
+            // own the live slot.
+            if liveReply === live {
+                liveReplyStub = nil
+                live.reset()
+                streamingAwaitingText = false
+                streamingLastStatus = nil
             }
             if isLive {
                 chatStore.statusText = nil
@@ -1485,27 +1517,6 @@ struct ChatWindow: View {
         audioRecorder.cancelRecording()
     }
 
-    /// An upward wheel/trackpad scroll in the panel is an explicit "let me
-    /// read history" gesture — it must stop the streaming auto-follow at once.
-    /// The time-based guard in `trackNearBottom` alone can't see it: during
-    /// streaming the auto-scroll re-fires on every flush, so its 0.5s window
-    /// never opens and the user's scroll was overridden on the next chunk —
-    /// the panel felt frozen (a field `sample` showed a perpetual
-    /// NSScrollAnimationHelper animation retargeting the bottom every frame).
-    private func installScrollIntentMonitor() {
-        guard scrollIntentMonitor == nil else { return }
-        scrollIntentMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            // Only when the content can actually scroll: over a fitting chat a
-            // wheel-up changes no geometry, so nothing would ever re-arm
-            // auto-follow — it would stay off until the next sent message.
-            if (event.window as? FloatingPanelWindow)?.role == .chat,
-               event.scrollingDeltaY > 0, !scrollContentFits {
-                isNearBottom = false // trackNearBottom re-arms it at the bottom
-            }
-            return event
-        }
-    }
-
     // MARK: - Panel keyboard control (Space / double-Space / Esc)
 
     /// While recording, Space stops (send after a short grace window) and a
@@ -1689,47 +1700,6 @@ private struct PendingAttachmentPreview: View {
         .task(id: attachment.id) {
             decodedImage = AttachmentImageCache.cachedImage(for: attachment)
             decodedImage = await AttachmentImageCache.image(for: attachment)
-        }
-    }
-}
-
-/// Scroll-position tracking with a macOS 14 fallback.
-private extension View {
-    /// Reports whether the scroll position is near the bottom (within ~80pt).
-    /// Uses `onScrollGeometryChange` on macOS 15+; on macOS 14 the callback
-    /// never fires, so `isNearBottom` keeps its default `true` — the view
-    /// simply always auto-follows new messages (and the "jump to latest"
-    /// button never shows).
-    @ViewBuilder
-    func trackNearBottom(_ onChange: @escaping (Bool) -> Void) -> some View {
-        if #available(macOS 15.0, *) {
-            self.onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.containerSize.height
-                    >= geometry.contentSize.height - 80
-            } action: { _, nearBottom in
-                onChange(nearBottom)
-            }
-        } else {
-            self
-        }
-    }
-
-    /// Reports whether the content fits the viewport (no scrolling possible).
-    /// The scroll-intent monitor uses it: a wheel-up over content that cannot
-    /// scroll must NOT disable auto-follow — nothing re-arms it afterwards
-    /// (the scroll geometry never changes), so the chat would silently stop
-    /// following until the next sent message. macOS 14 keeps the default
-    /// `true`, matching its always-follow behavior.
-    @ViewBuilder
-    func trackContentFits(_ onChange: @escaping (Bool) -> Void) -> some View {
-        if #available(macOS 15.0, *) {
-            self.onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentSize.height <= geometry.containerSize.height + 1
-            } action: { _, fits in
-                onChange(fits)
-            }
-        } else {
-            self
         }
     }
 }

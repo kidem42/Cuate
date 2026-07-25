@@ -11,6 +11,12 @@ struct MessageRow: View {
     /// fence never closed" (e.g. cut off by the max-tokens limit) — the
     /// latter must render as an openable card, not spin forever.
     var isStreamingReply: Bool = false
+    /// Live streaming buffer. When set, the assistant bubble renders the
+    /// growing reply from this model (frozen segments + cheap tail) instead
+    /// of `message.text` — and ONLY the text portion observes it, so a
+    /// stream flush re-lays-out nothing but the tail. `message` then only
+    /// contributes identity, timestamp and the bubble chrome.
+    var liveModel: StreamingReplyModel? = nil
 
     // Hover-to-copy (selecting across SwiftUI Text blocks is unreliable,
     // so whole-message copy is the primary affordance, like in Telegram)
@@ -83,8 +89,8 @@ struct MessageRow: View {
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
             // Synthwave's neon glow on the user bubble; nil → invisible.
             .shadow(color: palette.userGlow ?? .clear, radius: 7)
-            .modifier(CopyableBubble(text: message.text, isHovering: $isHovering, justCopied: $justCopied))
-            
+            .modifier(CopyableBubble(text: { message.text }, isHovering: $isHovering, justCopied: $justCopied))
+
             Text(formatTime(message.timestamp))
                 .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
                 .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
@@ -104,7 +110,12 @@ struct MessageRow: View {
 
                 assistantAttachmentsSection()
 
-                if message.messageType == .voice {
+                if let liveModel {
+                    StreamingReplyText(model: liveModel, linkColor: linkTint)
+                        .foregroundColor(bubbleTextColor)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.leading)
+                } else if message.messageType == .voice {
                     // Voice message from assistant (rare case, but supported)
                     if let audioURL = message.audioURL {
                         VoiceMessagePlayer(audioURL: audioURL, isUserMessage: false)
@@ -128,7 +139,9 @@ struct MessageRow: View {
             .padding(.vertical, 8)
             .modifier(ThemedBubble(palette: palette, isUser: false))
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
-            .modifier(CopyableBubble(text: message.text, isHovering: $isHovering, justCopied: $justCopied))
+            .modifier(CopyableBubble(
+                text: { [liveModel] in liveModel?.fullText ?? message.text },
+                isHovering: $isHovering, justCopied: $justCopied))
             
             Text(formatTime(message.timestamp))
                 .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
@@ -303,7 +316,10 @@ enum CopyLink {
 /// Markdown (cross-block text selection in SwiftUI is unreliable). Also
 /// intercepts taps on inline-code runs (CopyLink) — clicking `code` copies it.
 struct CopyableBubble: ViewModifier {
-    let text: String
+    /// Resolved at click time, not at body evaluation — the streaming bubble
+    /// re-renders only its text subtree per flush, so a captured String here
+    /// would go stale mid-stream.
+    let text: () -> String
     @Binding var isHovering: Bool
     @Binding var justCopied: Bool
 
@@ -350,7 +366,7 @@ struct CopyableBubble: ViewModifier {
     }
 
     private func copy() {
-        copyPayload(text)
+        copyPayload(text())
     }
 
     private func copyPayload(_ payload: String) {
