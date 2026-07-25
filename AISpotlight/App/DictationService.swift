@@ -41,6 +41,11 @@ final class DictationService: NSObject, ObservableObject {
     /// hardware spins up (~100–300 ms built-in, seconds on Bluetooth), so
     /// the user doesn't speak into a mic that isn't hearing yet.
     @Published private(set) var micReady = false
+    /// Warm-up capture retries used this session (see `retryCaptureDuringWarmup`).
+    private var captureRetries = 0
+    /// Bluetooth profile flaps can hold the input hostage for several
+    /// seconds; the growing backoff below spans ~8 s in total.
+    private static let maxCaptureRetries = 8
     /// Normalized 0…1 magnitudes of `MicCapture.bandCount` log-spaced voice
     /// bands — the pill's equalizer renders the REAL input spectrum.
     @Published private(set) var spectrum: [Float] = Array(repeating: 0, count: MicCapture.bandCount)
@@ -87,6 +92,7 @@ final class DictationService: NSObject, ObservableObject {
         capture.onCaptureStarted = { [weak self] in
             guard let self else { return }
             self.micReady = true
+            self.captureRetries = 0
             // The phrase timer starts when audio actually flows — hardware
             // spin-up must not eat into the minimum segment length.
             self.segmentStart = Date()
@@ -107,6 +113,10 @@ final class DictationService: NSObject, ObservableObject {
         }
         capture.onError = { [weak self] in
             guard let self, self.phase == .recording else { return }
+            // A start that failed before the first buffer is the same
+            // device-settling window as an early engine death — retry
+            // silently before giving up with a beep.
+            if self.retryCaptureDuringWarmup("start.error") { return }
             NSSound.beep()
             self.cancel()
         }
@@ -136,9 +146,16 @@ final class DictationService: NSObject, ObservableObject {
         // after the warm-up animation.
         capture.onEngineDied = { [weak self] in
             guard let self else { return }
-            if self.phase == .recording {
-                Task { @MainActor in await self.stopAndProcess() }
-            }
+            guard self.phase == .recording else { return }
+            // Death BEFORE the first buffer isn't a lost recording — it's a
+            // Bluetooth mic mid-profile-switch (A2DP↔HFP): the input appears,
+            // the engine starts, and ~100 ms later the device reconfigures
+            // under it (log signature: engine.start at 16 kHz → died in
+            // 130 ms, three sessions in a row). There is nothing to salvage,
+            // so keep the session alive in its warm-up state and retry until
+            // the device settles.
+            if self.retryCaptureDuringWarmup("engine.died") { return }
+            Task { @MainActor in await self.stopAndProcess() }
         }
     }
 
@@ -198,6 +215,7 @@ final class DictationService: NSObject, ObservableObject {
 
             chunkedMode = AppSettings.shared.dictationChunked
             sessionCancelled = false
+            captureRetries = 0
             processingChain = nil
             speechDetected = false
             silenceBegan = nil
@@ -212,6 +230,26 @@ final class DictationService: NSObject, ObservableObject {
             segmentStart = Date()
             capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
         }
+    }
+
+    /// While no real audio has arrived yet (`micReady == false`), a dead or
+    /// failed capture engine is treated as "the input device hasn't settled"
+    /// — the session stays in its warm-up state (pulsing dots) and capture
+    /// is retried with a growing delay instead of ending the session. Only
+    /// once the retries are spent does the failure surface. Returns whether
+    /// a retry was scheduled.
+    private func retryCaptureDuringWarmup(_ reason: String) -> Bool {
+        guard phase == .recording, !micReady,
+              captureRetries < Self.maxCaptureRetries else { return false }
+        captureRetries += 1
+        let delay = 0.3 + 0.15 * Double(captureRetries) // 0.45 s … 1.5 s
+        Diagnostics.log("dictation", "capture.retry #\(captureRetries) after \(reason)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.phase == .recording, !self.micReady,
+                  let url = self.fileURL else { return }
+            self.capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
+        }
+        return true
     }
 
     private static func segmentURL() -> URL {
