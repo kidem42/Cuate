@@ -10,7 +10,7 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **Voice input**
   - Speech-to-text via **Mistral (Voxtral)**, **OpenAI** or **Deepgram** — pick the provider in Settings → Voice
   - Voice messages in chat with playback
-  - System-wide **dictation**: press a hotkey in any text field, speak, and the transcribed text is typed for you phrase by phrase as you talk (chunked mode, on by default)
+  - System-wide **dictation**: press a hotkey in any text field, speak, and the transcribed text is typed for you phrase by phrase as you talk (chunked mode, on by default); capture survives Bluetooth headsets switching audio profiles mid-warm-up — the mic silently retries until the device settles
   - **Dictation with translation** into a target language on the fly — the pill under the notch shows the language's ISO badge; click it to switch the language mid-dictation
   - Optional LLM cleanup of transcribed text (punctuation, filler words)
 - **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
@@ -21,13 +21,14 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **Attach images** — paperclip button or paste with ⌘V (files, screenshots, browser images; HEIC/TIFF converted automatically); an image can be sent with no text at all — the active preset's prompt drives the handling
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
 - **OCR** — extract text from images **on-device for free** by default (Apple Vision; many languages incl. Cyrillic), or via **Mistral OCR** for layout-aware Markdown (tables/columns)
-- **Web access** — live search results (Brave Search API) plus a keyless **web_fetch** tool: the model reads a full page client-side (a promising search hit, or a URL you paste) — free, works with every provider, no key required, with private/local addresses blocked; externally sourced facts arrive with inline citations
+- **Web access** — live search results (Brave Search API) plus a keyless **web_fetch** tool: the model reads a full page client-side (a promising search hit, or a URL you paste) — free, works with every provider, no key required, with private/local addresses blocked; externally sourced facts arrive with inline citations. The **tool budget per reply is configurable** (Settings → Web access, 1–12 rounds), and when it runs out the model must finalize its answer from what it gathered instead of ending empty. For staged work the model can request **extra working rounds** on its own — the reply keeps growing in the same bubble, each round with a fresh tool budget
 - **Cost tracking** — token usage is captured from every provider (including cache hits/misses and reasoning tokens) and priced via a bundled per-token catalog with weekly refresh; Settings → Costs shows session/today/month totals, daily stacked charts by provider or model, per-provider breakdowns and a soft monthly budget with 80%/100% warnings (informative, never blocks)
 - **Run terminal commands** — shell commands in answers get a ▶ button next to Copy: by default it opens Terminal with the command already typed in and you press Enter yourself; an opt-in mode runs it immediately (macOS asks for the Automation permission once). Consecutive commands land in the same Terminal window, so multi-step flows read like one session
 - **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its **own isolated chat** (separate history, context and rolling summary) via the "Own chat" toggle in Settings → Prompts — switching presets swaps the conversation, and a reply that is still generating keeps streaming into its home chat in the background
 - **Artifacts** — ask for an interactive demo, visualization or a document, and the model returns a complete HTML page or Markdown document shown as a compact card in the chat (streaming progress included). Click the card for a preview window (⅔ of the screen): live interactive WKWebView for HTML, Notion-style rendered view for Markdown, a Code tab, copy, save to file and open-in-browser. Ask for changes and the revised document arrives as a new card — earlier versions stay openable in the history
 - **Diagrams** — ask for an architecture scheme, flow, sequence, state machine or pie breakdown and the model answers with a mermaid diagram rendered **natively inline in the chat**: offline (bundled mermaid, no CDN), retina-crisp snapshots, themed to the app (accent color, light/dark, colorblind-validated series palette). Click for a live preview with pinch-zoom and export to SVG (always light, document-ready) or PNG @3x. Invalid diagram source degrades gracefully to a code block with an error badge — never an error graphic in the chat
-- **Markdown rendering** with code blocks, tables, task lists (`- [ ]`), numbered lists and dividers in responses; copying a message with a table also puts a spreadsheet flavor on the clipboard, so a paste into Google Sheets / Excel / Numbers lands in real cells
+- **Markdown rendering** with code blocks, tables, task lists (`- [ ]`), numbered lists and dividers in responses; tables carry their own hover copy button, and copying a message or table also puts a spreadsheet flavor on the clipboard, so a paste into Google Sheets / Excel / Numbers lands in real cells
+- **Native chat transcript engine** — the message list is an AppKit scroll engine with row-level updates and an owned scroll offset: streamed replies grow smoothly at 30 Hz without re-rendering the list, auto-follow sticks to the bottom as an invariant (scroll up any time to read — streaming never yanks the view; a jump-to-latest button brings you back), history backfills without the viewport moving, and the panel always opens on the newest message
 - **Launch at login**, light/dark/system theme, UI in English, Spanish and Russian
 - **Android companion app** — the same multi-provider chat as a native Android app (Kotlin/Compose): providers, web search, voice messages, OCR, image tools, artifacts, themes and cost tracking; lives in [`android/`](android/README.md)
 
@@ -96,6 +97,7 @@ AISpotlight/
 ├── Providers/    # LLM/STT/OCR/search clients, settings, Keychain key store
 ├── Models/       # chat data models
 └── Views/        # SwiftUI: chat window, settings, onboarding, voice UI
+    └── Transcript/  # AppKit transcript engine: row-level updates, pin-to-bottom, streaming buffer
 android/          # Android companion app (Kotlin/Compose) — own README and build script
 docs/             # architecture reviews, research notes, tech debt
 scripts/
