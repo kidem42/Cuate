@@ -207,6 +207,7 @@ enum LayoutSmartFixer {
     @MainActor
     static func fix(_ text: String) async throws -> String {
         let settings = AppSettings.shared
+        await APIKeyStore.warmIfNeeded() // key lookups below are cache-only
 
         let provider: LLMProvider
         let model: String

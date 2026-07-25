@@ -30,6 +30,10 @@ enum ChatService {
         let settings = AppSettings.shared
         let providerID = settings.chatProvider
 
+        // Keys come from an in-memory cache filled off the main thread; this
+        // only awaits when a turn beats the launch warm to it. Never reads the
+        // Keychain on the main actor — that used to freeze the panel per send.
+        await APIKeyStore.warmIfNeeded()
         let apiKey = try settings.resolvedAPIKey(for: providerID)
         guard let model = settings.selectedModel(for: providerID) else {
             throw ProviderError.http(status: 0, message: "No model selected for \(providerID.displayName). Open Settings and load the model list.")
@@ -414,6 +418,7 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
     @MainActor
     static func compressHistoryIfNeeded(store: ChatStore) async {
         let settings = AppSettings.shared
+        await APIKeyStore.warmIfNeeded()
         guard let apiKey = try? settings.resolvedAPIKey(for: settings.chatProvider),
               let model = settings.selectedModel(for: settings.chatProvider) else { return }
 

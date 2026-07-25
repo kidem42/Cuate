@@ -5,16 +5,24 @@ import Foundation
 /// Security model:
 /// - Keys live exclusively in the macOS Keychain (device-only, non-syncing —
 ///   see `KeychainHelper.save`), never in `UserDefaults`, files, or logs.
-/// - Keys are read from the Keychain at request time and are not cached in
-///   observable app state; the UI only ever sees a masked representation.
+/// - The decrypted bundle is held in memory for the process lifetime (see
+///   `bundleCache`) and never reaches observable app state or the UI, which
+///   only ever sees a masked representation.
+///
+/// Why the values are cached rather than re-read per request: every Keychain
+/// read is a synchronous securityd IPC, and when the item's ACL no longer
+/// matches the running binary (which is the case after EVERY update — each
+/// build is re-signed) securityd wants to put an authorization dialog on
+/// screen and blocks the calling thread until it is answered. Reading at
+/// request time therefore froze the whole app on every message sent. The
+/// bundle is now read ONCE, off the main thread; the keys are in memory during
+/// a request anyway, so keeping them there for the session costs no real
+/// secrecy and removes the freeze entirely.
 ///
 /// Storage layout: ALL keys live in ONE keychain item (a JSON dictionary
-/// keyed by the account names below). Keychain ACLs pin each item to the
-/// exact signing identity, and with a self-signed certificate (no Team ID)
-/// the partition check re-prompts PER ITEM after every app update — one
-/// bundle item caps that at a single password prompt instead of seven.
+/// keyed by the account names below) — one ACL to authorize instead of seven.
 /// Pre-bundle per-key items are migrated in once (`migrationFlag`).
-enum APIKeyStore {
+nonisolated enum APIKeyStore {
     private static let service = "org.topassistant.AISpotlight.apikeys"
     /// Account of the single JSON-bundle item holding every key.
     private static let bundleAccount = "bundle"
@@ -27,25 +35,141 @@ enum APIKeyStore {
         ProviderID.allCases.map(\.rawValue) + AuxKey.allCases.map { "aux." + $0.rawValue }
     }
 
-    /// Serializes bundle read-modify-write cycles.
+    /// Guards every field below.
     private static let bundleLock = NSLock()
+    /// Decrypted keys, cached for the process lifetime. `nil` = never read yet.
+    private static var bundleCache: [String: String]?
+    private static var warmInFlight = false
+    private static var repairInFlight = false
+
+    /// Whether the keys have been read into memory (all sync accessors are
+    /// cache-only, so everything reports "no key" until this is true).
+    static var isWarm: Bool { bundleLock.withLock { bundleCache != nil } }
+
+    // MARK: - Warming
+
+    /// Fills the cache with ONE Keychain read. MUST be called off the main
+    /// thread. Idempotent, and a no-op once warm.
+    ///
+    /// If the read is refused because the item's ACL no longer matches this
+    /// build, it escalates to an interactive read — still off the main thread,
+    /// so macOS' dialog appears while the app stays fully responsive — and
+    /// rewrites the item afterwards so the ACL matches the current signature
+    /// and no later launch has to ask again.
+    static func warm() {
+        bundleLock.lock()
+        guard bundleCache == nil, !warmInFlight else { bundleLock.unlock(); return }
+        warmInFlight = true
+        bundleLock.unlock()
+
+        let result = readBundle(interactive: false)
+
+        bundleLock.lock()
+        warmInFlight = false
+        switch result {
+        case .success(let bundle):
+            bundleCache = bundle
+            bundleLock.unlock()
+        case .missing:
+            let migrated = migrateLegacyLocked()
+            bundleCache = migrated
+            bundleLock.unlock()
+        case .locked:
+            bundleLock.unlock()
+            Diagnostics.log("keys", "keychain needs authorization — asking in the background")
+            authorizeAndRepair()
+        }
+    }
+
+    /// Schedules `warm()` on a background queue. Safe to call from anywhere,
+    /// including a SwiftUI body.
+    static func warmInBackground() {
+        bundleLock.lock()
+        let needed = bundleCache == nil && !warmInFlight && !repairInFlight
+        bundleLock.unlock()
+        guard needed else { return }
+        DispatchQueue.global(qos: .userInitiated).async { warm() }
+    }
+
+    /// Awaits a warm cache without ever touching the Keychain on the caller's
+    /// thread — for request paths that must actually have the key in hand
+    /// (chat turn, transcription, OCR).
+    static func warmIfNeeded() async {
+        if isWarm { return }
+        // A GCD queue, not `Task.detached`: the module defaults to MainActor
+        // isolation, and a detached task's closure was still resumed ON the
+        // main thread — which put the blocking read right back where it hung
+        // (confirmed by a watchdog report against this very code).
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                warm()
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Asks for authorization once (off the main thread) and, on success,
+    /// rewrites the item so its ACL is rebuilt around the running binary.
+    private static func authorizeAndRepair() {
+        bundleLock.lock()
+        guard bundleCache == nil, !repairInFlight else { bundleLock.unlock(); return }
+        repairInFlight = true
+        bundleLock.unlock()
+
+        // Blocks on the system dialog — which is exactly why this must never
+        // run on the main thread.
+        let result = readBundle(interactive: true)
+
+        bundleLock.lock()
+        repairInFlight = false
+        guard case .success(let bundle) = result else {
+            bundleLock.unlock()
+            Diagnostics.log("keys", "keychain authorization declined — keys unavailable this session")
+            return
+        }
+        bundleCache = bundle
+        // A fresh delete+add from this binary re-creates the item's ACL around
+        // the current signature: the one dialog above is the last one.
+        let rewritten = saveBundleLocked(bundle)
+        bundleLock.unlock()
+
+        Diagnostics.log("keys", "keychain authorized — acl rebuilt=\(rewritten)")
+        DispatchQueue.main.async { notifyChange(invalidateCache: false) }
+    }
 
     // MARK: - Bundle storage
 
-    /// Loads the bundle; if it doesn't exist yet, performs the one-time
-    /// migration of legacy per-key items. Caller must hold `bundleLock`.
-    private static func loadBundleLocked() -> [String: String] {
-        if let data = KeychainHelper.load(service: service, account: bundleAccount),
-           let dict = try? JSONDecoder().decode([String: String].self, from: data) {
-            return dict
-        }
+    private enum BundleRead {
+        case success([String: String])
+        case missing
+        case locked
+    }
 
-        // No bundle yet — fold the legacy items in (may prompt once per item
-        // on an updated build; this is the last time that can happen).
+    private static func readBundle(interactive: Bool) -> BundleRead {
+        switch KeychainHelper.read(service: service, account: bundleAccount, interactive: interactive) {
+        case .success(let data):
+            guard let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
+                return .missing
+            }
+            return .success(dict)
+        case .notFound:
+            return .missing
+        case .interactionRequired:
+            return .locked
+        case .failure(let status):
+            Diagnostics.log("keys", "keychain read failed status=\(status)")
+            return .missing
+        }
+    }
+
+    /// Folds the pre-bundle per-key items into one bundle item. Reads stay
+    /// non-interactive: a legacy item we cannot read without a dialog is left
+    /// alone and retried on a later launch. Caller must hold `bundleLock`.
+    private static func migrateLegacyLocked() -> [String: String] {
         guard !UserDefaults.standard.bool(forKey: migrationFlag) else { return [:] }
         var migrated: [String: String] = [:]
         for account in legacyAccounts {
-            if let data = KeychainHelper.load(service: service, account: account),
+            if case .success(let data) = KeychainHelper.read(service: service, account: account),
                let key = String(data: data, encoding: .utf8), !key.isEmpty {
                 migrated[account] = key
             }
@@ -72,10 +196,18 @@ enum APIKeyStore {
         return KeychainHelper.save(service: service, account: bundleAccount, data: data)
     }
 
+    /// Cache-only read. SwiftUI bodies call this per evaluation, so it must
+    /// never wait on securityd: a cold cache reports "no key" and schedules a
+    /// background warm that republishes (`apiKeysDidChange`) when it lands.
     private static func value(account: String) -> String? {
         bundleLock.lock()
-        defer { bundleLock.unlock() }
-        guard let key = loadBundleLocked()[account], !key.isEmpty else { return nil }
+        let cached = bundleCache
+        bundleLock.unlock()
+        guard let cached else {
+            warmInBackground()
+            return nil
+        }
+        guard let key = cached[account], !key.isEmpty else { return nil }
         return key
     }
 
@@ -83,61 +215,35 @@ enum APIKeyStore {
     private static func setValue(_ newValue: String?, account: String) -> Bool {
         bundleLock.lock()
         defer { bundleLock.unlock() }
-        var bundle = loadBundleLocked()
+        if bundleCache == nil {
+            // An authorization dialog is up: its read holds the interaction
+            // lock, and waiting for it here would block whoever is saving
+            // (Settings, i.e. the main thread).
+            guard !repairInFlight else { return false }
+            switch readBundle(interactive: false) {
+            case .success(let bundle):
+                bundleCache = bundle
+            case .missing:
+                bundleCache = migrateLegacyLocked()
+            case .locked:
+                // Merging into a bundle we cannot read would drop every other
+                // provider's key, and asking here would block the UI. The
+                // launch-time repair owns that case.
+                return false
+            }
+        }
+        var bundle = bundleCache ?? [:]
         if let newValue {
             bundle[account] = newValue
         } else {
             bundle.removeValue(forKey: account)
         }
-        return saveBundleLocked(bundle)
+        guard saveBundleLocked(bundle) else { return false }
+        bundleCache = bundle
+        return true
     }
 
-    /// In-memory presence cache. SwiftUI bodies check key presence on every
-    /// render (e.g. per streamed token), and each Keychain round-trip is a
-    /// securityd IPC that can even block on an ACL prompt — reading the
-    /// Keychain from the render path froze the app for some users. Presence
-    /// is cached until any key changes; full key values are never cached.
-    private static var presenceCache: [String: Bool] = [:]
-    private static let presenceLock = NSLock()
-
-    private static func cachedPresence(_ account: String, compute: () -> Bool) -> Bool {
-        presenceLock.lock()
-        if let hit = presenceCache[account] {
-            presenceLock.unlock()
-            return hit
-        }
-        presenceLock.unlock()
-        let value = compute()
-        presenceLock.lock()
-        presenceCache[account] = value
-        presenceLock.unlock()
-        return value
-    }
-
-    private static func invalidatePresenceCache() {
-        presenceLock.lock()
-        presenceCache.removeAll()
-        presenceLock.unlock()
-    }
-
-    /// Pre-populates the presence cache with a SINGLE Keychain read — meant to
-    /// run OFF the main thread. The first key read of the session is a securityd
-    /// IPC that can block (locked keychain, or an ACL re-prompt after the app is
-    /// re-signed); doing it on the main thread at launch hung the app there.
-    /// Warming it in the background keeps launch responsive, and every later
-    /// `hasKey` is then a cache hit. Safe to call redundantly.
-    static func warmPresenceCache() {
-        bundleLock.lock()
-        let bundle = loadBundleLocked()
-        bundleLock.unlock()
-        let accounts = ProviderID.allCases.map(\.rawValue)
-            + AuxKey.allCases.map { "aux." + $0.rawValue }
-        presenceLock.lock()
-        for account in accounts {
-            presenceCache[account] = (bundle[account]?.isEmpty == false)
-        }
-        presenceLock.unlock()
-    }
+    // MARK: - Accessors
 
     static func key(for provider: ProviderID) -> String? {
         value(account: provider.rawValue)
@@ -160,11 +266,11 @@ enum APIKeyStore {
     }
 
     static func hasKey(for provider: ProviderID) -> Bool {
-        cachedPresence(provider.rawValue) { key(for: provider) != nil }
+        key(for: provider) != nil
     }
 
     static func hasKey(aux: AuxKey) -> Bool {
-        cachedPresence("aux." + aux.rawValue) { key(aux: aux) != nil }
+        key(aux: aux) != nil
     }
 
     /// Masked representation for the UI, e.g. "••••••••1a2b". Never expose the full key.
@@ -174,8 +280,14 @@ enum APIKeyStore {
         return "••••••••" + suffix
     }
 
-    private static func notifyChange() {
-        invalidatePresenceCache()
+    /// `invalidateCache: false` is for the authorization repair, which has just
+    /// FILLED the cache — dropping it there would send the app straight back to
+    /// the Keychain.
+    private static func notifyChange(invalidateCache: Bool = true) {
+        if invalidateCache {
+            bundleLock.withLock { bundleCache = nil }
+            warmInBackground()
+        }
         NotificationCenter.default.post(name: .apiKeysDidChange, object: nil)
     }
 
@@ -223,7 +335,8 @@ enum APIKeyStore {
 }
 
 extension Notification.Name {
-    static let apiKeysDidChange = Notification.Name("apiKeysDidChange")
+    /// `nonisolated`: posted from APIKeyStore's off-main warm/repair path.
+    nonisolated static let apiKeysDidChange = Notification.Name("apiKeysDidChange")
     static let panelPositionDidReset = Notification.Name("panelPositionDidReset")
     static let showOnboarding = Notification.Name("showOnboarding")
     static let selectSettingsTab = Notification.Name("selectSettingsTab")

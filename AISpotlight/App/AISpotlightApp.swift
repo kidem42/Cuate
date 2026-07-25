@@ -58,15 +58,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // version) so macOS can re-ask instead of silently failing.
         PermissionHealer.healIfNeeded()
 
-        // Warm up the active provider's model list so the saved selection is
-        // available immediately (otherwise it looks "reset" until Load Models).
-        // The key-presence check reads the Keychain, and the FIRST read of the
-        // session is a securityd IPC that can BLOCK — on a locked keychain, or
-        // an ACL re-prompt after the app is re-signed — which hung launch on the
-        // main thread (see hang reports). Do that first read off-main to warm the
-        // presence cache, then run the now non-blocking auto-load on the main actor.
+        // Read the Keychain ONCE, off the main thread, before anything asks for
+        // a key: every read is a securityd IPC that BLOCKS its thread, and after
+        // an update (each build is re-signed) it blocks on an authorization
+        // dialog — which is what froze launch and every message send. Off-main
+        // the dialog is answered with the app fully responsive, and the store
+        // rewrites the item afterwards so it is never asked again.
+        // Then warm the model list so the saved selection isn't shown as "reset".
         Task { @MainActor in
-            await Task.detached(priority: .userInitiated) { APIKeyStore.warmPresenceCache() }.value
+            await APIKeyStore.warmIfNeeded()
+            AppSettings.shared.resolveKeyDependentDefaults()
             AppSettings.shared.autoLoadModelsIfNeeded(for: AppSettings.shared.chatProvider)
         }
 

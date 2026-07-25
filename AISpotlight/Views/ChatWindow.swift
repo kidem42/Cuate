@@ -59,6 +59,8 @@ struct ChatWindow: View {
     @State private var lastAutoScroll = Date.distantPast
     @FocusState private var isInputFocused: Bool
     @State private var textEditorHeight: CGFloat = 27 // Default height for one line
+    /// Providers offered by the header switcher (see `refreshAvailableProviders`).
+    @State private var availableProviders: [ProviderID] = []
 
     /// Windowed history rendering: only the newest `visibleCount` messages
     /// live in the view tree, so the bottom-anchored layout lands on the
@@ -69,6 +71,8 @@ struct ChatWindow: View {
     @State private var visibleCount = ChatWindow.historyPageSize
     /// Guards against cascading backfills while one is restoring the scroll.
     @State private var isBackfilling = false
+    /// Pending collapse of the widened history window (see `scheduleWindowCollapse`).
+    @State private var collapseWork: DispatchWorkItem?
 
     /// Remembers the panel's content width across launches so the FIRST
     /// layout pass already uses the real bubble width — starting from the
@@ -269,6 +273,7 @@ struct ChatWindow: View {
                     .trackNearBottom { nearBottom in
                         if nearBottom {
                             isNearBottom = true
+                            scheduleWindowCollapse()
                         } else if Date().timeIntervalSince(lastAutoScroll) > 0.5 {
                             // Only a scroll-up that happens well after our own
                             // auto-scroll counts as the user leaving the bottom.
@@ -587,6 +592,7 @@ struct ChatWindow: View {
                     self.isInputFocused = true
                 }
             }
+            refreshAvailableProviders()
             self.pendingAttachment = appState.pendingAttachment
             installVoiceKeyMonitor()
             installScrollIntentMonitor()
@@ -609,6 +615,14 @@ struct ChatWindow: View {
                 scrollIntentMonitor = nil
             }
         }
+        // The switcher's provider list is state, not a body computation — keep
+        // it in step with the things it depends on.
+        .onReceive(NotificationCenter.default.publisher(for: .apiKeysDidChange)) { _ in
+            refreshAvailableProviders()
+        }
+        .onChange(of: settings.onlineModelsEnabled) { refreshAvailableProviders() }
+        .onChange(of: settings.localModelsEnabled) { refreshAvailableProviders() }
+        .onChange(of: settings.localEndpointVerified) { refreshAvailableProviders() }
         // Isolated preset chats: follow the active preset (panel switcher AND
         // the Settings picker) and react to the isolation toggle itself.
         .onChange(of: settings.activePresetName) {
@@ -667,8 +681,15 @@ struct ChatWindow: View {
 
     /// Chat providers that are ready to use (keyed cloud, or reachable local)
     /// and whose class is enabled — for the quick switcher.
-    private var availableProviders: [ProviderID] {
-        ProviderID.allCases.filter { settings.isAvailable($0) }
+    ///
+    /// Resolved into state instead of recomputed in `body`: the readiness check
+    /// consults the key store, and doing that per body evaluation put the
+    /// Keychain on the render path — the FIRST evaluation (which runs inside
+    /// `setupChatWindow`, before anything is on screen) blocked launch there
+    /// for seconds, or indefinitely behind an authorization dialog.
+    private func refreshAvailableProviders() {
+        let resolved = ProviderID.allCases.filter { settings.isAvailable($0) }
+        if resolved != availableProviders { availableProviders = resolved }
     }
 
     /// Shared look for the header controls: small icon + 11pt secondary text,
@@ -869,6 +890,39 @@ struct ChatWindow: View {
         }
     }
 
+    /// Shrinks the rendered window back to a single page once the user is
+    /// parked at the newest message again.
+    ///
+    /// Reading history widens the window a page at a time — and it used to stay
+    /// wide for the rest of the session, because nothing ever reset it. The
+    /// rows themselves stay cheap (a LazyVStack only builds what is near the
+    /// viewport — measured: +200 rows in the window cost ~3 MB), but the
+    /// per-item passes are not lazy: `updateItemPhases`, `measureEstimates` and
+    /// `applyNodes` walk EVERY item of the list on every transaction — and in
+    /// the field hang report those three are most of a main thread pinned at
+    /// 100% while a message was being sent. Bounding the list bounds that work.
+    /// The full history stays in the store (and in the API context); this is
+    /// purely how much of it is in the view tree, and scrolling up pages it
+    /// back in.
+    private func scheduleWindowCollapse() {
+        collapseWork?.cancel()
+        guard visibleCount > Self.historyPageSize else { return }
+        let work = DispatchWorkItem {
+            // Only while genuinely idle at the bottom of a scrollable chat: over
+            // content that FITS the viewport the backfill trigger is on screen,
+            // so collapsing would just re-trigger it in a loop.
+            guard isNearBottom, !isBackfilling, !scrollContentFits,
+                  !chatStore.isLoading, visibleCount > Self.historyPageSize else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                visibleCount = Self.historyPageSize
+            }
+        }
+        collapseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
+    }
+
     /// Stores the probed viewport width; persisted so the next launch's first
     /// layout starts from the real width instead of the fallback.
     private func updateContainerWidth(_ width: CGFloat) {
@@ -943,6 +997,11 @@ struct ChatWindow: View {
 
     /// Verifies the active chat provider is configured; posts a hint otherwise.
     private func ensureChatConfigured() -> Bool {
+        // Key lookups are cache-only. In the first moments of a session the
+        // cache may still be filling (or waiting on authorization), and
+        // answering "no key" there would be a lie — the send path awaits the
+        // warm and reports a real, specific error if the key is truly missing.
+        guard APIKeyStore.isWarm else { return true }
         guard settings.isAvailable(settings.chatProvider) else {
             chatStore.addMessage(text: L("panel.noProviderKey"), isUser: false, messageType: .system)
             return false

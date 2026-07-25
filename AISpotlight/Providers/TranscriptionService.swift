@@ -14,6 +14,9 @@ enum TranscriptionService {
         let settings = AppSettings.shared
         let preferred = settings.sttProvider
 
+        // Key lookups below are cache-only (never a securityd round trip on the
+        // main actor) — make sure the cache is filled first.
+        await APIKeyStore.warmIfNeeded()
         let candidates: [STTProviderID] = [preferred] + STTProviderID.allCases.filter { $0 != preferred }
         guard let provider = candidates.first(where: { $0.hasKey }),
               let apiKey = provider.apiKey else {

@@ -403,6 +403,7 @@ final class DictationService: NSObject, ObservableObject {
     /// Uses mistral-small when a Mistral key exists, otherwise the active chat model.
     private func postProcess(_ transcript: String) async throws -> String {
         let settings = AppSettings.shared
+        await APIKeyStore.warmIfNeeded() // key lookups below are cache-only
 
         let provider: LLMProvider
         let model: String

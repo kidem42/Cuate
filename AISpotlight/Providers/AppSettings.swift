@@ -805,6 +805,18 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
     /// Refreshes the model list for the active provider in the background when
     /// it hasn't been loaded yet, so the saved selection is shown and validated
     /// without the user pressing "Load Models". Best-effort — silent on failure.
+    /// Settled once the key cache is warm (see `APIKeyStore.warm`). `init` runs
+    /// long before the Keychain has been read, and key lookups are cache-only,
+    /// so a first-launch default derived from "does the user have a Mistral
+    /// key" would always resolve to "no" there — silently moving an existing
+    /// Mistral user to on-device OCR. Only ever fills in a default that has
+    /// never been stored, so an explicit choice is never touched.
+    func resolveKeyDependentDefaults() {
+        guard defaults.string(forKey: "ocrProvider") == nil else { return }
+        let resolved: OCRProviderID = APIKeyStore.hasKey(for: .mistral) ? .mistral : .apple
+        if resolved != ocrProvider { ocrProvider = resolved }
+    }
+
     func autoLoadModelsIfNeeded(for provider: ProviderID) {
         // Manual-entry providers (OpenRouter) have no list to auto-select from;
         // loading their list here would clobber the user-typed slug. Route them
