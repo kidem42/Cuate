@@ -9,6 +9,7 @@ import Charts
 struct CostsSettingsView: View {
     @ObservedObject private var store = SpendStore.shared
     @ObservedObject private var settings = AppSettings.shared // re-render on language change
+    @Environment(\.colorScheme) private var colorScheme
 
     private enum ChartDimension: String, CaseIterable, Identifiable {
         case provider, model
@@ -17,8 +18,15 @@ struct CostsSettingsView: View {
     @State private var chartDimension: ChartDimension = .provider
     /// Provider groups the user collapsed (all expanded by default).
     @State private var collapsedGroups: Set<String> = []
+    /// The series the pointer is on — a bar segment or a legend chip. The
+    /// chart and the legend dim everything else while it is set.
+    @State private var highlight: String?
 
     var body: some View {
+        // Built once per render and handed down: hovering re-renders the whole
+        // Form, and re-aggregating the ledger inside every computed property
+        // would make the pointer feel sticky.
+        let model = chartModel(colorScheme)
         Form {
             summarySection
             if store.selectedMonthRecords.isEmpty {
@@ -29,14 +37,15 @@ struct CostsSettingsView: View {
                         .padding(.vertical, 12)
                 }
             } else {
-                dailyChartSection
-                modelChartSection
-                breakdownSection
+                dailyChartSection(model)
+                modelChartSection(model)
+                breakdownSection(model)
             }
             budgetSection
         }
         .formStyle(.grouped)
         .onAppear { store.refresh() }
+        .onChange(of: chartDimension) { highlight = nil }
     }
 
     // MARK: - Summary
@@ -81,7 +90,7 @@ struct CostsSettingsView: View {
 
     // MARK: - Month picker + daily chart
 
-    private var dailyChartSection: some View {
+    private func dailyChartSection(_ model: ChartModel) -> some View {
         Section(L("costs.dailyChart")) {
             // Month selector lives IN the section body — form section headers
             // render it nearly invisible (small-caps, dimmed, swallows taps).
@@ -98,37 +107,100 @@ struct CostsSettingsView: View {
             .labelsHidden()
             .help(L("costs.dimensionHelp"))
 
-            if chartDimension == .provider {
-                Chart(dailySlices) { slice in
-                    BarMark(
-                        x: .value("Day", slice.day, unit: .day),
-                        y: .value("USD", slice.cost)
-                    )
-                    .foregroundStyle(by: .value("Provider", slice.label))
-                }
-                .chartForegroundStyleScale(domain: sliceLabels, range: sliceColors)
-                .chartLegend(position: .bottom, spacing: 6)
-                .chartXScale(domain: monthDomain)
-                .chartXAxis { dayAxisMarks }
-                .frame(height: 180)
-                .help(L("costs.dailyHelp"))
+            if model.slices.isEmpty {
+                Text(L("costs.empty")).foregroundStyle(.secondary)
             } else {
-                // Model palette is automatic — model sets vary too much for a
-                // fixed brand mapping.
-                Chart(dailySlices) { slice in
-                    BarMark(
-                        x: .value("Day", slice.day, unit: .day),
-                        y: .value("USD", slice.cost)
-                    )
-                    .foregroundStyle(by: .value("Model", slice.label))
-                }
-                .chartLegend(position: .bottom, spacing: 6)
-                .chartXScale(domain: monthDomain)
-                .chartXAxis { dayAxisMarks }
-                .frame(height: 180)
-                .help(L("costs.dailyHelp"))
+                dailyChart(model)
+                legend(model)
             }
         }
+    }
+
+    /// Both dimensions share one explicit palette. Segments are placed by hand
+    /// (`yStart`/`yEnd` instead of automatic stacking) for two reasons: the
+    /// stack order becomes ours — biggest series at the bottom, matching the
+    /// legend — and hit-testing a hover is then exact, since every segment
+    /// knows the value range it occupies.
+    private func dailyChart(_ model: ChartModel) -> some View {
+        Chart(model.slices) { slice in
+            BarMark(
+                x: .value("Day", slice.day, unit: .day),
+                yStart: .value("From", slice.start),
+                yEnd: .value("To", slice.end)
+            )
+            .foregroundStyle(by: .value("Series", slice.label))
+            .opacity(isLit(slice.label) ? 1 : 0.18)
+        }
+        .chartForegroundStyleScale(domain: model.order, range: model.order.map { model.color($0) })
+        .chartLegend(.hidden)   // replaced by `legend(_:)`, which can be hovered
+        .chartXScale(domain: monthDomain)
+        .chartXAxis { dayAxisMarks }
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        guard case .active(let point) = phase,
+                              let plot = proxy.plotFrame else { hover(nil); return }
+                        let origin = geo[plot].origin
+                        guard let date = proxy.value(atX: point.x - origin.x, as: Date.self),
+                              let value = proxy.value(atY: point.y - origin.y, as: Double.self)
+                        else { hover(nil); return }
+                        let day = Calendar.current.startOfDay(for: date)
+                        hover(model.slices.first {
+                            $0.day == day && value >= $0.start && value <= $0.end
+                        }?.label)
+                    }
+            }
+        }
+        .frame(height: 180)
+        .animation(.easeOut(duration: 0.12), value: highlight)
+        .help(L("costs.dailyHelp"))
+    }
+
+    /// Hoverable legend. The built-in one can't be hovered, and hovering a
+    /// series is exactly how the chart, this legend and the breakdown light up
+    /// together — so the legend is drawn by hand.
+    private func legend(_ model: ChartModel) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10, alignment: .leading)],
+                  alignment: .leading, spacing: 3) {
+            ForEach(model.order, id: \.self) { label in
+                let lit = isLit(label)
+                HStack(spacing: 5) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(model.color(label))
+                        .frame(width: 9, height: 9)
+                    Text(label)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(highlight != nil && lit ? Color.primary.opacity(0.08) : .clear)
+                )
+                .opacity(lit ? 1 : 0.4)
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    if inside { hover(label) } else if highlight == label { highlight = nil }
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: highlight)
+    }
+
+    // MARK: - Highlighting
+
+    /// `onContinuousHover` fires on every pointer move and each assignment
+    /// re-renders the Form — so only write on a real change.
+    private func hover(_ label: String?) {
+        if label != highlight { highlight = label }
+    }
+
+    private func isLit(_ label: String) -> Bool {
+        highlight == nil || highlight == label
     }
 
     /// Full span of the selected month. Without a fixed domain the chart
@@ -178,7 +250,7 @@ struct CostsSettingsView: View {
 
     // MARK: - Per-model chart
 
-    private var modelChartSection: some View {
+    private func modelChartSection(_ model: ChartModel) -> some View {
         Section(L("costs.byModel")) {
             let top = Array(modelLines.prefix(8))
             if top.isEmpty {
@@ -189,7 +261,10 @@ struct CostsSettingsView: View {
                         x: .value("USD", line.cost),
                         y: .value("Model", line.shortLabel)
                     )
-                    .foregroundStyle(providerColor(line.provider))
+                    // Same color the model (or its provider) carries in the
+                    // daily chart above and in the breakdown below.
+                    .foregroundStyle(model.color(seriesKey(line.provider, line.model),
+                                                 fallback: seriesFallback(line.provider, model)))
                     .annotation(position: .trailing, alignment: .leading) {
                         Text(SpendStore.usd(line.cost))
                             .font(.caption2)
@@ -205,12 +280,12 @@ struct CostsSettingsView: View {
 
     // MARK: - Breakdown (grouped by provider)
 
-    private var breakdownSection: some View {
+    private func breakdownSection(_ model: ChartModel) -> some View {
         Section(L("costs.breakdown")) {
             ForEach(providerGroups) { group in
                 DisclosureGroup(isExpanded: expansionBinding(group.id)) {
                     ForEach(group.chatLines) { line in
-                        modelRow(line)
+                        modelRow(line, model)
                     }
                     ForEach(group.serviceLines) { line in
                         LabeledContent {
@@ -224,7 +299,9 @@ struct CostsSettingsView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Circle().fill(providerColor(group.provider)).frame(width: 8, height: 8)
+                        Circle()
+                            .fill(seriesFallback(group.provider, model))
+                            .frame(width: 8, height: 8)
                         Text(group.label).fontWeight(.medium)
                         Spacer()
                         Text(SpendStore.usd(group.totalCost))
@@ -244,7 +321,7 @@ struct CostsSettingsView: View {
         }
     }
 
-    private func modelRow(_ line: ModelLine) -> some View {
+    private func modelRow(_ line: ModelLine, _ model: ChartModel) -> some View {
         LabeledContent {
             Text(line.hasPrice ? SpendStore.usd(line.cost) : L("costs.noPrice"))
                 .foregroundStyle(line.hasPrice ? .primary : .secondary)
@@ -289,12 +366,14 @@ struct CostsSettingsView: View {
 
     // MARK: - Aggregation
 
+    /// One stacked segment. `start`/`end` are the value range it occupies, so
+    /// the stack order is ours and a hover can be resolved exactly.
     private struct DaySlice: Identifiable {
-        let id = UUID()
+        var id: String { "\(day.timeIntervalSince1970)|\(label)" }
         let day: Date
         let label: String
-        let provider: String
-        let cost: Double
+        let start: Double
+        let end: Double
     }
 
     private struct ModelLine: Identifiable {
@@ -316,6 +395,8 @@ struct CostsSettingsView: View {
 
     private struct ServiceLine: Identifiable {
         let id: String
+        let provider: String
+        let model: String
         let label: String
         let detail: String
         let cost: Double
@@ -404,6 +485,7 @@ struct CostsSettingsView: View {
             }
             g.serviceLines.append(ServiceLine(
                 id: "\(key.provider)|\(key.kind.rawValue)|\(key.model)",
+                provider: key.provider, model: key.model,
                 label: label, detail: detail, cost: entry.cost
             ))
             g.totalCost += entry.cost
@@ -417,40 +499,132 @@ struct CostsSettingsView: View {
         return groups.values.sorted { $0.totalCost > $1.totalCost }
     }
 
-    /// Per-day slices for the stacked bar chart, keyed by the selected
-    /// dimension (provider or model). All kinds included.
-    private var dailySlices: [DaySlice] {
+    // MARK: - Chart model
+
+    /// Everything the daily chart, its legend and the highlighting need,
+    /// aggregated in a single pass over the month's ledger.
+    private struct ChartModel {
+        var slices: [DaySlice] = []
+        /// Legend and stack order — biggest series first, at the bottom.
+        var order: [String] = []
+        /// Series label → color, for the selected dimension.
+        var colors: [String: Color] = [:]
+        /// Provider id → color. Kept separately from `colors` because the
+        /// breakdown groups are provider-shaped whatever the chart is sliced
+        /// by, so their dots must not change color when the picker flips to
+        /// models. In provider mode the two maps hold the same colors.
+        var providerColors: [String: Color] = [:]
+
+        func color(_ label: String, fallback: Color = .gray) -> Color { colors[label] ?? fallback }
+        func providerTint(_ id: String) -> Color? { providerColors[id] }
+    }
+
+    private struct SeriesCell { var provider: String; var cost: Double }
+    private struct RankedSeries { let label: String; let cost: Double }
+
+    /// The series a record — or a breakdown row — belongs to under the
+    /// currently selected dimension.
+    private func seriesKey(_ provider: String, _ model: String) -> String {
+        switch chartDimension {
+        case .provider:
+            return providerLabel(provider)
+        case .model:
+            let bare = model.split(separator: "/").last.map(String.init) ?? model
+            return bare.isEmpty ? providerLabel(provider) : bare
+        }
+    }
+
+    private func chartModel(_ scheme: ColorScheme) -> ChartModel {
         let calendar = Calendar.current
-        var buckets: [String: (day: Date, label: String, provider: String, cost: Double)] = [:]
+        var totals: [String: SeriesCell] = [:]
+        var perDay: [Date: [String: SeriesCell]] = [:]
+        var providerTotals: [String: Double] = [:]
+
         for record in store.selectedMonthRecords {
             guard let cost = displayCost(record) ?? record.costUSD, cost > 0 else { continue }
-            let day = calendar.startOfDay(for: record.timestamp)
-            let label: String
+            let label = seriesKey(record.provider, record.model)
+            let blank = SeriesCell(provider: record.provider, cost: 0)
+            totals[label, default: blank].cost += cost
+            perDay[calendar.startOfDay(for: record.timestamp), default: [:]][label, default: blank].cost += cost
+            providerTotals[record.provider, default: 0] += cost
+        }
+
+        var model = ChartModel()
+
+        // Providers are coloured first and independently of the selected
+        // dimension, so a provider keeps one colour across every section.
+        var providers: [RankedSeries] = providerTotals.map { RankedSeries(label: $0.key, cost: $0.value) }
+        // Ties broken by name so the same month always paints the same way.
+        providers.sort {
+            $0.cost == $1.cost ? providerLabel($0.label) < providerLabel($1.label) : $0.cost > $1.cost
+        }
+        for (index, entry) in providers.enumerated() {
+            model.providerColors[entry.label] = Self.seriesColor(index, scheme)
+        }
+
+        var ranked: [RankedSeries] = totals.map { RankedSeries(label: $0.key, cost: $0.value.cost) }
+        ranked.sort { $0.cost == $1.cost ? $0.label < $1.label : $0.cost > $1.cost }
+        model.order = ranked.map(\.label)
+
+        // One colour per series, assigned by rank and NEVER reused. In provider
+        // mode the series ARE the providers, so the palette above is reused
+        // verbatim rather than recomputed — the chart and the breakdown dots
+        // then cannot drift apart.
+        for (index, entry) in ranked.enumerated() {
             switch chartDimension {
-            case .provider: label = providerLabel(record.provider)
+            case .provider:
+                let id = totals[entry.label]?.provider ?? entry.label
+                model.colors[entry.label] = model.providerColors[id]
             case .model:
-                let bare = record.model.split(separator: "/").last.map(String.init) ?? record.model
-                label = bare.isEmpty ? providerLabel(record.provider) : bare
+                model.colors[entry.label] = Self.seriesColor(index, scheme)
             }
-            let key = "\(day.timeIntervalSince1970)|\(label)"
-            var bucket = buckets[key] ?? (day, label, record.provider, 0)
-            bucket.cost += cost
-            buckets[key] = bucket
         }
-        return buckets.values.map {
-            DaySlice(day: $0.day, label: $0.label, provider: $0.provider, cost: $0.cost)
+
+        for (day, cells) in perDay {
+            var base = 0.0
+            for label in model.order {
+                guard let cell = cells[label], cell.cost > 0 else { continue }
+                model.slices.append(DaySlice(day: day, label: label,
+                                             start: base, end: base + cell.cost))
+                base += cell.cost
+            }
         }
-        .sorted { $0.day < $1.day }
+        model.slices.sort { $0.day < $1.day }
+        return model
     }
 
-    private var sliceLabels: [String] {
-        var seen = Set<String>()
-        return dailySlices.compactMap { seen.insert($0.label).inserted ? $0.label : nil }
-    }
+    // MARK: - Series palette
 
-    private var sliceColors: [Color] {
-        var seen = Set<String>()
-        return dailySlices.compactMap { seen.insert("c\($0.label)").inserted ? providerColor($0.provider) : nil }
+    /// The first eight series get these fixed hues: a hand-picked order,
+    /// stepped separately for the two surfaces so the marks stay inside the
+    /// readable lightness band in both, and validated for colour-vision
+    /// deficiency on ADJACENT pairs — in a stack those are the pairs that
+    /// actually touch.
+    private static let categoricalLight: [Color] = [
+        Color(hex: 0x2A78D6), Color(hex: 0xEB6834), Color(hex: 0x1BAF7A), Color(hex: 0xEDA100),
+        Color(hex: 0xE87BA4), Color(hex: 0x008300), Color(hex: 0x4A3AA7), Color(hex: 0xE34948),
+    ]
+    private static let categoricalDark: [Color] = [
+        Color(hex: 0x3987E5), Color(hex: 0xD95926), Color(hex: 0x199E70), Color(hex: 0xC98500),
+        Color(hex: 0xD55181), Color(hex: 0x008300), Color(hex: 0x9085E9), Color(hex: 0xE66767),
+    ]
+
+    /// Color for the series ranked `index` by spend. Past the fixed hues the
+    /// palette keeps generating instead of wrapping around: the hue advances by
+    /// the golden angle so consecutive series land far apart on the wheel, and
+    /// saturation/brightness step every full turn so even a long tail stays
+    /// distinguishable. Wrapping is what made two models share a color before.
+    private static func seriesColor(_ index: Int, _ scheme: ColorScheme) -> Color {
+        let fixed = scheme == .dark ? categoricalDark : categoricalLight
+        if index < fixed.count { return fixed[index] }
+        let step = index - fixed.count
+        // 0.381966 = golden angle / 360°; the offset starts the tail on a hue
+        // the fixed slots don't already occupy.
+        let hue = (0.07 + Double(step) * 0.381966).truncatingRemainder(dividingBy: 1)
+        let ring = (step / 6) % 3
+        return Color(hue: hue,
+                     saturation: [0.68, 0.92, 0.48][ring],
+                     brightness: scheme == .dark ? [0.86, 0.72, 0.95][ring] : [0.74, 0.60, 0.84][ring])
     }
 
     // MARK: - Helpers
@@ -459,6 +633,13 @@ struct CostsSettingsView: View {
         ProviderID(rawValue: raw)?.displayName ?? raw.capitalized
     }
 
+    /// The provider's color from the month's palette, or its brand color when
+    /// the provider spent nothing this month and so never got a slot.
+    private func seriesFallback(_ provider: String, _ model: ChartModel) -> Color {
+        model.providerTint(provider) ?? providerColor(provider)
+    }
+
+    /// Brand color — the last resort for a provider outside the month's data.
     private func providerColor(_ raw: String) -> Color {
         if let id = ProviderID(rawValue: raw) { return Color(hex: id.brandColorHex) }
         switch raw {

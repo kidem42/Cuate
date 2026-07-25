@@ -134,7 +134,7 @@ struct MarkdownBlocksView: View {
             MermaidBlockView(code: code, complete: complete || !isStreaming)
 
         case .table(let rows):
-            tableView(rows)
+            TableBlockView(rows: rows, linkColor: linkColor)
         }
     }
 
@@ -279,33 +279,67 @@ struct MarkdownBlocksView: View {
         }
     }
 
-    @ViewBuilder
-    private func tableView(_ rows: [[String]]) -> some View {
-        let columnCount = rows.map(\.count).max() ?? 0
-        ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
-                    GridRow {
-                        ForEach(0..<columnCount, id: \.self) { column in
-                            let cell = column < row.count ? row[column] : ""
-                            MarkdownText(cell, linkColor: linkColor)
-                                .font(.system(size: 12, weight: rowIndex == 0 ? .semibold : .regular))
+    /// Pipe table as a real grid, with a copy button revealed on hover. The
+    /// button is deliberately the only copy affordance here — a tap-to-copy
+    /// over the whole card (the way code blocks work) would fight the table's
+    /// own text selection and links.
+    private struct TableBlockView: View {
+        let rows: [[String]]
+        let linkColor: Color
+        @State private var justCopied = false
+        @State private var isHovering = false
+        @Environment(\.themePalette) private var palette
+
+        var body: some View {
+            let columnCount = rows.map(\.count).max() ?? 0
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
+                        GridRow {
+                            ForEach(0..<columnCount, id: \.self) { column in
+                                let cell = column < row.count ? row[column] : ""
+                                MarkdownText(cell, linkColor: linkColor)
+                                    .font(.system(size: 12, weight: rowIndex == 0 ? .semibold : .regular))
+                            }
+                        }
+                        if rowIndex == 0 {
+                            Divider()
+                                .gridCellUnsizedAxes(.horizontal)
                         }
                     }
-                    if rowIndex == 0 {
-                        Divider()
-                            .gridCellUnsizedAxes(.horizontal)
-                    }
                 }
+                .padding(10)
+                // Keeps the button clear of the last header cell.
+                .padding(.trailing, 14)
             }
-            .padding(10)
+            .background(palette.isGlass ? Color.secondary.opacity(0.08) : palette.ink.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(palette.isGlass ? Color.secondary.opacity(0.18) : palette.ink.opacity(0.22), lineWidth: 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    MarkdownBlocksView.copyTableToPasteboard(rows)
+                    withAnimation { justCopied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        withAnimation { justCopied = false }
+                    }
+                } label: {
+                    Image(systemName: justCopied ? "checkmark" : "tablecells")
+                        .font(.system(size: 10))
+                        .foregroundColor(justCopied ? .green : .secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(isHovering || justCopied ? 1 : 0)
+                .help(L("tooltip.copyTable"))
+            }
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.12)) { isHovering = hovering }
+            }
         }
-        .background(palette.isGlass ? Color.secondary.opacity(0.08) : palette.ink.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(palette.isGlass ? Color.secondary.opacity(0.18) : palette.ink.opacity(0.22), lineWidth: 1)
-        )
     }
 
     // MARK: - Parsing
@@ -563,6 +597,59 @@ struct MarkdownBlocksView: View {
         } else {
             pasteboard.setString(markdown, forType: .string)
         }
+    }
+
+    /// Copies ONE table in every flavor a paste target might want, on a single
+    /// pasteboard item — no "copy as…" menu, one click serves both:
+    ///   • `.string`      — the pipe table, so editors and chats get something
+    ///                      a human can read;
+    ///   • `.tabularText` — TSV, which is what Numbers and most CSV importers
+    ///                      ask for first;
+    ///   • `.html`        — a real `<table>`, which is what Sheets and Excel
+    ///                      prefer and the only flavor that keeps headers.
+    /// Ragged rows are padded to the widest one so the columns stay aligned in
+    /// every flavor.
+    static func copyTableToPasteboard(_ rows: [[String]]) {
+        let width = rows.map(\.count).max() ?? 0
+        guard width > 0 else { return }
+        let padded = rows.map { $0 + Array(repeating: "", count: width - $0.count) }
+
+        var markdown: [String] = []
+        for (index, row) in padded.enumerated() {
+            // A literal pipe inside a cell would split it into two columns.
+            markdown.append("| " + row.map { $0.replacingOccurrences(of: "|", with: "\\|") }
+                .joined(separator: " | ") + " |")
+            if index == 0 { markdown.append("|" + String(repeating: " --- |", count: width)) }
+        }
+
+        let tsv = padded.map { $0.map(plainCell).joined(separator: "\t") }.joined(separator: "\n")
+
+        var html = "<meta charset=\"utf-8\"><table>"
+        for (index, row) in padded.enumerated() {
+            let tag = index == 0 ? "th" : "td"
+            html += "<tr>" + row.map { "<\(tag)>\(inlineHTML($0))</\(tag)>" }.joined() + "</tr>"
+        }
+        html += "</table>"
+
+        let item = NSPasteboardItem()
+        item.setString(markdown.joined(separator: "\n"), forType: .string)
+        item.setString(tsv, forType: .tabularText)
+        item.setString(html, forType: .html)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([item])
+    }
+
+    /// Cell text stripped of inline markdown — a spreadsheet cell should read
+    /// `Итого`, not `**Итого**`. Tabs and newlines are flattened to spaces:
+    /// either one would silently shift every later column of the TSV.
+    private static func plainCell(_ text: String) -> String {
+        var s = text.replacingOccurrences(
+            of: #"\[([^\]]+)\]\((https?://[^)\s]+)\)"#, with: "$1", options: .regularExpression)
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "`", with: "")
+        return s.replacingOccurrences(of: "\t", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
     }
 
     /// HTML flavor for the copy button: spreadsheets (Google Sheets, Excel,

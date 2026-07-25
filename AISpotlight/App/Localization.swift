@@ -204,6 +204,8 @@ enum Localization {
         // MARK: Web
         "web.header": [.english: "Web Access", .spanish: "Acceso web", .russian: "Доступ в интернет"],
         "web.allow": [.english: "Allow web access (search & page reading)", .spanish: "Permitir acceso web (búsqueda y lectura de páginas)", .russian: "Разрешить доступ в интернет (поиск и чтение страниц)"],
+        "web.toolBudget": [.english: "Tool calls per reply", .spanish: "Llamadas a herramientas por respuesta", .russian: "Вызовов инструментов на ответ"],
+        "web.toolBudgetHelp": [.english: "How many rounds of tool calls (web search, page reads, calendar) one reply may spend. When the budget runs out, the model must write its final answer from what it has gathered. Higher values help data-hungry asks (stats, tables) but cost more tokens.", .spanish: "Cuántas rondas de herramientas (búsqueda, lectura de páginas, calendario) puede gastar una respuesta. Al agotarse, el modelo debe escribir la respuesta final con lo reunido. Valores altos ayudan con datos (estadísticas, tablas) pero cuestan más tokens.", .russian: "Сколько раундов инструментов (веб-поиск, чтение страниц, календарь) может потратить один ответ. Когда бюджет исчерпан, модель обязана написать финальный ответ из собранного. Больше — лучше для запросов данных (статистика, таблицы), но дороже по токенам."],
         "web.brave": [.english: "Brave Search", .spanish: "Brave Search", .russian: "Brave Search"],
         "web.pasteBrave": [.english: "Paste Brave API key", .spanish: "Pega la clave de Brave", .russian: "Вставьте ключ Brave"],
         "web.footer": [.english: "With a Brave Search API key, every chat model gains a web_search tool and can look up current information on its own. Free tier: api-dashboard.search.brave.com", .spanish: "Con una clave de Brave Search, cada modelo obtiene una herramienta web_search y puede buscar información actual por sí mismo. Plan gratuito: api-dashboard.search.brave.com", .russian: "С ключом Brave Search каждая модель получает инструмент web_search и может сама искать актуальную информацию. Бесплатный тариф: api-dashboard.search.brave.com"],
@@ -372,6 +374,7 @@ enum Localization {
         "tooltip.dictation.stop": [.english: "Click or press the dictation hotkey to stop", .spanish: "Haz clic o pulsa el atajo de dictado para detener", .russian: "Клик или хоткей диктовки — остановить"],
         "tooltip.dictation.language": [.english: "Translation language — click to change", .spanish: "Idioma de traducción — haz clic para cambiar", .russian: "Язык перевода — клик, чтобы сменить"],
         "copy.copied": [.english: "Copied", .spanish: "Copiado", .russian: "Скопировано"],
+        "tooltip.copyTable": [.english: "Copy table (text and spreadsheet cells)", .spanish: "Copiar tabla (texto y celdas)", .russian: "Скопировать таблицу (текстом и ячейками)"],
         "tooltip.tapToCopy": [.english: "Click to copy", .spanish: "Haz clic para copiar", .russian: "Клик — скопировать"],
         "tooltip.insertIntoTerminal": [.english: "Insert into Terminal — press Enter there to run", .spanish: "Insertar en Terminal — pulsa Intro allí para ejecutar", .russian: "Вставить в Терминал — выполнение по Enter"],
         "tooltip.runInTerminal": [.english: "Run in Terminal", .spanish: "Ejecutar en Terminal", .russian: "Выполнить в Терминале"],
