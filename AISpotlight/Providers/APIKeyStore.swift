@@ -70,10 +70,18 @@ nonisolated enum APIKeyStore {
         case .success(let bundle):
             bundleCache = bundle
             bundleLock.unlock()
+            // Republish now that the cache is real: every sync accessor
+            // answered "no key" while cold, so UI computed from them (the
+            // panel's provider switcher) is stale until told otherwise.
+            // The ACL-repair path below always posted; this silent-success
+            // path never did — with a STABLE signing identity (no repair on
+            // relaunch) that left the switcher hidden after every launch.
+            DispatchQueue.main.async { notifyChange(invalidateCache: false) }
         case .missing:
             let migrated = migrateLegacyLocked()
             bundleCache = migrated
             bundleLock.unlock()
+            DispatchQueue.main.async { notifyChange(invalidateCache: false) }
         case .locked:
             bundleLock.unlock()
             Diagnostics.log("keys", "keychain needs authorization — asking in the background")

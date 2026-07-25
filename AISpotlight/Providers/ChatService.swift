@@ -16,7 +16,6 @@ enum ChatService {
         case toolContext(String)
     }
 
-    private static let maxToolIterations = 4
 
     // MARK: - Streaming with the agent loop
 
@@ -105,6 +104,10 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
             }
         }
 
+        // Snapshotted per turn: a mid-stream Settings change applies to the
+        // NEXT reply, not the one already running its agent loop.
+        let maxToolIterations = max(1, settings.maxToolIterations)
+
         let supportsVision = settings.modelSupportsVision(provider: providerID, model: model)
         let initialMessages = try await buildMessages(
             from: history,
@@ -156,7 +159,31 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                         }
                         receivedChars += turnText.count
 
-                        guard !toolCalls.isEmpty, iteration <= maxToolIterations else { break }
+                        guard !toolCalls.isEmpty else { break }
+
+                        if iteration > maxToolIterations {
+                            // Tool budget exhausted mid-hunt. Breaking here
+                            // used to end the turn SILENTLY — a data-hungry
+                            // request (charts, tables of stats) could burn
+                            // every iteration on searches and the user got
+                            // "(empty reply)". Instead: answer the pending
+                            // calls with a budget notice, take the tools
+                            // away, and run ONE final turn so the model must
+                            // write its answer from what it already gathered.
+                            Diagnostics.log("chat", "tool budget exhausted — forcing final answer")
+                            messages.append(LLMMessage(role: .assistant, text: turnText, toolCalls: toolCalls))
+                            for call in toolCalls {
+                                messages.append(LLMMessage(
+                                    role: .tool,
+                                    text: "Tool budget for this turn is exhausted. Do not request more tools — write the final answer now from the information already gathered.",
+                                    toolCallID: call.id,
+                                    toolName: call.name
+                                ))
+                            }
+                            options.tools = []
+                            continuation.yield(.status(L("panel.thinking")))
+                            continue
+                        }
 
                         // Record the assistant turn with its calls, execute the
                         // tools, and loop for the follow-up turn.

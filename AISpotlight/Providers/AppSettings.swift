@@ -205,6 +205,13 @@ final class AppSettings: ObservableObject {
 
     // MARK: - Web search
 
+    /// Rounds of tool calls (web search, page reads, calendar) the model may
+    /// spend on ONE reply before it is forced to write the final answer.
+    /// Data-hungry asks (stats, charts) may want more than the default 4.
+    @Published var maxToolIterations: Int {
+        didSet { defaults.set(maxToolIterations, forKey: "maxToolIterations") }
+    }
+
     @Published var webSearchEnabled: Bool {
         didSet { defaults.set(webSearchEnabled, forKey: "webSearchEnabled") }
     }
@@ -506,6 +513,7 @@ Interactive HTML: when the user asks for an interactive demo, visualization, sim
 Diagrams: when structure is best shown as a diagram (architecture, flow, sequence, state machine, ER model, org chart, timeline, pie shares), emit mermaid source in a ```mermaid fenced block; the app renders it as a native diagram with export. Mermaid validity rules: first line is the diagram type (flowchart TD, sequenceDiagram, stateDiagram-v2, erDiagram, gantt, pie); one statement per line; keep node labels short; wrap any label containing punctuation, parentheses, slashes or non-Latin text in double quotes, e.g. A["Оплата (карта)"]; never use HTML tags or <br/> inside labels; no markdown emphasis inside the block. For charts of numeric data (bar, line, scatter) prefer an interactive ```html page with inline SVG/JS instead.
 Markdown documents: when the user asks for a document as a deliverable file (README, article, report, spec, notes), put the FULL document inside a single ````markdown fenced block (four backticks, so code samples inside the document keep their own ``` fences). Start the document with a # heading — it becomes the card title. The app shows it as a card with a rendered preview and save. Ordinary answers stay plain markdown in the reply, NOT fenced.
 Revising a document: when the user asks for changes to an HTML page or Markdown document you produced earlier, re-emit the COMPLETE updated document in the same fenced format with the same title (unless asked to rename) — never reply with only the changed fragment or a diff. Each reply's card is a full standalone version; earlier versions stay openable in the chat above.
+Do the work in THIS reply — the turn ends when you stop, and nothing runs afterwards. If the task needs your tools, call them now. When one reply is genuinely not enough (tool budget spent, staged work remains), write the part you completed and end the message with the marker <continue/> as the last line: the app immediately grants you another working round with a fresh tool budget, and your next text continues the same message. Deliver the final round WITHOUT the marker. Never end a reply with only a plan and neither a result nor <continue/>.
 """
 
     /// The editable working copy of the system prompt.
@@ -580,6 +588,9 @@ Revising a document: when the user asks for changes to an HTML page or Markdown 
         maxTokens = defaults.object(forKey: "maxTokens") as? Int ?? 16384
         localMaxTokens = defaults.object(forKey: "localMaxTokens") as? Int ?? 0
         webSearchEnabled = defaults.object(forKey: "webSearchEnabled") as? Bool ?? true
+        // Default matches the previous hardcoded cap — existing setups keep
+        // their behavior until the user touches the new control.
+        maxToolIterations = defaults.object(forKey: "maxToolIterations") as? Int ?? 4
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         theme = AppTheme(rawValue: defaults.string(forKey: "appTheme") ?? "") ?? .current
         holidayThemes = defaults.object(forKey: "holidayThemes") as? Bool ?? true

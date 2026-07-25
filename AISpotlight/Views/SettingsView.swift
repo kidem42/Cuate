@@ -538,6 +538,19 @@ struct SettingsView: View {
         Section {
             Toggle(L("web.allow"), isOn: $settings.webSearchEnabled)
 
+            // Per-reply tool budget: how many rounds of search/fetch/calendar
+            // calls one answer may spend before the model must finalize.
+            Stepper(value: $settings.maxToolIterations, in: 1...12) {
+                HStack {
+                    Text(L("web.toolBudget"))
+                    Spacer()
+                    Text("\(settings.maxToolIterations)")
+                        .monospacedDigit()
+                        .foregroundColor(.secondary)
+                }
+            }
+            .help(L("web.toolBudgetHelp"))
+
             VStack(alignment: .leading, spacing: 4) {
             HStack {
                 HStack(spacing: 6) {
