@@ -1,4 +1,4 @@
-# AISpotlight
+# Cuate
 
 A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floating chat panel with your favorite LLM — plus voice dictation, screenshots-to-chat, OCR and web search.
 
@@ -50,12 +50,12 @@ All hotkeys are configurable in Settings → General.
 
 Requires **macOS 14 (Sonoma) or newer**; the binary is universal (Apple Silicon + Intel). On macOS 26+ the panel renders with Liquid Glass; on older systems it falls back to the standard translucent material.
 
-1. Download `AISpotlight-<version>.dmg` from [Releases](https://github.com/kidem42/AISpotlight/releases)
-2. Drag **AISpotlight** to the **Applications** folder
+1. Download `Cuate-<version>.dmg` from [Releases](https://github.com/kidem42/Cuate/releases)
+2. Drag **Cuate** to the **Applications** folder
 3. The build is signed with a self-signed certificate (not notarized), so before the first launch remove the quarantine flag:
 
    ```bash
-   xattr -dr com.apple.quarantine /Applications/AISpotlight.app
+   xattr -dr com.apple.quarantine /Applications/Cuate.app
    ```
 
    This is needed once. If the DMG arrived without a browser download (AirDrop, USB drive, `curl`), there is no quarantine flag and the app opens right away.
@@ -73,9 +73,9 @@ On first run the onboarding walks you through the essentials:
 Requirements: Xcode 26+ (for the macOS 26 SDK); the app itself runs on macOS 14+.
 
 ```bash
-git clone https://github.com/kidem42/AISpotlight.git
-cd AISpotlight
-open AISpotlight.xcodeproj   # build & run the AISpotlight scheme
+git clone https://github.com/kidem42/Cuate.git
+cd Cuate
+open Cuate.xcodeproj   # build & run the Cuate scheme
 ```
 
 ### Packaging a DMG
@@ -85,12 +85,12 @@ open AISpotlight.xcodeproj   # build & run the AISpotlight scheme
 SKIP_BUILD=1 ./scripts/make-dmg.sh # repackage without rebuilding
 ```
 
-The script builds a universal Release (arm64 + x86_64), signs the app with the "AISpotlight Signing" self-signed certificate (falls back to ad-hoc if absent; the stable identity keeps TCC permissions across updates), generates a Retina drag-to-Applications window and produces `build/AISpotlight-<version>.dmg`. No external tools required.
+The script builds a universal Release (arm64 + x86_64), signs the app with the "Cuate Signing" self-signed certificate (falls back to ad-hoc if absent; the stable identity keeps TCC permissions across updates), generates a Retina drag-to-Applications window and produces `build/Cuate-<version>.dmg`. No external tools required.
 
 ## Project structure
 
 ```text
-AISpotlight/
+Cuate/
 ├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots, terminal runner
 ├── Addons/       # self-contained addons (LayoutFix layout fixer, ImageAddon image tools, CalendarAddon events/reminders, WorldTimeAddon timezone grid)
 ├── Diagnostics/  # in-app logging and hang watchdog
@@ -112,7 +112,7 @@ scripts/
 
 ## License
 
-AISpotlight is licensed under the **[GNU AGPL-3.0](LICENSE)** © 2026 Pavel Kravets.
+Cuate is licensed under the **[GNU AGPL-3.0](LICENSE)** © 2026 Pavel Kravets.
 
 You may use, study, modify and share it — **including commercially — only if** any
 distributed or network-deployed version is also released as open source under the
@@ -121,6 +121,6 @@ improvement to it open.
 
 - **Contributions** are welcome under the [Contributor License Agreement](CLA.md);
   see [CONTRIBUTING](CONTRIBUTING.md).
-- **Commercial / proprietary license** — to use AISpotlight without the AGPL's
+- **Commercial / proprietary license** — to use Cuate without the AGPL's
   source-disclosure obligations, a commercial license is available from the
   author: kravec42@gmail.com.

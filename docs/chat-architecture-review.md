@@ -1,4 +1,4 @@
-# AISpotlight — архитектурный разбор чатов, сессий, истории и автоскролла
+# Cuate — архитектурный разбор чатов, сессий, истории и автоскролла
 
 **Версия кода:** 2.13
 **Дата разбора:** 2026-07-18
@@ -9,16 +9,16 @@
 
 ## 0. Главный вывод по зависанию (коррекция к README-hang-investigation)
 
-Внешний briefing (`README - AISpotlight-hang-investigation.md`) поставил механизм верно (квадратичная перекладка `LazyVStack` в SwiftUI). Его тезис «нет windowing» был **верен для шипнутой 2.13, которая и зависла** — там `ForEach(chatStore.messages)` рендерил всю историю.
+Внешний briefing (`README - Cuate-hang-investigation.md`) поставил механизм верно (квадратичная перекладка `LazyVStack` в SwiftUI). Его тезис «нет windowing» был **верен для шипнутой 2.13, которая и зависла** — там `ForEach(chatStore.messages)` рендерил всю историю.
 
 **Важный нюанс версий:** windowing (`visibleCount`, `historyPageSize=30`, бэкфилл) — это **незакоммиченный WIP в рабочем дереве (2.14)**, его ещё нет в релизе. То есть:
-- Рекомендация №1 из README («window the data») уже реализована в 2.14: [ChatWindow.swift:55-63](../AISpotlight/Views/ChatWindow.swift#L55-L63), [ChatWindow.swift:165](../AISpotlight/Views/ChatWindow.swift#L165).
+- Рекомендация №1 из README («window the data») уже реализована в 2.14: [ChatWindow.swift:55-63](../Cuate/Views/ChatWindow.swift#L55-L63), [ChatWindow.swift:165](../Cuate/Views/ChatWindow.swift#L165).
 - **Но windowing сам по себе зависание не устраняет** — потому что окно ограничивает *число* сообщений, а не их *размер* (мегабайтные inline-картинки), и не трогает два реальных усилителя ниже. Именно поэтому нужны P0-1 и P0-3.
 
 **Почему зависло на самом деле** — два реальных усилителя, которых нет в README:
 
 1. **Окно ограничивает число сообщений, но не их размер.** 30-сообщенное окно может содержать несколько мегабайтных сообщений. Один огромный markdown разворачивается в гигантское поддерево SwiftUI (см. §4).
-2. **`GeometryReader` оборачивает весь скролл и прокидывает ширину в каждый ряд.** [ChatWindow.swift:146-168](../AISpotlight/Views/ChatWindow.swift#L146-L168): `maxBubbleWidth: max(320, geo.size.width * 0.75)` попадает в **каждый** `MessageRow`. Когда проснулся внешний монитор, геометрия окна изменилась → `geo.size.width` изменилась → инвалидировались body **всех** видимых рядов → полная переверстка уже-огромного дерева. Это и есть мост между триггером (reconfigure дисплея) и усилителем.
+2. **`GeometryReader` оборачивает весь скролл и прокидывает ширину в каждый ряд.** [ChatWindow.swift:146-168](../Cuate/Views/ChatWindow.swift#L146-L168): `maxBubbleWidth: max(320, geo.size.width * 0.75)` попадает в **каждый** `MessageRow`. Когда проснулся внешний монитор, геометрия окна изменилась → `geo.size.width` изменилась → инвалидировались body **всех** видимых рядов → полная переверстка уже-огромного дерева. Это и есть мост между триггером (reconfigure дисплея) и усилителем.
 
 Подтверждение из дампа памяти: `MALLOC_SMALL = 5.9 ГБ` при `ImageIO = 16 МБ` (`footprint.txt`). То есть память сожрана **миллионами мелких refcounted-объектов вью-дерева/AttributeGraph**, а не картинками. Это ровно сигнатура «огромное число subview/DisplayList.Item», а не «тяжёлые вложения».
 
@@ -32,44 +32,44 @@
 
 Вывод: доминирующий вектор раздувания — **inline-картинки, а не длинный markdown**. Поэтому:
 - **P0-2 (лимит размера текста) переклассифицирован в необязательный** — на реальных данных не срабатывает и был единственной *видимой* правкой; снят.
-- Всплывает **P0-3: картинка декодируется на каждую переоценку `body`** — `attachment.data` (вычисляемое, base64-декод при каждом обращении: [ChatModels.swift:30-34](../AISpotlight/Models/ChatModels.swift#L30)) дергается в `AttachmentPreviewBubble.body` вместе с `NSImage(data:)` без кеша: [MessageRow.swift:373-390](../AISpotlight/Views/MessageRow.swift#L373). При шторме переверстки (GeometryReader) каждая итерация передекодирует многомегабайтную картинку; даже hover (`isHovering` → re-render) декодирует заново.
+- Всплывает **P0-3: картинка декодируется на каждую переоценку `body`** — `attachment.data` (вычисляемое, base64-декод при каждом обращении: [ChatModels.swift:30-34](../Cuate/Models/ChatModels.swift#L30)) дергается в `AttachmentPreviewBubble.body` вместе с `NSImage(data:)` без кеша: [MessageRow.swift:373-390](../Cuate/Views/MessageRow.swift#L373). При шторме переверстки (GeometryReader) каждая итерация передекодирует многомегабайтную картинку; даже hover (`isHovering` → re-render) декодирует заново.
 
 ---
 
 ## 1. Карта архитектуры (как устроено на самом деле)
 
 ### 1.1 Модель данных
-- `ChatMessage` — `struct`, `Codable`, `Identifiable` со **стабильным** `UUID id` (хорошо): [ChatModels.swift:44-67](../AISpotlight/Models/ChatModels.swift#L44).
-- `ChatAttachment` — inline `base64: String` **или** файловый `fileURLString`: [ChatModels.swift:7-41](../AISpotlight/Models/ChatModels.swift#L7).
+- `ChatMessage` — `struct`, `Codable`, `Identifiable` со **стабильным** `UUID id` (хорошо): [ChatModels.swift:44-67](../Cuate/Models/ChatModels.swift#L44).
+- `ChatAttachment` — inline `base64: String` **или** файловый `fileURLString`: [ChatModels.swift:7-41](../Cuate/Models/ChatModels.swift#L7).
 - `ChatStore: ObservableObject`, `@Published var messages: [ChatMessage]` — единый источник правды для UI и API-контекста.
 
 ### 1.2 Персистентность
-- Формат: **монолитный JSON на разговор** (`PersistedChat { messages, conversationSummary, summaryCoversCount }`): [ChatModels.swift:196-200](../AISpotlight/Models/ChatModels.swift#L196).
-- Файлы: `chat.json` (общий) + `chat-<sha256(name).prefix16>.json` на изолированный пресет: [ChatModels.swift:112-131](../AISpotlight/Models/ChatModels.swift#L112).
-- Всё дисковое I/O — на одной последовательной очереди `diskQueue` (qos .utility): [ChatModels.swift:159](../AISpotlight/Models/ChatModels.swift#L159). **Хорошо** (порядок flush→load сохраняется).
-- Сохранение — дебаунс 1.0 с, снапшот берётся в момент планирования: [ChatModels.swift:455-469](../AISpotlight/Models/ChatModels.swift#L455). Кодирование/запись — на фоне. **Хорошо**, но каждый save сериализует **всю** историю целиком (см. §5, P1).
-- Загрузка — асинхронно с диска, с media-retention (удаление вложений/записей старше N дней) и guard по `loadGeneration` от гонок переключения: [ChatModels.swift:319-390](../AISpotlight/Models/ChatModels.swift#L319). **Хорошо.**
+- Формат: **монолитный JSON на разговор** (`PersistedChat { messages, conversationSummary, summaryCoversCount }`): [ChatModels.swift:196-200](../Cuate/Models/ChatModels.swift#L196).
+- Файлы: `chat.json` (общий) + `chat-<sha256(name).prefix16>.json` на изолированный пресет: [ChatModels.swift:112-131](../Cuate/Models/ChatModels.swift#L112).
+- Всё дисковое I/O — на одной последовательной очереди `diskQueue` (qos .utility): [ChatModels.swift:159](../Cuate/Models/ChatModels.swift#L159). **Хорошо** (порядок flush→load сохраняется).
+- Сохранение — дебаунс 1.0 с, снапшот берётся в момент планирования: [ChatModels.swift:455-469](../Cuate/Models/ChatModels.swift#L455). Кодирование/запись — на фоне. **Хорошо**, но каждый save сериализует **всю** историю целиком (см. §5, P1).
+- Загрузка — асинхронно с диска, с media-retention (удаление вложений/записей старше N дней) и guard по `loadGeneration` от гонок переключения: [ChatModels.swift:319-390](../Cuate/Models/ChatModels.swift#L319). **Хорошо.**
 
 ### 1.3 «Сессии» / истории
 - Понятия «список прошлых бесед» **нет**. Есть ровно: общий чат + по одному чату на *изолированный* пресет.
-- «Новый чат» = `clearMessages()` + приветствие: [ChatWindow.swift:632-635](../AISpotlight/Views/ChatWindow.swift#L632). `clearMessages()` **безвозвратно** удаляет сообщения **и файлы медиа**: [ChatModels.swift:547-567](../AISpotlight/Models/ChatModels.swift#L547).
-- Переключение беседы «на месте» (тот же объект `ChatStore`, наблюдатели живы), ответ в полёте не прерывается — до-стримливается в фоне и доставляется в свою беседу: [ChatModels.swift:215-253](../AISpotlight/Models/ChatModels.swift#L215), [ChatWindow.swift:804-921](../AISpotlight/Views/ChatWindow.swift#L804). Это **сильная**, аккуратно сделанная часть.
+- «Новый чат» = `clearMessages()` + приветствие: [ChatWindow.swift:632-635](../Cuate/Views/ChatWindow.swift#L632). `clearMessages()` **безвозвратно** удаляет сообщения **и файлы медиа**: [ChatModels.swift:547-567](../Cuate/Models/ChatModels.swift#L547).
+- Переключение беседы «на месте» (тот же объект `ChatStore`, наблюдатели живы), ответ в полёте не прерывается — до-стримливается в фоне и доставляется в свою беседу: [ChatModels.swift:215-253](../Cuate/Models/ChatModels.swift#L215), [ChatWindow.swift:804-921](../Cuate/Views/ChatWindow.swift#L804). Это **сильная**, аккуратно сделанная часть.
 
 ### 1.4 Контекст для модели (сжатие)
-- Скользящее окно + rolling summary: при превышении порога старые ходы сворачиваются в резюме тем же моделью: [ChatService.swift:188-257](../AISpotlight/Providers/ChatService.swift#L188).
-- Порог `compressionTokenThreshold = 6000`, `keepRecentCount = 8`, оценка токенов = `chars/4`: [ChatService.swift:191-198](../AISpotlight/Providers/ChatService.swift#L191).
-- Картинки прикрепляются только к последнему пользовательскому сообщению (контроль токенов): [ChatService.swift:145-186](../AISpotlight/Providers/ChatService.swift#L145). **Соответствует best practice.**
+- Скользящее окно + rolling summary: при превышении порога старые ходы сворачиваются в резюме тем же моделью: [ChatService.swift:188-257](../Cuate/Providers/ChatService.swift#L188).
+- Порог `compressionTokenThreshold = 6000`, `keepRecentCount = 8`, оценка токенов = `chars/4`: [ChatService.swift:191-198](../Cuate/Providers/ChatService.swift#L191).
+- Картинки прикрепляются только к последнему пользовательскому сообщению (контроль токенов): [ChatService.swift:145-186](../Cuate/Providers/ChatService.swift#L145). **Соответствует best practice.**
 
 ### 1.5 Стриминг ответа
-- Чанки **коалесцируются** перед записью в store (флуш ~8 Гц / 120 мс), чтобы не переиздавать `messages` и не перепарсить markdown на каждый токен: [ChatWindow.swift:816-874](../AISpotlight/Views/ChatWindow.swift#L816). Комментарий сам признаёт риск `O(answer²)`. **Хорошо, что коалесцируется**, но квадратичность остаётся в пределах секунды (см. §4).
-- Агентный tool-loop (web search, до 4 итераций): [ChatService.swift:67-135](../AISpotlight/Providers/ChatService.swift#L67).
+- Чанки **коалесцируются** перед записью в store (флуш ~8 Гц / 120 мс), чтобы не переиздавать `messages` и не перепарсить markdown на каждый токен: [ChatWindow.swift:816-874](../Cuate/Views/ChatWindow.swift#L816). Комментарий сам признаёт риск `O(answer²)`. **Хорошо, что коалесцируется**, но квадратичность остаётся в пределах секунды (см. §4).
+- Агентный tool-loop (web search, до 4 итераций): [ChatService.swift:67-135](../Cuate/Providers/ChatService.swift#L67).
 
 ### 1.6 Автоскролл
-- `.defaultScrollAnchor(.bottom)` — верстка сразу «у низа»: [ChatWindow.swift:203](../AISpotlight/Views/ChatWindow.swift#L203).
-- Трекинг «у дна» через `onScrollGeometryChange` (macOS 15+), с фолбэком на macOS 14: [ChatWindow.swift:1234-1254](../AISpotlight/Views/ChatWindow.swift#L1234).
-- Монитор намерения скролла (колесо вверх = «читаю историю», гасит авто-следование): [ChatWindow.swift:1081-1096](../AISpotlight/Views/ChatWindow.swift#L1081).
-- Три режима скролла (`glide`/`follow`/`instant`): [ChatWindow.swift:706-745](../AISpotlight/Views/ChatWindow.swift#L706).
-- Бэкфилл вверх с удержанием якорного ряда: [ChatWindow.swift:689-704](../AISpotlight/Views/ChatWindow.swift#L689).
+- `.defaultScrollAnchor(.bottom)` — верстка сразу «у низа»: [ChatWindow.swift:203](../Cuate/Views/ChatWindow.swift#L203).
+- Трекинг «у дна» через `onScrollGeometryChange` (macOS 15+), с фолбэком на macOS 14: [ChatWindow.swift:1234-1254](../Cuate/Views/ChatWindow.swift#L1234).
+- Монитор намерения скролла (колесо вверх = «читаю историю», гасит авто-следование): [ChatWindow.swift:1081-1096](../Cuate/Views/ChatWindow.swift#L1081).
+- Три режима скролла (`glide`/`follow`/`instant`): [ChatWindow.swift:706-745](../Cuate/Views/ChatWindow.swift#L706).
+- Бэкфилл вверх с удержанием якорного ряда: [ChatWindow.swift:689-704](../Cuate/Views/ChatWindow.swift#L689).
 
 Автоскролл — **продуманная и в целом качественная** подсистема; правок по существу почти не требует (мелочи в §5).
 
@@ -84,7 +84,7 @@
 - ✅ Фоновое до-стримливание ответа при переключении пресета и доставка в «родную» беседу.
 - ✅ Коалесинг стрим-чанков (не переиздаём стор на каждый токен).
 - ✅ Rolling summary + sliding window для контекста; картинки только у последнего user-сообщения.
-- ✅ Общий `NSDataDetector` (не пересоздаётся на каждый рендер): [MessageRow.swift:341-344](../AISpotlight/Views/MessageRow.swift#L341).
+- ✅ Общий `NSDataDetector` (не пересоздаётся на каждый рендер): [MessageRow.swift:341-344](../Cuate/Views/MessageRow.swift#L341).
 
 Это заметно выше среднего для pet-/indie-проекта. Проблемы сосредоточены в **двух местах**: рендер одного сообщения и модель хранения/сессий.
 
@@ -95,45 +95,45 @@
 ### P0 — прямые причины зависания
 
 **P0-1. `GeometryReader` на корне скролла прокидывает ширину в каждый ряд.**
-[ChatWindow.swift:146-171](../AISpotlight/Views/ChatWindow.swift#L146). Любое изменение геометрии (пробуждение/подключение монитора, ресайз окна, вход в фуллскрин, Mission Control) → пересчёт `maxBubbleWidth` → инвалидация body **всех** видимых рядов → полная переверстка. Это подтверждённый мост «reconfigure дисплея → 14-минутный спин».
+[ChatWindow.swift:146-171](../Cuate/Views/ChatWindow.swift#L146). Любое изменение геометрии (пробуждение/подключение монитора, ресайз окна, вход в фуллскрин, Mission Control) → пересчёт `maxBubbleWidth` → инвалидация body **всех** видимых рядов → полная переверстка. Это подтверждённый мост «reconfigure дисплея → 14-минутный спин».
 *Фикс:* убрать `GeometryReader` с обёртки скролла. Ширину пузыря задавать через `.containerRelativeFrame(.horizontal)` на ряду, либо снять ширину контейнера один раз в `@State` через `onGeometryChange` и не протаскивать её в каждый `MessageRow` как параметр, меняющийся на каждом тике геометрии.
 
 **P0-3. Картинка декодируется на каждую переоценку `body` (нет кеша).** *(подтверждено локальными данными — §0.1)*
-`attachment.data` base64-декодирует всю строку при каждом обращении ([ChatModels.swift:30-34](../AISpotlight/Models/ChatModels.swift#L30)), а `AttachmentPreviewBubble.body` дергает `attachment.data` + `NSImage(data:)` без кеша: [MessageRow.swift:373-390](../AISpotlight/Views/MessageRow.swift#L373). Каждая переверстка/hover многомегабайтной картинки = полный передекод. В шторме переверстки от P0-1 это и есть дорогая итерация цикла.
+`attachment.data` base64-декодирует всю строку при каждом обращении ([ChatModels.swift:30-34](../Cuate/Models/ChatModels.swift#L30)), а `AttachmentPreviewBubble.body` дергает `attachment.data` + `NSImage(data:)` без кеша: [MessageRow.swift:373-390](../Cuate/Views/MessageRow.swift#L373). Каждая переверстка/hover многомегабайтной картинки = полный передекод. В шторме переверстки от P0-1 это и есть дорогая итерация цикла.
 *Фикс (UX-невидимо):* кешировать декодированный `NSImage` в `@State`/по `attachment.id`; не вызывать `attachment.data` в `body`.
 
 **P0-2 (необязательно / снято). Лимит размера рендера одного сообщения.**
-`MarkdownBlocksView.parse` бьёт текст на блоки без верхней границы: [MarkdownBlocksView.swift:181-305](../AISpotlight/Views/MarkdownBlocksView.swift#L181). Актуально только если у пользователя реально есть мегабайтные *текстовые* сообщения — на машине разработчика таких нет (§0.1). Единственная *видимая* правка («Показать полностью»), поэтому по умолчанию **не внедряем**; при необходимости — порог настолько высокий (~50 КБ), что в норме не срабатывает.
+`MarkdownBlocksView.parse` бьёт текст на блоки без верхней границы: [MarkdownBlocksView.swift:181-305](../Cuate/Views/MarkdownBlocksView.swift#L181). Актуально только если у пользователя реально есть мегабайтные *текстовые* сообщения — на машине разработчика таких нет (§0.1). Единственная *видимая* правка («Показать полностью»), поэтому по умолчанию **не внедряем**; при необходимости — порог настолько высокий (~50 КБ), что в норме не срабатывает.
 
 ### P1 — архитектурные пробелы (данные и сессии)
 
 **P1-1. Пользовательские вложения всегда пишутся inline-base64 в тот же JSON.**
-`attach()` кладёт `base64: data.base64EncodedString()` без файлового бэкинга: [ChatWindow.swift:993-999](../AISpotlight/Views/ChatWindow.swift#L993). File-backed путь (`fileURLString`) поддержан моделью и используется **только** ImageAddon: [ImageOperations.swift:252](../AISpotlight/Addons/ImageAddon/Core/ImageOperations.swift#L252). Именно inline-картинки раздувают `chat.json` до 22 МБ у пользователя. Каждая загрузка декодирует весь файл; каждый save — переэнкодит весь base64.
+`attach()` кладёт `base64: data.base64EncodedString()` без файлового бэкинга: [ChatWindow.swift:993-999](../Cuate/Views/ChatWindow.swift#L993). File-backed путь (`fileURLString`) поддержан моделью и используется **только** ImageAddon: [ImageOperations.swift:252](../Cuate/Addons/ImageAddon/Core/ImageOperations.swift#L252). Именно inline-картинки раздувают `chat.json` до 22 МБ у пользователя. Каждая загрузка декодирует весь файл; каждый save — переэнкодит весь base64.
 *Фикс:* и пользовательские/вставленные картинки писать на диск (`images/<uuid>`), в JSON держать только `fileURLString`. Это же решает и раздувание, и стоимость save/load.
 
 **P1-2. Каждый save/merge переписывает всю беседу целиком.**
-`scheduleSave`/`flushPendingSave` кодируют весь `messages`: [ChatModels.swift:455-494](../AISpotlight/Models/ChatModels.swift#L455). `mergeMessage`/`deleteConversationData` **читают и переписывают весь файл** ради одного сообщения: [ChatModels.swift:269-312](../AISpotlight/Models/ChatModels.swift#L269). Для 22-МБ беседы доставка одного фонового ответа = чтение+запись 22 МБ. O(история) на каждую мутацию.
+`scheduleSave`/`flushPendingSave` кодируют весь `messages`: [ChatModels.swift:455-494](../Cuate/Models/ChatModels.swift#L455). `mergeMessage`/`deleteConversationData` **читают и переписывают весь файл** ради одного сообщения: [ChatModels.swift:269-312](../Cuate/Models/ChatModels.swift#L269). Для 22-МБ беседы доставка одного фонового ответа = чтение+запись 22 МБ. O(история) на каждую мутацию.
 *Фикс (стратегический):* перейти на SQLite/SwiftData/Core Data с построчным хранением и оконной выборкой; медиа — вне БД. Это же снимает «22 МБ парсятся в объекты на старте».
 
 **P1-3. Нет списка бесед; «Новый чат» деструктивен и необратим.**
-`startNewChat → clearMessages` немедленно удаляет сообщения и **файлы медиа**, без архива/undo/подтверждения: [ChatWindow.swift:632](../AISpotlight/Views/ChatWindow.swift#L632), [ChatModels.swift:547-567](../AISpotlight/Models/ChatModels.swift#L547). В коде даже есть «отступ, чтобы мисклик не стёр чат» ([ChatWindow.swift:135](../AISpotlight/Views/ChatWindow.swift#L135)) — признание риска. Против индустрии (ChatGPT/Claude/Telegram хранят прошлые беседы) это заметный пробел UX/архитектуры.
+`startNewChat → clearMessages` немедленно удаляет сообщения и **файлы медиа**, без архива/undo/подтверждения: [ChatWindow.swift:632](../Cuate/Views/ChatWindow.swift#L632), [ChatModels.swift:547-567](../Cuate/Models/ChatModels.swift#L547). В коде даже есть «отступ, чтобы мисклик не стёр чат» ([ChatWindow.swift:135](../Cuate/Views/ChatWindow.swift#L135)) — признание риска. Против индустрии (ChatGPT/Claude/Telegram хранят прошлые беседы) это заметный пробел UX/архитектуры.
 *Фикс:* при «новом чате» — архивировать текущую беседу как отдельную сессию (список бесед в сайдбаре), а не стирать. Минимум — подтверждение/undo и не удалять медиа сразу.
 
 ### P2 — производительность рендера и мелочи
 
 **P2-1. `parse()`/`renderMarkdown()` вызываются внутри `body`.**
-[MarkdownBlocksView.swift:23-24](../AISpotlight/Views/MarkdownBlocksView.swift#L23), [MessageRow.swift:293-339](../AISpotlight/Views/MessageRow.swift#L293) — перепарс на каждую переоценку body (каждый тик геометрии, каждый флуш стрима растущего пузыря). Для стрима это `O(answer²)`/сек (коалесинг лишь ограничивает, но не убирает).
+[MarkdownBlocksView.swift:23-24](../Cuate/Views/MarkdownBlocksView.swift#L23), [MessageRow.swift:293-339](../Cuate/Views/MessageRow.swift#L293) — перепарс на каждую переоценку body (каждый тик геометрии, каждый флуш стрима растущего пузыря). Для стрима это `O(answer²)`/сек (коалесинг лишь ограничивает, но не убирает).
 *Фикс:* мемоизировать разбор по ключу `id+text` (кэш вне body / прекомпьют в модели ряда).
 
 **P2-2. `Block.id { UUID() }` — свежий UUID на каждый доступ.**
-[MarkdownBlocksView.swift:20](../AISpotlight/Views/MarkdownBlocksView.swift#L20). Сейчас безвреден лишь потому, что `ForEach` использует `id: \.offset`. Латентный «footgun» — при любом переходе на `id: \.id` даст полную потерю идентити на каждом кадре.
+[MarkdownBlocksView.swift:20](../Cuate/Views/MarkdownBlocksView.swift#L20). Сейчас безвреден лишь потому, что `ForEach` использует `id: \.offset`. Латентный «footgun» — при любом переходе на `id: \.id` даст полную потерю идентити на каждом кадре.
 *Фикс:* убрать вычисляемый `UUID()` (стабильный индекс/хэш контента).
 
 **P2-3. `.fixedSize(horizontal:false, vertical:true)` на каждом `MarkdownText`.**
-[MessageRow.swift:295](../AISpotlight/Views/MessageRow.swift#L295). Форсирует полное измерение высоты — при полной переверстке умножает стоимость на высоких блоках.
+[MessageRow.swift:295](../Cuate/Views/MessageRow.swift#L295). Форсирует полное измерение высоты — при полной переверстке умножает стоимость на высоких блоках.
 *Фикс:* оценивать высоту лениво там, где можно; для очень длинных — идёт в связке с P0-2.
 
-**P2-4. Мелочь автоскролла.** Ряд таймингов на `DispatchQueue.main.asyncAfter(0.05/0.1)` для скролла после верстки ([ChatWindow.swift:244](../AISpotlight/Views/ChatWindow.swift#L244), [262](../AISpotlight/Views/ChatWindow.swift#L262)) — прагматично, но хрупко. Не дефект, но кандидат на переход к явным сигналам верстки. `visibleCount` не сбрасывается на `startNewChat` (косметика: `suffix` всё равно ограничит).
+**P2-4. Мелочь автоскролла.** Ряд таймингов на `DispatchQueue.main.asyncAfter(0.05/0.1)` для скролла после верстки ([ChatWindow.swift:244](../Cuate/Views/ChatWindow.swift#L244), [262](../Cuate/Views/ChatWindow.swift#L262)) — прагматично, но хрупко. Не дефект, но кандидат на переход к явным сигналам верстки. `visibleCount` не сбрасывается на `startNewChat` (косметика: `suffix` всё равно ограничит).
 
 ---
 
@@ -195,7 +195,7 @@
 1. Взять `chat.json` пользователя (или синтезировать беседу с 1–2 сообщениями по ~2–5 МБ markdown/inline-картинок).
 2. Открыть панель, дождаться верстки.
 3. Изменить геометрию: подключить/разбудить внешний монитор, либо ресайз окна / фуллскрин / Mission Control.
-4. `sample AISpotlight 5` во время залипания — ожидаемо тот же стек (`LazySubviewPlacements` / `updatePrefetchPhases` / `_consumeAndCreateNew`).
+4. `sample Cuate 5` во время залипания — ожидаемо тот же стек (`LazySubviewPlacements` / `updatePrefetchPhases` / `_consumeAndCreateNew`).
 5. Повторить после фикса P0-1 (снятие GeometryReader) — переверстка на геометрию должна перестать трогать все ряды.
 
 ---
@@ -230,7 +230,7 @@
 Мелочи: кэш DateFormatter в `MessageRow`; `merge` переносит вложения/аудио; fallback у `ModelContainer`
 (retry → in-memory) вместо `try!`; локализованы захардкоженные строки панели; мониторы снимаются в `onDisappear`;
 удалён мёртвый код (`appendChunk`, `handledAutoStopToken`); ретеншн медиа выполняется на стороне store
-(затрагивает и строки вне окна); тестовый хук `AISPOTLIGHT_DATA_DIR` для e2e-песочницы.
+(затрагивает и строки вне окна); тестовый хук `CUATE_DATA_DIR` для e2e-песочницы.
 
 **Ретеншн-политика хранения текста:** сообщения не удаляются никогда (медиа — по `mediaRetentionDays`);
 окно — только про то, что загружено в память.
@@ -326,7 +326,7 @@ merge, ретеншн, ранняя отправка, переключения, 
 дедуп повторных поисков, кросс-чатовая память о пользователе.
 
 **E2E (2026-07-19):** харнесс пересобран (реальные `ChatModels`/`ChatPersistence`, песочница
-`AISPOTLIGHT_DATA_DIR`): сид хранилища кодом схемы 3.3 из HEAD → открытие новой схемой.
+`CUATE_DATA_DIR`): сид хранилища кодом схемы 3.3 из HEAD → открытие новой схемой.
 25 проверок: лёгкая миграция (целостность сообщений/summary/вложений, новые колонки = nil),
 round-trip `ocrText` при неизменных ID вложений, `toolContext` через sync и merge (insert +
 update без дублей), JSON-совместимость (старый формат декодится, новые ключи опускаются при
@@ -359,6 +359,6 @@ SwiftUI-контейнер чата (ScrollView + LazyVStack + ScrollViewReader)
    Thinking восстанавливается (switch стирает isLoading/statusText — ChatWindow их помнит
    и возвращает), доставка в спящую беседу — как раньше через merge в файл.
 
-E2E (2026-07-25, песочница `AISPOTLIGHT_DATA_DIR`, Ollama gemma4): рендер/персистенция/рестарт,
+E2E (2026-07-25, песочница `CUATE_DATA_DIR`, Ollama gemma4): рендер/персистенция/рестарт,
 send-путь, confirm-бабл локальной модели, живой стрим с маркдауном и код-блоком, summon-циклы.
 Откат: снапшот `18e5f47`.

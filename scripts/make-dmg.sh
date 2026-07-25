@@ -1,18 +1,18 @@
 #!/bin/bash
 #
-# Builds a Release AISpotlight.app, ad-hoc signs it, and packages it into a
+# Builds a Release Cuate.app, ad-hoc signs it, and packages it into a
 # pretty .dmg with a drag-to-Applications layout. No external tools required
 # (uses only xcodebuild, codesign, hdiutil, sips, swift and Finder).
 #
 # Usage:  ./scripts/make-dmg.sh
-# Output: build/AISpotlight-<version>.dmg
+# Output: build/Cuate-<version>.dmg
 #
 set -euo pipefail
 
 # --- Config ---------------------------------------------------------------
-APP_NAME="AISpotlight"
-SCHEME="AISpotlight"
-PROJECT="AISpotlight.xcodeproj"
+APP_NAME="Cuate"
+SCHEME="Cuate"
+PROJECT="Cuate.xcodeproj"
 VOL_NAME="$APP_NAME"
 
 # Code-signing identity. A stable certificate keeps the app's TCC identity
@@ -22,11 +22,11 @@ VOL_NAME="$APP_NAME"
 #
 # One-time setup (free, no Apple Developer account):
 #   Keychain Access → Certificate Assistant → Create a Certificate…
-#   Name: "AISpotlight Signing", Identity Type: Self-Signed Root,
+#   Name: "Cuate Signing", Identity Type: Self-Signed Root,
 #   Certificate Type: Code Signing → Create.
 # All future releases must be signed with this same certificate.
 # Override with SIGN_ID env var; falls back to ad-hoc if the cert is absent.
-SIGN_ID="${SIGN_ID:-AISpotlight Signing}"
+SIGN_ID="${SIGN_ID:-Cuate Signing}"
 if ! security find-identity -p codesigning -v 2>/dev/null | grep -q "$SIGN_ID"; then
     echo "!! Signing identity '$SIGN_ID' not found in Keychain — falling back to ad-hoc."
     echo "   (Ad-hoc builds lose TCC permissions on every update; see comment above.)"
@@ -104,7 +104,7 @@ func render(scale: Int, to path: String) {
     let pc = NSMutableParagraphStyle(); pc.alignment = .center
 
     // Title + version
-    "AISpotlight".draw(in: NSRect(x: 0, y: H - 72, width: W, height: 40), withAttributes: [
+    "Cuate".draw(in: NSRect(x: 0, y: H - 72, width: W, height: 40), withAttributes: [
         .font: NSFont.systemFont(ofSize: 28, weight: .semibold),
         .foregroundColor: NSColor(calibratedWhite: 0.15, alpha: 1),
         .paragraphStyle: pc
@@ -131,7 +131,7 @@ func render(scale: Int, to path: String) {
     arrow.stroke()
 
     // Hint text
-    "Drag AISpotlight to the Applications folder".draw(
+    "Drag Cuate to the Applications folder".draw(
         in: NSRect(x: 0, y: 82, width: W, height: 22), withAttributes: [
         .font: NSFont.systemFont(ofSize: 15, weight: .medium),
         .foregroundColor: NSColor(calibratedWhite: 0.30, alpha: 1),
@@ -143,7 +143,7 @@ func render(scale: Int, to path: String) {
         .foregroundColor: NSColor(calibratedWhite: 0.52, alpha: 1),
         .paragraphStyle: pc
     ])
-    "xattr -dr com.apple.quarantine /Applications/AISpotlight.app".draw(
+    "xattr -dr com.apple.quarantine /Applications/Cuate.app".draw(
         in: NSRect(x: 0, y: 42, width: W, height: 15), withAttributes: [
         .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
         .foregroundColor: NSColor(calibratedWhite: 0.42, alpha: 1),
@@ -231,4 +231,4 @@ echo "✅ Done: $DMG_PATH"
 echo "   Size: $(du -h "$DMG_PATH" | cut -f1)"
 echo ""
 echo "First launch on another Mac (unsigned build):"
-echo "  xattr -dr com.apple.quarantine /Applications/AISpotlight.app"
+echo "  xattr -dr com.apple.quarantine /Applications/Cuate.app"

@@ -17,7 +17,7 @@ open design/onboarding/dist/preview.html     # посмотреть стенд
 | `symbols.json` | значки в base64, подключаются CSS-маской |
 | `dist/` | собранные карточки + `preview.html` (в git не нужны, пересобираются) |
 
-Карточки одновременно лежат в Claude Design, проект «AISpotlight Settings
+Карточки одновременно лежат в Claude Design, проект «Cuate Settings
 Redesign», группа «08 · Онбординг» — формат `@dsCard` в первой строке файла.
 
 ## Значки настоящие
@@ -30,9 +30,9 @@ template-изображения в приложении. Символы взят
 `eraser`, `arrow.up.backward.and.arrow.down.forward.rectangle`, `house.fill`.
 
 Логотипы провайдеров берутся как есть из
-`AISpotlight/Assets.xcassets/Provider-*.imageset/*.svg`.
+`Cuate/Assets.xcassets/Provider-*.imageset/*.svg`.
 
-Хоткеи — дефолты из `AISpotlight/App/HotkeyCombo.swift`.
+Хоткеи — дефолты из `Cuate/App/HotkeyCombo.swift`.
 
 ## Модель анимации (её и переносить в SwiftUI)
 

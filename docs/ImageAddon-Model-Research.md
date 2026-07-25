@@ -1,4 +1,4 @@
-# Ресерч: модели и провайдеры для Image-аддона AISpotlight
+# Ресерч: модели и провайдеры для Image-аддона Cuate
 
 Дата: 17.07.2026. Источники: arena.ai (LMArena, срез 10.07.2026), Artificial Analysis Image Arena, Reddit (r/StableDiffusion, r/Bard, r/GeminiAI, r/OpenAI, r/singularity, r/midjourney), HN, официальные прайсы провайдеров.
 

@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-Thank you for your interest in contributing to **AISpotlight** ("the Project"),
+Thank you for your interest in contributing to **Cuate** ("the Project"),
 maintained by **Pavel Kravets** ("the Owner").
 
 This Contributor License Agreement ("Agreement") states the terms under which

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Макет нового онбординг-тура AISpotlight: 5 анимированных сцен по пунктам
+Макет нового онбординг-тура Cuate: 5 анимированных сцен по пунктам
 меню статус-бара + окно тура целиком.
 
     python3 design/onboarding/build_cards.py
@@ -13,7 +13,7 @@
 Значки настоящие: SF Symbols отрисованы AppKit'ом в PNG (dump_symbols.swift →
 symbols.json) и подключаются CSS-маской, поэтому красятся currentColor ровно
 как template-изображения в приложении. Логотипы провайдеров берутся как есть
-из AISpotlight/Assets.xcassets/Provider-*.imageset/*.svg.
+из Cuate/Assets.xcassets/Provider-*.imageset/*.svg.
 
 Модель анимации, которую переносить в SwiftUI: ОДИН такт на сцену, у каждого
 слоя своё окно внутри фазы 0…1 (проценты в @keyframes). В приложении сцена
@@ -25,7 +25,7 @@ import json, pathlib, re
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent.parent                      # корень репозитория
-ASSETS = REPO / "AISpotlight" / "Assets.xcassets"
+ASSETS = REPO / "Cuate" / "Assets.xcassets"
 OUT = HERE / "dist"
 
 SYMBOLS = json.loads((HERE / "symbols.json").read_text())
@@ -814,7 +814,7 @@ S4 = fill(S4, MENUBAR_HOT=menubar("Finder", hot=True),
           SPLITX="%.1f" % SPLIT_X, POPX="%.1f" % POP_X)
 S4_CSS = S4_CSS.replace("__DX__", "%.1f" % FR_DX)
 
-S5 = fill(S5, MENUBAR=menubar("AISpotlight"), HEAD=head("mistral", "Mistral", "Стандартный"),
+S5 = fill(S5, MENUBAR=menubar("Cuate"), HEAD=head("mistral", "Mistral", "Стандартный"),
           BGDOT=sf("person.and.background.dotted", 10),
           UPSCALE=sf("arrow.up.backward.and.arrow.down.forward.rectangle", 10),
           ERASER=sf("eraser", 10), CHECK1=sf("checkmark.circle.fill", 9),
@@ -826,11 +826,11 @@ SCENES = [
     dict(key="chat", file="1-chat", css=S1_CSS, html=S1, cycle=9000, hold=.86,
          name="1 · Чат", sub="⇧⌘Space → панель → веб-поиск → ответ со ссылкой", step="Чат",
          ru=("Спросите что угодно, где угодно",
-             "AISpotlight живёт в строке меню и открывается поверх любого приложения. "
+             "Cuate живёт в строке меню и открывается поверх любого приложения. "
              "Спросили — получили ответ — Esc.",
              [("⇧⌘Space", "Открыть ассистента")]),
          en=("Ask anything, anywhere",
-             "AISpotlight lives in the menu bar and opens over any app. Ask, read the answer, press Esc.",
+             "Cuate lives in the menu bar and opens over any app. Ask, read the answer, press Esc.",
              [("⇧⌘Space", "Open Assistant")]),
          beats=[(.04, "иконка в строке меню подсвечивается"),
                 (.08, "клавиша ⇧⌘Space «нажимается»"),
@@ -1172,7 +1172,7 @@ def shell_card():
 # ============================================================ ЛОКАЛЬНЫЙ СТЕНД
 PREVIEW = """<!doctype html>
 <meta charset="utf-8">
-<title>Онбординг AISpotlight — стенд</title>
+<title>Онбординг Cuate — стенд</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{background:#E9E9ED; color:#15161A; padding:32px 28px 64px;
@@ -1187,7 +1187,7 @@ PREVIEW = """<!doctype html>
   .cap span{font-weight:400; color:#7A7F8A; font-size:11.5px}
   iframe{display:block; border:0; width:560px}
 </style>
-<h1>Онбординг AISpotlight — 5 сцен в движении</h1>
+<h1>Онбординг Cuate — 5 сцен в движении</h1>
 <p class="lede">
   Пересобирается командой <code>python3 design/onboarding/build_cards.py</code>.
   У каждой сцены снизу плеер: пауза и перетаскивание по шкале разбирают движение по кадрам,

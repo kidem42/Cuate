@@ -6,7 +6,7 @@
 
 ## 1. Цель
 
-Добавить в AISpotlight аддон для операций над изображениями через облачные AI-API:
+Добавить в Cuate аддон для операций над изображениями через облачные AI-API:
 
 - **P1 (первый релиз):** Апскейл · Удаление фона · Удаление объектов (object cleanup)
 - **P2 (второй релиз):** Генерация и редактирование изображений по промпту
@@ -32,7 +32,7 @@
 | Удаление объектов | fal.ai | Bria Eraser (маска) · fal object-removal (по тексту) | Bria Eraser |
 | Генерация (P2) | **fal.ai / OpenAI / Gemini** | fal: Nano Banana 2, GPT Image 2, Seedream 4.5, FLUX.2; OpenAI direct: gpt-image-2, gpt-image-1.5; Gemini direct: gemini-3.1-flash-image (NB2), gemini-3-pro-image | fal.ai + Nano Banana 2 |
 
-Принцип для генерации: **можно через агрегатор, можно напрямую.** У пользователей AISpotlight уже есть ключи OpenAI/Gemini в `APIKeyStore` — прямой путь работает без нового ключа. fal.ai — один новый ключ, закрывает всё (наценки к прайсу разработчиков нет, см. ресерч §6).
+Принцип для генерации: **можно через агрегатор, можно напрямую.** У пользователей Cuate уже есть ключи OpenAI/Gemini в `APIKeyStore` — прямой путь работает без нового ключа. fal.ai — один новый ключ, закрывает всё (наценки к прайсу разработчиков нет, см. ресерч §6).
 
 ### 3.1a. Каталог моделей с описаниями для UI
 
@@ -210,7 +210,7 @@ Addons/ImageAddon/
 ```
 
 Хуки в хост (минимум, по образцу LayoutFix):
-1. `AISpotlightApp.applicationDidFinishLaunching` → `ImageAddon.shared.start()`.
+1. `CuateApp.applicationDidFinishLaunching` → `ImageAddon.shared.start()`.
 2. `SettingsView.swift` → `case imageAddon` + вкладка + toggle в General.
 3. `ChatWindow.swift` → `AttachmentActionsBar` под `PendingAttachmentPreview`; drag&drop/⌘V/кнопка «Прикрепить» (эти три полезны и вне аддона — оформить как доработку хоста).
 4. `APIKeyStore.swift` → `AuxKey.fal`.
@@ -227,7 +227,7 @@ Addons/ImageAddon/
 | HEIC/TIFF вход | Конверсия в PNG локально (ImageIO) перед отправкой |
 | Таймаут/5xx | 1 автоповтор, затем ошибка с кнопкой «Повторить» |
 | Панель закрылась во время обработки | Задача продолжается в фоне; результат появится в чате при следующем открытии (persist через `ChatStore`) |
-| Большой результат в chat.json | Результаты > 8 MB писать в `Application Support/AISpotlight/images/`, в `ChatAttachment` — файловая ссылка (расширение модели: опциональное поле `fileURL`) |
+| Большой результат в chat.json | Результаты > 8 MB писать в `Application Support/Cuate/images/`, в `ChatAttachment` — файловая ссылка (расширение модели: опциональное поле `fileURL`) |
 
 ## 7. Нефункциональные требования
 

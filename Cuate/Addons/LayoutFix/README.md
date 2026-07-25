@@ -1,0 +1,105 @@
+# LayoutFix — addon
+
+Keyboard-layout fixer for Cuate, two modes:
+
+- **AutoSwitcher (beta)** — fixes words automatically as you type, using
+  statistical detection (trigrams + word frequencies + the system spell
+  checker).
+- **Hotkey** — select text typed in the wrong layout (or leave nothing selected
+  to grab the last word) and press the hotkey — `ghbdtn` becomes `привет`.
+
+Works in any app. Conversion goes through the layouts actually enabled in
+macOS, so any installed layout pair works; detection is tuned for EN/RU/ES.
+
+## Design
+
+Everything the feature needs lives in this folder. The addon reuses a few host
+building blocks (the `HotkeyManager` class, `TextInserter`, `ShortcutRecorderView`,
+`HotkeyCombo`, and the provider stack for the optional AI mode) but stores no
+state in the app's `AppSettings` and adds nothing to the app's global `L()` table.
+
+| File | Responsibility |
+|------|----------------|
+| `LayoutFixAddon.swift` | Controller: owns a private `HotkeyManager`, grabs the selection (clipboard + ⌘C), converts, pastes back (⌘V). Also the optional `LayoutSmartFixer` (LLM) and the `AutoSwitcher` lifecycle. |
+| `AutoSwitcher.swift` | Auto mode: consumes words from `KeystrokeMonitor`, decides via `DecisionEngine`, applies corrections on the space/Enter/mid-word paths. |
+| `KeystrokeMonitor.swift` | Global `CGEventTap` on a dedicated thread: accumulates the word being typed, injects tagged corrections, turns a Backspace right after a correction into undo. |
+| `SystemLayoutEngine.swift` | Converts text through the keyboard layouts actually enabled in macOS (`UCKeyTranslate`) — any installed layout is supported — and switches the active layout via the same OS API as the menu-bar picker. |
+| `LayoutConverter.swift` | Pure, offline positional RU↔EN mapping + direction detection. No dependencies — unit-testable in isolation; fallback/offline path. |
+| `NgramScorer.swift`, `DecisionEngine.swift` | Trigram + word-frequency statistics and the tuned verdict rules (see "Statistical engine"). |
+| `LanguageValidator.swift` | Deterministic "is this a real word in language X" via the system spell checker (`NSSpellChecker`). |
+| `PlausibilityScorer.swift` | Corpus-free per-script sanity heuristic (vowel/consonant runs). |
+| `Resources/` | Trigram tables (`trigrams_{en,ru,es}.bin`) + top-30k word lists for EN/RU/ES. |
+| `LayoutFixSettings.swift` | `UserDefaults`-backed settings (keys prefixed `layoutFix.`) and its own `.layoutFixHotkeysDidChange` notification. |
+| `LayoutFixLocalization.swift` | Self-contained `LFL()` strings (EN/ES/RU), following the app's current language. |
+| `LayoutFixSettingsView.swift` | The Settings tab UI (enable, hotkeys, options, AI, live preview, Accessibility warning). |
+
+## Host mount points (only three, outside this folder)
+
+1. **Boot** — one line in `App/CuateApp.swift` → `applicationDidFinishLaunching`:
+   ```swift
+   LayoutFixAddon.shared.start()
+   ```
+2. **Tab** — in `Views/SettingsView.swift`: a `case layoutFix` in the `SettingsTab`
+   enum and one `LayoutFixSettingsView().tabItem { … }.tag(.layoutFix)` block.
+3. **Menu bar** — an AutoSwitcher section in the status-bar menu in
+   `App/CuateApp.swift` (shown when the addon is enabled), plus a menu
+   refresh subscription to the addon's notifications.
+
+Removing the addon = delete this folder + revert those three hooks.
+
+## How it works
+
+1. The trigger hotkey (default **⌃⌥F**) fires. After a short delay (so the chord
+   releases), the selection is copied via a synthesized ⌘C. A unique clipboard
+   sentinel distinguishes "nothing selected" from "empty".
+2. If nothing was selected and *Grab last word* is on, ⌥⇧← selects the previous
+   word and it's copied.
+3. `LayoutConverter.flip` detects the dominant alphabet and flips the whole
+   string through the positional table.
+4. The result is put on the clipboard and pasted with ⌘V; the user's previous
+   clipboard is restored afterwards.
+
+### Smart fix (optional)
+
+A second hotkey (default **⌃⌥G**, off until enabled) sends the text to a fast
+model (Mistral small, or the active chat provider) that fixes layout **and**
+typos in context. Falls back to the offline flip when no API key is present.
+
+## Statistical engine (v2)
+
+Detection is statistical, not dictionary lookup:
+
+- `Resources/trigrams_{ru,en,es}.bin` — letter-trigram −log10 probability tables
+  (255 = combination never occurs in the language).
+- `Resources/words_{ru,en,es}.txt` — top-30k word frequencies.
+- `NgramScorer.swift` loads them; `DecisionEngine.swift` holds the pure verdict
+  rules and thresholds, tuned with an offline harness on 7876 words per class:
+  real words untouched **99.99%**, typo'd real words untouched **99.2%**,
+  wrong-layout words fixed **98.6%**, all hand cases (рун→hey, пошул stays) pass.
+- Tech acronyms (HTML, CSS, JSON, PNG …) are anti-language — impossible
+  trigrams, no vowels — so the trigram clean bar alone can never accept them
+  (РЕЬД stayed РЕЬД). They are curated into the word lists
+  (`gen-ngram-tables.py` → `ACRONYMS`) and a whitelist-override rule in
+  `DecisionEngine.verdict` trusts the frequency list when the source is
+  unmistakable garbage (unsupported + impossible trigrams) and the rendering
+  is letter-for-letter. Harness: 31→67 of 77 acronyms fixed, zero new false
+  flips on 116k RU/EN typo-negatives.
+- Tables are generated by `scripts/gen-ngram-tables.py` from
+  the [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords)
+  OpenSubtitles 2018 lists (CC-BY-SA 4.0 — attribution required).
+
+Correction paths: space boundary, plain Enter (deferred → fixed → re-posted,
+so chat messages go out clean), and mid-word early switch (≥2 impossible
+trigrams in the typed prefix).
+
+## Requirements & limitations
+
+- **Accessibility permission** (the app is not sandboxed) — needed to read the
+  selection and paste. The tab shows a warning + shortcut to the settings pane
+  when it's missing.
+- Direction is auto-detected from the dominant alphabet, so a whole word/phrase
+  in one wrong layout is handled; deliberately mixed strings convert in one
+  direction only.
+- Word-selection fallback relies on ⌥⇧← and a clipboard round-trip, so behavior
+  in apps with unusual copy semantics may vary. Selecting text explicitly is
+  always reliable.
