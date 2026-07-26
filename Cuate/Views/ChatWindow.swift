@@ -281,7 +281,8 @@ struct ChatWindow: View {
                             .font(.footnote)
                             .foregroundColor(.secondary)
                         // ImageAddon: cancels a running image operation;
-                        // hidden otherwise.
+                        // hidden otherwise. Agent turns are stopped from the
+                        // composer (send↔stop swap) — ONE affordance, not two.
                         ImageOperationCancelButton()
                     }
                     .padding(.horizontal, 12)
@@ -669,7 +670,25 @@ struct ChatWindow: View {
                         // view wins tooltip resolution, so a duplicate here
                         // would just shadow-drift over time).
 
-                        // Send button
+                        // Send button — or STOP while an agent turn streams
+                        // into this conversation AND the composer is empty
+                        // (typing anything turns it back into send, the
+                        // native-chat pattern). Cancelling also stops the
+                        // run on the gateway.
+                        if agentTurnInFlight, composerIsEmpty {
+                            Button(action: stopAgentTurn) {
+                                ZStack {
+                                    Circle()
+                                        .fill(palette.isGlass ? AnyShapeStyle(Color.accentColor) : palette.sendFill)
+                                        .frame(width: 32, height: 32)
+                                    Image(systemName: "stop.fill")
+                                        .foregroundColor(palette.isGlass ? .white : palette.sendGlyphColor)
+                                        .font(.system(size: 13, weight: .medium))
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .help(AGL("agent.stop"))
+                        } else {
                         Button(action: sendMessage) {
                             if palette.themeID == .diaDeMuertos {
                                 // Marigold flower send button (with glow).
@@ -709,6 +728,7 @@ struct ChatWindow: View {
                         .buttonStyle(PlainButtonStyle())
                         .disabled(composerIsEmpty || audioRecorder.isRecording)
                         .help(L("tooltip.send"))
+                        }
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
@@ -1403,6 +1423,32 @@ struct ChatWindow: View {
         }
         chatStore.clearMessages()
         chatStore.addMessage(text: welcomeText(), isUser: false)
+    }
+
+    /// Whether an agent turn is currently streaming into the ON-SCREEN
+    /// conversation (drives the send→stop button swap).
+    private var agentTurnInFlight: Bool {
+        chatStore.conversation.isAgent
+            && streamingOrigin == chatStore.conversation
+            && chatStore.isLoading
+    }
+
+    /// Stop button in the thinking pill (agent turns): cancels our stream —
+    /// the cancellation path fires `session.abort()`, which stops the run on
+    /// the gateway too. The last ~1s checkpoint of the partial reply stays
+    /// in the store; a catch-up moments later pulls whatever the gateway
+    /// recorded for the interrupted turn.
+    private func stopAgentTurn() {
+        guard streamingOrigin == chatStore.conversation else { return }
+        streamingTask?.cancel()
+        liveReplyStub = nil
+        pendingAgentApproval = nil
+        chatStore.statusText = nil
+        chatStore.setLoading(false)
+        chatStore.addMessage(text: AGL("agent.stopped"), isUser: false, messageType: .system)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            runAgentCatchUpIfNeeded()
+        }
     }
 
     // MARK: - Agent mirror sync

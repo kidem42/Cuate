@@ -197,6 +197,16 @@ enum AgentGatewayStrings {
             .spanish: "El agente está trabajando…",
             .russian: "Агент работает…"
         ],
+        "agent.stop": [
+            .english: "Stop the agent (the run is cancelled on the gateway too)",
+            .spanish: "Detener el agente (la ejecución se cancela también en el gateway)",
+            .russian: "Остановить агента (ран отменяется и на гейтвее)"
+        ],
+        "agent.stopped": [
+            .english: "Stopped.",
+            .spanish: "Detenido.",
+            .russian: "Остановлено."
+        ],
         "agent.offline.older": [
             .english: "Older messages are stored on the agent, which is unreachable right now.",
             .spanish: "Los mensajes anteriores están en el agente, que ahora mismo está inaccesible.",
