@@ -30,28 +30,29 @@ struct HermesSettingsView: View {
         case result(String, ok: Bool)
     }
 
-    /// Onboarding commands: enable the API server + read the key back.
-    /// Local (this Mac) and remote (over SSH) variants — the remote one adds
-    /// `API_SERVER_HOST=0.0.0.0`: the default binds loopback only, and the
-    /// connection from another machine silently refuses without it.
-    private static let setupLocalCommands = """
-    echo 'API_SERVER_ENABLED=true' >> ~/.hermes/.env
-    echo "API_SERVER_KEY=$(openssl rand -hex 24)" >> ~/.hermes/.env
-    hermes gateway install
-    """
-    private static let showLocalKeyCommand = """
-    grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2
-    """
+    /// Onboarding commands for a REMOTE gateway over SSH (the local case is
+    /// fully automated — HermesLocalGateway). `API_SERVER_HOST=0.0.0.0` is
+    /// required: the default binds loopback only, and the connection from
+    /// another machine silently refuses without it.
     private static let setupRemoteCommands = """
     ssh USER@HOST 'echo API_SERVER_ENABLED=true >> ~/.hermes/.env; \\
       echo API_SERVER_HOST=0.0.0.0 >> ~/.hermes/.env; \\
       echo API_SERVER_KEY=$(openssl rand -hex 24) >> ~/.hermes/.env; \\
-      hermes gateway restart'
+      hermes gateway install; hermes gateway restart'
     ssh USER@HOST "grep '^API_SERVER_KEY=' ~/.hermes/.env"
     """
 
     @State private var dashboardTokenInput = ""
     @State private var dashboardTokenMasked: String? = APIKeyStore.maskedKey(aux: .hermesDashboard)
+
+    /// One-click local setup (HermesLocalGateway).
+    private enum AutoSetupState: Equatable {
+        case idle
+        case running(String)
+        case succeeded
+        case failed(String)
+    }
+    @State private var autoSetupState: AutoSetupState = .idle
 
     /// Remote-file courier: the dashboard's files API (needed only when the
     /// gateway is on another machine).
@@ -164,6 +165,7 @@ struct HermesSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            autoSetupRow
         } header: {
             Text(HL("hermes.conn.header"))
         } footer: {
@@ -171,6 +173,96 @@ struct HermesSettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Offered only when the probe failed, the endpoint is this Mac and a
+    /// Hermes install is present — the exact situation the app can repair
+    /// itself: the gateway process (which hosts the API server) is not
+    /// running as a service.
+    /// Whether the offer row is visible: the probe failed against a local
+    /// endpoint with Hermes installed — or a setup pass already ran and its
+    /// outcome (success line included) must stay on screen.
+    private var autoSetupVisible: Bool {
+        if autoSetupState != .idle { return true }
+        guard case .result(_, ok: false) = probeState else { return false }
+        return HermesLocalGateway.isLocalEndpoint(settings.endpointURL)
+            && HermesLocalGateway.isInstalled()
+    }
+
+    @ViewBuilder
+    private var autoSetupRow: some View {
+        if autoSetupVisible {
+            VStack(alignment: .leading, spacing: 8) {
+                if autoSetupState != .succeeded {
+                    Text(HL("hermes.auto.found"))
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 10) {
+                    switch autoSetupState {
+                    case .succeeded:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text(HL("hermes.auto.ok"))
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    case .running(let step):
+                        ProgressView().controlSize(.small)
+                        Text(step).foregroundColor(.secondary)
+                    case .idle, .failed:
+                        Button(HL("hermes.auto.run")) {
+                            Task { await runAutoSetup() }
+                        }
+                        if case .failed(let message) = autoSetupState {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text(message)
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    /// Env → service → key → probe. On success the key from `.env` is the
+    /// canonical one: it replaces whatever is stored, the endpoint follows
+    /// the configured port, and the regular probe re-runs — its green line
+    /// doubles as the "key verified" confirmation (the probe authenticates
+    /// with the Bearer key; a bad key would come back as 401).
+    private func runAutoSetup() async {
+        autoSetupState = .running(HL("hermes.auto.running"))
+        do {
+            let result = try await HermesLocalGateway.autoSetup { step in
+                Task { @MainActor in
+                    if case .running = autoSetupState { autoSetupState = .running(step) }
+                }
+            }
+            guard APIKeyStore.set(result.key, aux: .hermes) else {
+                autoSetupState = .failed(HL("hermes.auto.err.keychain"))
+                return
+            }
+            maskedKey = APIKeyStore.maskedKey(aux: .hermes)
+            settings.endpointURL = "http://127.0.0.1:\(result.port)"
+            // A just-bootstrapped gateway can briefly 401 while its auth
+            // warms up — give the probe a few tries before calling it a fail.
+            for attempt in 0..<3 {
+                autoSetupState = .running(HL("hermes.auto.step.health"))
+                await runProbe(interactive: true)
+                if case .result(_, ok: true) = probeState { break }
+                if attempt < 2 { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+            }
+            if case .result(_, ok: true) = probeState {
+                autoSetupState = .succeeded
+            } else {
+                autoSetupState = .failed(HL("hermes.auto.err.probe"))
+            }
+        } catch {
+            autoSetupState = .failed(error.localizedDescription)
         }
     }
 
@@ -197,14 +289,12 @@ struct HermesSettingsView: View {
 
     private var setupSection: some View {
         Section {
-            // Hermes on THIS Mac: enable once, then read the key back.
-            Text(HL("hermes.setup.local.title"))
-                .font(.callout.weight(.medium))
-            commandBlock(Self.setupLocalCommands)
-            Text(HL("hermes.setup.showKey"))
+            // Hermes on THIS Mac needs no terminal: the one-click card in
+            // the Connection section (HermesLocalGateway) does everything.
+            Text(HL("hermes.setup.local.auto"))
                 .font(.caption)
                 .foregroundColor(.secondary)
-            commandBlock(Self.showLocalKeyCommand)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider()
 

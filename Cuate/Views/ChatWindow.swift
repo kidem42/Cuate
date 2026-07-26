@@ -1362,6 +1362,7 @@ struct ChatWindow: View {
             AgentRoleChip(role: role, state: hermesAddon.connectionState)
                 .onTapGesture {
                     // The dot's detail lives in the addon tab.
+                    SettingsView.pendingTab = .hermes
                     NotificationCenter.default.post(
                         name: .selectSettingsTab, object: SettingsTab.hermes.rawValue)
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
@@ -1796,6 +1797,7 @@ struct ChatWindow: View {
             guard HermesAddon.shared.isAvailable else {
                 chatStore.addMessage(text: HL("hermes.noKey"),
                                      isUser: false, messageType: .system)
+                SettingsView.pendingTab = .hermes
                 NotificationCenter.default.post(
                     name: .selectSettingsTab, object: SettingsTab.hermes.rawValue)
                 NotificationCenter.default.post(name: .openSettingsWindow, object: nil)

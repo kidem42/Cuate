@@ -74,6 +74,7 @@ struct HermesSidebarView: View {
                     .foregroundColor(palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 Button(HL("hermes.tab")) {
+                    SettingsView.pendingTab = .hermes
                     NotificationCenter.default.post(
                         name: .selectSettingsTab, object: SettingsTab.hermes.rawValue)
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)

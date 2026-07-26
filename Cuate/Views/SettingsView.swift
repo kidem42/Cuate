@@ -41,7 +41,17 @@ struct SettingsView: View {
     @State private var statusIsError = false
     @State private var sttModelInput = ""
     @State private var newPresetName = ""
-    @State private var selectedTab = SettingsTab.general
+    /// Deep-link target for a settings window that does not exist yet: the
+    /// `.selectSettingsTab` notification is lost when no view is alive to
+    /// receive it (first open), so senders ALSO park the tab here and the
+    /// state initializer consumes it.
+    static var pendingTab: SettingsTab?
+    private static func consumePendingTab() -> SettingsTab? {
+        defer { pendingTab = nil }
+        return pendingTab
+    }
+
+    @State private var selectedTab = SettingsView.consumePendingTab() ?? SettingsTab.general
     // Prompt editor height: user-resizable via the grip below the field,
     // persisted so a tall editor stays tall on the next open.
     @AppStorage("settings.promptEditorHeight") private var promptEditorHeight: Double = 140

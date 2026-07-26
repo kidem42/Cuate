@@ -120,9 +120,9 @@ enum HermesAddonStrings {
             .russian: "API-сервер уже включён? Просто покажите существующий ключ:"
         ],
         "hermes.setup.remote.title": [
-            .english: "Hermes on a remote machine (server, Mac mini) — over SSH:",
-            .spanish: "Hermes en una máquina remota (servidor, Mac mini) — por SSH:",
-            .russian: "Hermes на удалённой машине (сервер, Mac mini) — через SSH:"
+            .english: "Hermes on a remote machine (VPS, cloud server, home server, Mac mini) — over SSH:",
+            .spanish: "Hermes en una máquina remota (VPS, servidor en la nube, servidor doméstico, Mac mini) — por SSH:",
+            .russian: "Hermes на удалённой машине (VPS, облачный сервер, домашний сервер, Mac mini) — через SSH:"
         ],
         "hermes.setup.remote.caption": [
             .english: "Then set the gateway address above to http://HOST:8642. API_SERVER_HOST=0.0.0.0 is required — by default the server listens on loopback only. Prefer a Tailscale/WireGuard address over exposing the port to the internet.",
@@ -259,6 +259,83 @@ enum HermesAddonStrings {
             .english: "No gateway key yet — paste the API_SERVER_KEY in Settings → Hermes Agent (opening it now).",
             .spanish: "Aún no hay clave del gateway — pega la API_SERVER_KEY en Ajustes → Agente Hermes (abriéndolo ahora).",
             .russian: "Ключ гейтвея ещё не введён — вставьте API_SERVER_KEY в Настройках → Hermes-агент (открываю их)."
+        ],
+        "hermes.setup.local.auto": [
+            .english: "Hermes on this Mac needs no terminal: when the gateway is unreachable, the Connection section offers a one-click setup that configures it and installs it as a service.",
+            .spanish: "Hermes en este Mac no necesita terminal: cuando el gateway no responde, la sección Conexión ofrece una configuración de un clic que lo configura y lo instala como servicio.",
+            .russian: "Для Hermes на этом Маке терминал не нужен: когда гейтвей недоступен, в секции «Подключение» появляется настройка в один клик — она всё конфигурирует и ставит сервис."
+        ],
+
+        // MARK: One-click local gateway setup
+        "hermes.auto.found": [
+            .english: "Hermes is installed on this Mac, but its gateway (which hosts the API server) is not running. Cuate can configure it and install it as a background service that starts on login.",
+            .spanish: "Hermes está instalado en este Mac, pero su gateway (que aloja el servidor API) no está en marcha. Cuate puede configurarlo e instalarlo como servicio en segundo plano que arranca al iniciar sesión.",
+            .russian: "Hermes установлен на этом Маке, но его гейтвей (в нём живёт API-сервер) не запущен. Cuate может настроить его и установить как фоновый сервис с автозапуском при входе."
+        ],
+        "hermes.auto.run": [
+            .english: "Set up and start the service",
+            .spanish: "Configurar y arrancar el servicio",
+            .russian: "Настроить и запустить сервис"
+        ],
+        "hermes.auto.running": [
+            .english: "Setting up the gateway…",
+            .spanish: "Configurando el gateway…",
+            .russian: "Настраиваю гейтвей…"
+        ],
+        "hermes.auto.ok": [
+            .english: "Done: the gateway is installed as a service (starts on login, listed as “Hermes Gateway (Cuate)” in Login Items), the key from .env is saved and verified.",
+            .spanish: "Listo: el gateway está instalado como servicio (arranca al iniciar sesión, aparece como “Hermes Gateway (Cuate)” en Ítems de inicio), la clave de .env está guardada y verificada.",
+            .russian: "Готово: гейтвей установлен как сервис (автозапуск при входе, в «Объектах входа» — «Hermes Gateway (Cuate)»), ключ из .env сохранён и проверен."
+        ],
+        "hermes.auto.step.env": [
+            .english: "Completing ~/.hermes/.env…",
+            .spanish: "Completando ~/.hermes/.env…",
+            .russian: "Дозаполняю ~/.hermes/.env…"
+        ],
+        "hermes.auto.step.install": [
+            .english: "Installing the gateway service…",
+            .spanish: "Instalando el servicio del gateway…",
+            .russian: "Устанавливаю сервис гейтвея…"
+        ],
+        "hermes.auto.step.reload": [
+            .english: "Starting the gateway…",
+            .spanish: "Arrancando el gateway…",
+            .russian: "Запускаю гейтвей…"
+        ],
+        "hermes.auto.step.health": [
+            .english: "Waiting for the gateway to answer…",
+            .spanish: "Esperando respuesta del gateway…",
+            .russian: "Жду ответа гейтвея…"
+        ],
+        "hermes.auto.err.keychain": [
+            .english: "Could not save the key to the Keychain — open Settings → API Keys and allow Keychain access, then try again.",
+            .spanish: "No se pudo guardar la clave en el Llavero — abre Ajustes → Claves API y permite el acceso al Llavero, luego inténtalo de nuevo.",
+            .russian: "Не удалось сохранить ключ в Keychain — разрешите доступ к связке ключей и попробуйте ещё раз."
+        ],
+        "hermes.auto.err.probe": [
+            .english: "The gateway is up, but the connection test still fails — see the message above.",
+            .spanish: "El gateway está en marcha, pero la prueba de conexión sigue fallando — mira el mensaje de arriba.",
+            .russian: "Гейтвей поднялся, но проверка соединения всё ещё не проходит — см. сообщение выше."
+        ],
+        "hermes.auto.err.cli": [
+            .english: "The hermes CLI was not found on this Mac.",
+            .spanish: "No se encontró la CLI de hermes en este Mac.",
+            .russian: "CLI hermes на этом Маке не найден."
+        ],
+        "hermes.auto.err.env": [
+            .english: "Could not update ~/.hermes/.env:",
+            .spanish: "No se pudo actualizar ~/.hermes/.env:",
+            .russian: "Не удалось обновить ~/.hermes/.env:"
+        ],
+        "hermes.auto.err.install": [
+            .english: "hermes gateway install failed:",
+            .spanish: "hermes gateway install falló:",
+            .russian: "hermes gateway install завершился с ошибкой:"
+        ],
+        "hermes.auto.err.timeout": [
+            .english: "The gateway did not come up — check ~/.hermes/logs/gateway.log.",
+            .spanish: "El gateway no arrancó — revisa ~/.hermes/logs/gateway.log.",
+            .russian: "Гейтвей так и не поднялся — загляните в ~/.hermes/logs/gateway.log."
         ],
         "hermes.role.help": [
             .english: "Hermes agent role — the conversation lives on the agent and continues across its other surfaces",
