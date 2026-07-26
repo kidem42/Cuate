@@ -8,6 +8,10 @@ extension Notification.Name {
     static let hermesAddonDidChange = Notification.Name("hermesAddonDidChange")
     /// Posted when the gateway connection state changes (role chip dot).
     static let hermesConnectionDidChange = Notification.Name("hermesConnectionDidChange")
+    /// Posted when the set/content of gateway sessions changed from OUR side
+    /// (a turn created one, a rename/delete landed) — the sidebar list
+    /// refreshes on it without waiting for a reopen.
+    static let hermesSessionsDidChange = Notification.Name("hermesSessionsDidChange")
 }
 
 /// How agent-conversation text is retained locally (AGENT-ADDONS-NOTES.md
@@ -54,6 +58,27 @@ final class HermesSettings: ObservableObject {
             ?? URL(string: Self.defaultEndpoint)!
     }
 
+    /// Whether the gateway lives on ANOTHER machine — file attachments then
+    /// need the dashboard courier (paths from this Mac mean nothing there).
+    var isRemoteGateway: Bool {
+        guard let host = baseURL.host?.lowercased() else { return false }
+        return !["127.0.0.1", "localhost", "::1"].contains(host)
+    }
+
+    /// Hermes DASHBOARD server (:9119) — a separate service with the files
+    /// API (`/api/files/upload-stream`): the API server itself rejects file
+    /// inputs (proved in source, 2026-07-26). Optional; empty = not set up.
+    /// Token lives in Keychain (`AuxKey.hermesDashboard`).
+    @Published var dashboardURL: String {
+        didSet { defaults.set(dashboardURL, forKey: "hermes.dashboardURL") }
+    }
+
+    var dashboardBaseURL: URL? {
+        let trimmed = dashboardURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(string: trimmed)
+    }
+
     // MARK: - Role / model routing
 
     /// Model ids from the gateway's `/v1/models` (usually one per profile).
@@ -75,6 +100,17 @@ final class HermesSettings: ObservableObject {
     }
     @Published var lockModel: String {
         didSet { defaults.set(lockModel, forKey: "hermes.lockModel") }
+    }
+
+    // MARK: - Host app features in agent sessions
+
+    /// Whether the app's OWN model-backed image features (ImageAddon actions,
+    /// OCR extract) surface inside agent conversations. Off by default — the
+    /// agent owns its sessions end-to-end, our tools don't mix in uninvited.
+    /// Opting in brings them into agent chats on the app's keys/models
+    /// (configured in their own tabs); results stay local to this app.
+    @Published var imageFeaturesEnabled: Bool {
+        didSet { defaults.set(imageFeaturesEnabled, forKey: "hermes.imageFeaturesEnabled") }
     }
 
     // MARK: - History retention (mirror by default)
@@ -148,6 +184,37 @@ final class HermesSettings: ObservableObject {
 
     func recordModelLock(provider: String, model: String, forSession sessionID: String) {
         sessionModelLocks[sessionID] = "\(provider)|\(model)"
+    }
+
+    // MARK: - Pinned messages (Telegram-style, agent chats)
+    //
+    // conversationKey → pinned message UUIDs, in pin order. Local metadata:
+    // the gateway knows nothing about it.
+
+    @Published private(set) var pinnedMessagesByConversation: [String: [String]] {
+        didSet { defaults.set(pinnedMessagesByConversation, forKey: "hermes.pinnedMessages") }
+    }
+
+    func pinnedMessages(forConversationKey key: String) -> [String] {
+        pinnedMessagesByConversation[key] ?? []
+    }
+
+    func isMessagePinned(_ messageID: String, conversationKey key: String) -> Bool {
+        pinnedMessagesByConversation[key]?.contains(messageID) ?? false
+    }
+
+    func toggleMessagePin(_ messageID: String, conversationKey key: String) {
+        var pins = pinnedMessagesByConversation[key] ?? []
+        if let index = pins.firstIndex(of: messageID) {
+            pins.remove(at: index)
+        } else {
+            pins.append(messageID)
+        }
+        if pins.isEmpty {
+            pinnedMessagesByConversation.removeValue(forKey: key)
+        } else {
+            pinnedMessagesByConversation[key] = pins
+        }
     }
 
     // MARK: - Unread watermarks (sidebar badges)
@@ -253,9 +320,11 @@ final class HermesSettings: ObservableObject {
     private init() {
         enabled = defaults.bool(forKey: "hermes.enabled")
         endpointURL = defaults.string(forKey: "hermes.endpointURL") ?? Self.defaultEndpoint
+        dashboardURL = defaults.string(forKey: "hermes.dashboardURL") ?? ""
         cachedAgentIDs = defaults.stringArray(forKey: "hermes.cachedAgentIDs") ?? []
         lockProvider = defaults.string(forKey: "hermes.lockProvider") ?? ""
         lockModel = defaults.string(forKey: "hermes.lockModel") ?? ""
+        imageFeaturesEnabled = defaults.bool(forKey: "hermes.imageFeaturesEnabled")
         historyMode = HermesHistoryMode(rawValue: defaults.string(forKey: "hermes.historyMode") ?? "")
             ?? .mirror
         let cache = defaults.integer(forKey: "hermes.mirrorCacheLimit")
@@ -264,6 +333,7 @@ final class HermesSettings: ObservableObject {
         reasoningEffort = defaults.string(forKey: "hermes.reasoningEffort") ?? ""
         activeSessionByRole = (defaults.dictionary(forKey: "hermes.activeSessionByRole") as? [String: String]) ?? [:]
         sessionReadCounts = (defaults.dictionary(forKey: "hermes.sessionReadCounts") as? [String: Int]) ?? [:]
+        pinnedMessagesByConversation = (defaults.dictionary(forKey: "hermes.pinnedMessages") as? [String: [String]]) ?? [:]
         sessionModelLocks = (defaults.dictionary(forKey: "hermes.sessionModelLocks") as? [String: String]) ?? [:]
         pinnedSessions = defaults.stringArray(forKey: "hermes.pinnedSessions") ?? []
         sessionColors = (defaults.dictionary(forKey: "hermes.sessionColors") as? [String: String]) ?? [:]

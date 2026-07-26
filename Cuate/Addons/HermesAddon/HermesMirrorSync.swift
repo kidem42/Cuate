@@ -20,6 +20,10 @@ enum HermesMirrorSync {
     /// when the gateway was unreachable (the caller shows the plaque).
     @discardableResult
     static func catchUp(role: AgentRole, store: ChatStore) async -> Bool {
+        // Cold start: the key cache may still be filling — a keyless 401
+        // here is noise, not "offline" (the apiKeysDidChange probe re-syncs
+        // moments later).
+        guard APIKeyStore.isWarm else { return true }
         let conversationID = store.conversation
         guard conversationID.isAgent,
               let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationID.storageKey) else {

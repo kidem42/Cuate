@@ -43,6 +43,11 @@ struct HermesTranscriptMessage {
     let role: String // user | assistant | tool
     let content: String
     let toolName: String?
+    /// tool rows: which call this result answers.
+    let toolCallID: String?
+    /// assistant shells: the calls with their raw JSON arguments — the
+    /// journal's expanded detail shows the command text from here.
+    let toolCallArguments: [(id: String, arguments: String)]
     let timestamp: Date?
 
     func externalID(sessionID: String) -> String {
@@ -273,11 +278,21 @@ struct HermesTransport {
         let data = object["data"] as? [[String: Any]] ?? []
         return data.compactMap { row in
             guard let id = row["id"] as? Int, let role = row["role"] as? String else { return nil }
+            var callArguments: [(String, String)] = []
+            if let calls = row["tool_calls"] as? [[String: Any]] {
+                for call in calls {
+                    guard let callID = (call["id"] ?? call["call_id"]) as? String else { continue }
+                    let function = call["function"] as? [String: Any]
+                    callArguments.append((callID, function?["arguments"] as? String ?? ""))
+                }
+            }
             return HermesTranscriptMessage(
                 id: id,
                 role: role,
                 content: row["content"] as? String ?? "",
                 toolName: row["tool_name"] as? String,
+                toolCallID: row["tool_call_id"] as? String,
+                toolCallArguments: callArguments,
                 timestamp: (row["timestamp"] as? Double).map { Date(timeIntervalSince1970: $0) }
             )
         }

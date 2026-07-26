@@ -1,5 +1,17 @@
 import Foundation
 
+/// Full detail of one tool step, lazily fetched from the gateway transcript
+/// when the user expands a journal row (the persisted summary stays tiny).
+struct AgentStepDetail {
+    /// The call's arguments — for `terminal` the command text itself.
+    var command: String?
+    /// The tool's output (bounded by the loader).
+    var output: String?
+    var exitCode: Int?
+    /// Absolute paths mentioned in the args/output — Finder shortcuts.
+    var paths: [String] = []
+}
+
 /// Collects the tool steps of one agent turn and serializes the compact
 /// summary persisted on the reply (`ChatMessage.agentSteps`). The full event
 /// stream is deliberately not stored — one agent turn can emit hundreds of

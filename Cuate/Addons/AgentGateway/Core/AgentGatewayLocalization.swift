@@ -138,6 +138,11 @@ enum AgentGatewayStrings {
             .spanish: "Archivos del chat",
             .russian: "Файлы чата"
         ],
+        "agent.files.fromUser": [
+            .english: "Shared by you",
+            .spanish: "Compartidos por ti",
+            .russian: "Отправленные вами"
+        ],
         "agent.files.empty": [
             .english: "The agent has not shared any files in this chat yet.",
             .spanish: "El agente aún no ha compartido archivos en este chat.",
@@ -196,6 +201,37 @@ enum AgentGatewayStrings {
             .english: "Agent is working…",
             .spanish: "El agente está trabajando…",
             .russian: "Агент работает…"
+        ],
+        "agent.attach.fileNote.header": [
+            .english: "Attached file (read it from your host):",
+            .spanish: "Archivo adjunto (léelo desde tu host):",
+            .russian: "Приложен файл (прочитай его со своей машины):"
+        ],
+        "agent.attach.filesNote.header": [
+            .english: "Attached files (read them from your host):",
+            .spanish: "Archivos adjuntos (léelos desde tu host):",
+            .russian: "Приложены файлы (прочитай их со своей машины):"
+        ],
+        // MARK: Pinned messages (Telegram-style, agent chats)
+        "agent.pin.pin": [
+            .english: "Pin message",
+            .spanish: "Fijar mensaje",
+            .russian: "Закрепить сообщение"
+        ],
+        "agent.pin.unpin": [
+            .english: "Unpin message",
+            .spanish: "Soltar mensaje",
+            .russian: "Открепить сообщение"
+        ],
+        "agent.pin.title": [
+            .english: "Pinned message",
+            .spanish: "Mensaje fijado",
+            .russian: "Закреплённое сообщение"
+        ],
+        "agent.pin.barHelp": [
+            .english: "Click to jump between pinned messages",
+            .spanish: "Clic para saltar entre mensajes fijados",
+            .russian: "Клик — переход по закреплённым сообщениям по кругу"
         ],
         "agent.stop": [
             .english: "Stop the agent (the run is cancelled on the gateway too)",

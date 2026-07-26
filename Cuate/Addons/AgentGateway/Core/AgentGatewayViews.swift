@@ -61,15 +61,23 @@ struct AgentApprovalCard: View {
 
 /// Collapsible tool-step journal shown under an agent reply. Renders either
 /// live steps (during a turn) or a persisted summary (`ChatMessage.agentSteps`
-/// parsed back after a restart).
+/// parsed back after a restart). A SECOND level expands per step: full
+/// command, output and exit code are lazily fetched from the gateway
+/// transcript via `detailLoader` (the persisted summary stays one line per
+/// step); file paths inside become Finder shortcuts.
 struct AgentStepJournalView: View {
     @Environment(\.themePalette) private var palette
     @State private var expanded = false
+    @State private var expandedSteps: Set<Int> = []
+    @State private var details: [AgentStepDetail]?
+    @State private var loadingDetails = false
 
     /// (tool, status, detail) rows — from live `AgentStep`s or a parsed summary.
     let rows: [(toolName: String, status: String, detail: String?)]
+    /// Fetches full per-step details on first expand (nil → no second level).
+    var detailLoader: (() async -> [AgentStepDetail])?
 
-    init(steps: [AgentStep]) {
+    init(steps: [AgentStep], detailLoader: (() async -> [AgentStepDetail])? = nil) {
         self.rows = steps.map { step in
             var detail = step.duration.map { String(format: "%.1fs", $0) }
             if let preview = step.preview, !preview.isEmpty {
@@ -77,10 +85,12 @@ struct AgentStepJournalView: View {
             }
             return (step.toolName, step.status.rawValue, detail)
         }
+        self.detailLoader = detailLoader
     }
 
-    init(summary: String) {
+    init(summary: String, detailLoader: (() async -> [AgentStepDetail])? = nil) {
         self.rows = AgentStepJournal.parse(summary)
+        self.detailLoader = detailLoader
     }
 
     var body: some View {
@@ -100,25 +110,121 @@ struct AgentStepJournalView: View {
                 .buttonStyle(PlainButtonStyle())
 
                 if expanded {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Image(systemName: statusSymbol(row.status))
-                                .font(.system(size: 9))
-                                .foregroundColor(statusColor(row.status))
-                            Text(row.toolName)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(palette.primaryText)
-                            if let detail = row.detail {
-                                Text(detail)
-                                    .font(.system(size: 11, design: palette.fontDesign))
-                                    .foregroundColor(palette.secondaryText)
-                                    .lineLimit(1)
-                            }
-                        }
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        stepRow(index: index, row: row)
                     }
                     .padding(.leading, 14)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func stepRow(index: Int, row: (toolName: String, status: String, detail: String?)) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                toggleStep(index)
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if detailLoader != nil {
+                        Image(systemName: expandedSteps.contains(index) ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 7, weight: .semibold))
+                            .foregroundColor(palette.secondaryText)
+                    }
+                    Image(systemName: statusSymbol(row.status))
+                        .font(.system(size: 9))
+                        .foregroundColor(statusColor(row.status))
+                    Text(row.toolName)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(palette.primaryText)
+                    if let detail = row.detail {
+                        Text(detail)
+                            .font(.system(size: 11, design: palette.fontDesign))
+                            .foregroundColor(palette.secondaryText)
+                            .lineLimit(1)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            if expandedSteps.contains(index) {
+                stepDetailView(index: index)
+                    .padding(.leading, 18)
+            }
+        }
+    }
+
+    private func toggleStep(_ index: Int) {
+        guard detailLoader != nil else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if expandedSteps.contains(index) {
+                expandedSteps.remove(index)
+            } else {
+                expandedSteps.insert(index)
+            }
+        }
+        // One transcript fetch serves every row of this journal.
+        if details == nil, !loadingDetails, let loader = detailLoader {
+            loadingDetails = true
+            Task { @MainActor in
+                details = await loader()
+                loadingDetails = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stepDetailView(index: Int) -> some View {
+        if let details {
+            if index < details.count {
+                let detail = details[index]
+                VStack(alignment: .leading, spacing: 4) {
+                    if let command = detail.command, !command.isEmpty {
+                        HStack(alignment: .top, spacing: 6) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                Text(command)
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundColor(palette.codeText)
+                                    .textSelection(.enabled)
+                                    .padding(6)
+                            }
+                            if let exit = detail.exitCode {
+                                Text("exit \(exit)")
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundColor(exit == 0 ? palette.secondaryText : .red)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.10), in: Capsule())
+                                    .padding(.top, 4)
+                            }
+                        }
+                        .background(palette.codeFill, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    if let output = detail.output, !output.isEmpty {
+                        ScrollView {
+                            Text(output)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(palette.secondaryText)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(6)
+                        }
+                        .frame(maxHeight: 160)
+                        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    if !detail.paths.isEmpty {
+                        AgentAttachPillsView(paths: detail.paths)
+                    }
+                }
+            } else {
+                // Transcript grouping missed this row (interrupted turn).
+                Text("—")
+                    .font(.system(size: 10))
+                    .foregroundColor(palette.secondaryText)
+            }
+        } else if loadingDetails {
+            ProgressView().controlSize(.small)
         }
     }
 

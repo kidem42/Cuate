@@ -48,6 +48,60 @@ enum HermesAddonStrings {
             .russian: "Ключ хранится только в Keychain. Он даёт полный доступ к инструментам агента — включая его терминал. Для удалённого гейтвея используйте Tailscale/WireGuard, а не открытый порт."
         ],
 
+        // MARK: Host app features in agent sessions (separate opt-in)
+        "hermes.appFeatures.header": [
+            .english: "App features",
+            .spanish: "Funciones de la app",
+            .russian: "Функции приложения"
+        ],
+        "hermes.appFeatures.toggle": [
+            .english: "Image processing and OCR in agent sessions",
+            .spanish: "Procesado de imágenes y OCR en sesiones del agente",
+            .russian: "Обработка изображений и OCR в сессиях агента"
+        ],
+        "hermes.appFeatures.caption": [
+            .english: "Off: the agent handles attachments entirely on its own. On: the app's Upscale, Remove Background, Remove Objects and Extract Text actions also appear in agent chats — they run on the app's own models and keys (pick the models in the Images tab and the OCR provider in the Chat tab), and results stay in this app only, invisible to the agent's other surfaces.",
+            .spanish: "Desactivado: el agente gestiona los adjuntos por su cuenta. Activado: las acciones de la app — Escalar, Quitar fondo, Eliminar objetos y Extraer texto — aparecen también en los chats del agente; usan los modelos y claves propios de la app (elige los modelos en la pestaña Imágenes y el proveedor de OCR en la pestaña Chat), y los resultados se quedan solo en esta app, invisibles para las demás superficies del agente.",
+            .russian: "Выкл.: агент разбирается с вложениями полностью сам. Вкл.: действия приложения — «Апскейл», «Убрать фон», «Удалить объекты» и «Извлечь текст» — появляются и в чатах агента; они работают на собственных моделях и ключах приложения (модели — во вкладке «Изображения», провайдер OCR — во вкладке «Чат»), а результаты остаются только в этом приложении и не видны другим поверхностям агента."
+        ],
+
+        // MARK: Dashboard courier (remote files)
+        "hermes.dash.header": [
+            .english: "Remote files (dashboard)",
+            .spanish: "Archivos remotos (dashboard)",
+            .russian: "Файлы на удалённой машине (дашборд)"
+        ],
+        "hermes.dash.url": [
+            .english: "Dashboard address",
+            .spanish: "Dirección del dashboard",
+            .russian: "Адрес дашборда"
+        ],
+        "hermes.dash.url.placeholder": [
+            .english: "http://HOST:9119 (via Tailscale/SSH tunnel)",
+            .spanish: "http://HOST:9119 (vía Tailscale/túnel SSH)",
+            .russian: "http://ХОСТ:9119 (через Tailscale/SSH-туннель)"
+        ],
+        "hermes.dash.token": [
+            .english: "Dashboard session token",
+            .spanish: "Token de sesión del dashboard",
+            .russian: "Session-токен дашборда"
+        ],
+        "hermes.dash.caption": [
+            .english: "Only needed for a REMOTE gateway: file attachments are uploaded to the agent's machine (~/cuate-uploads) through the Hermes dashboard's files API before sending. A local gateway reads your files directly — leave empty.",
+            .spanish: "Solo para un gateway REMOTO: los adjuntos se suben a la máquina del agente (~/cuate-uploads) mediante la API de archivos del dashboard antes de enviar. Un gateway local lee tus archivos directamente — déjalo vacío.",
+            .russian: "Нужно только для УДАЛЁННОГО гейтвея: файлы-вложения перед отправкой загружаются на машину агента (~/cuate-uploads) через files-API дашборда Hermes. Локальный гейтвей читает файлы напрямую — оставьте пустым."
+        ],
+        "hermes.dash.missing": [
+            .english: "The gateway is remote, but the dashboard courier is not set up (Settings → Hermes Agent → Remote files) — the agent cannot read paths from this Mac.",
+            .spanish: "El gateway es remoto, pero el courier del dashboard no está configurado (Ajustes → Agente Hermes → Archivos remotos) — el agente no puede leer rutas de este Mac.",
+            .russian: "Гейтвей удалённый, а курьер дашборда не настроен (Настройки → Hermes-агент → Файлы на удалённой машине) — агент не сможет прочитать пути с этого Mac."
+        ],
+        "hermes.dash.uploadFailed": [
+            .english: "Failed to upload to the agent's machine: %@",
+            .spanish: "No se pudo subir a la máquina del agente: %@",
+            .russian: "Не удалось загрузить на машину агента: %@"
+        ],
+
         // MARK: Onboarding (server-side setup)
         "hermes.setup.header": [.english: "Gateway setup", .spanish: "Configuración del gateway", .russian: "Настройка гейтвея"],
         "hermes.setup.intro": [

@@ -3,6 +3,14 @@ import Foundation
 import AppKit
 
 struct MessageRow: View {
+    /// Telegram-style pin entry for the bubble's context menu (agent chats
+    /// only; nil elsewhere). Lives here because the bubble's own context
+    /// menu (CopyableBubble) shadows any menu attached by the row's host.
+    struct PinMenu {
+        let isPinned: Bool
+        let toggle: () -> Void
+    }
+
     let message: ChatMessage
     /// Bubbles scale with the panel: ~75% of the available width.
     var maxBubbleWidth: CGFloat = 320
@@ -17,6 +25,8 @@ struct MessageRow: View {
     /// stream flush re-lays-out nothing but the tail. `message` then only
     /// contributes identity, timestamp and the bubble chrome.
     var liveModel: StreamingReplyModel? = nil
+    /// Pin/unpin context-menu entry (agent chats); nil hides it.
+    var pinMenu: PinMenu? = nil
 
     // Hover-to-copy (selecting across SwiftUI Text blocks is unreliable,
     // so whole-message copy is the primary affordance, like in Telegram)
@@ -57,10 +67,14 @@ struct MessageRow: View {
     }
     
     private var userMessageBubble: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        // Agent file note ("Attached files…\n- path") renders as PILLS, not
+        // raw paths — the text block stays in the stored message for the
+        // agent to read (AgentAttachNote is the shared contract).
+        let attachSplit = AgentAttachNote.split(message.text)
+        return VStack(alignment: .trailing, spacing: 4) {
             VStack(alignment: .trailing, spacing: 8) {
                 userAttachmentsSection()
-                
+
                 if message.messageType == .voice {
                     if let audioURL = message.audioURL {
                         VoiceMessagePlayer(audioURL: audioURL, isUserMessage: true)
@@ -74,10 +88,15 @@ struct MessageRow: View {
                             .multilineTextAlignment(.leading)
                     }
                 } else {
-                    renderMarkdownText(message.text, linkColor: linkTint)
-                        .foregroundColor(bubbleTextColor)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.leading)
+                    if !attachSplit.display.isEmpty {
+                        renderMarkdownText(attachSplit.display, linkColor: linkTint)
+                            .foregroundColor(bubbleTextColor)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.leading)
+                    }
+                    if !attachSplit.paths.isEmpty {
+                        AgentAttachPillsView(paths: attachSplit.paths)
+                    }
                 }
             }
             .padding(.horizontal, 12)
@@ -89,7 +108,8 @@ struct MessageRow: View {
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
             // Synthwave's neon glow on the user bubble; nil → invisible.
             .shadow(color: palette.userGlow ?? .clear, radius: 7)
-            .modifier(CopyableBubble(text: { message.text }, isHovering: $isHovering, justCopied: $justCopied))
+            .modifier(CopyableBubble(text: { message.text }, isHovering: $isHovering,
+                                     justCopied: $justCopied, pin: pinMenu))
 
             Text(formatTime(message.timestamp))
                 .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
@@ -141,13 +161,20 @@ struct MessageRow: View {
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
             .modifier(CopyableBubble(
                 text: { [liveModel] in liveModel?.fullText ?? message.text },
-                isHovering: $isHovering, justCopied: $justCopied))
+                isHovering: $isHovering, justCopied: $justCopied, pin: pinMenu))
 
             // Agent replies: collapsible tool-step journal, persisted on the
             // message (AgentGateway; nil for ordinary provider replies).
+            // A second level lazily pulls the full command/output/exit from
+            // the gateway transcript, keyed by the message's gateway row id.
             if let steps = message.agentSteps, !steps.isEmpty {
-                AgentStepJournalView(summary: steps)
-                    .padding(.leading, 4)
+                AgentStepJournalView(
+                    summary: steps,
+                    detailLoader: message.seq.map { seq in
+                        { await HermesStepDetails.details(forAssistantSeq: seq) }
+                    }
+                )
+                .padding(.leading, 4)
             }
 
             // Agent replies: files the agent mentioned by path — reveal in
@@ -337,6 +364,8 @@ struct CopyableBubble: ViewModifier {
     let text: () -> String
     @Binding var isHovering: Bool
     @Binding var justCopied: Bool
+    /// Optional pin/unpin entry appended to the context menu (agent chats).
+    var pin: MessageRow.PinMenu? = nil
 
     func body(content: Content) -> some View {
         content
@@ -376,6 +405,14 @@ struct CopyableBubble: ViewModifier {
                     copy()
                 } label: {
                     Label(L("tooltip.copy"), systemImage: "doc.on.doc")
+                }
+                if let pin {
+                    Button {
+                        pin.toggle()
+                    } label: {
+                        Label(pin.isPinned ? AGL("agent.pin.unpin") : AGL("agent.pin.pin"),
+                              systemImage: pin.isPinned ? "pin.slash" : "pin")
+                    }
                 }
             }
     }

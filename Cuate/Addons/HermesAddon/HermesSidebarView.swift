@@ -58,6 +58,11 @@ struct HermesSidebarView: View {
         .onReceive(NotificationCenter.default.publisher(for: .hermesConnectionDidChange)) { _ in
             Task { await reloadAll() }
         }
+        // A turn just created a session (or moved its counters) — the list
+        // updates live.
+        .onReceive(NotificationCenter.default.publisher(for: .hermesSessionsDidChange)) { _ in
+            Task { await loadSessions() }
+        }
     }
 
     @ViewBuilder

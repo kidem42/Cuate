@@ -32,10 +32,20 @@ final class HermesAgentSession: AgentSession {
     /// Returns the bound gateway session, creating + model-locking one on
     /// first use. The lock is mandatory: a fresh Hermes session inherits the
     /// literal "hermes-agent" model and every turn 404s (fixtures).
-    func ensureSession() async throws -> String {
+    ///
+    /// The title comes from the FIRST message (Hermes' own auto-titler
+    /// skips API-created sessions — probed live 2026-07-26 — so a static
+    /// name would make every our session look identical in the list).
+    func ensureSession(firstText: String = "") async throws -> String {
         if let existing = boundSessionID { return existing }
         let transport = addon.transport()
-        let info = try await transport.createSession(title: "Cuate — \(role.displayName)")
+        let excerpt = firstText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+        let title = excerpt.isEmpty
+            ? "Cuate — \(role.displayName)"
+            : String(excerpt.prefix(48)) + (excerpt.count > 48 ? "…" : "")
+        let info = try await transport.createSession(title: title)
         if let pair = await addon.resolveLockPair() {
             // Best effort: an old gateway without the lock endpoint should
             // not block chatting (the turn itself may still route fine).
@@ -43,6 +53,9 @@ final class HermesAgentSession: AgentSession {
             settings.recordModelLock(provider: pair.provider, model: pair.model, forSession: info.id)
         }
         settings.bindSession(info.id, toConversationKey: conversationKey)
+        // The sidebar's sessions list must learn about the fresh session
+        // right away, not on its next reopen (e2e 2026-07-26).
+        NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
         return info.id
     }
 
@@ -52,7 +65,7 @@ final class HermesAgentSession: AgentSession {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
-                    let sessionID = try await ensureSession()
+                    let sessionID = try await ensureSession(firstText: text)
                     let transport = addon.transport()
                     // Images ride as OpenAI-style content parts (probed live;
                     // a flat "images" field is silently ignored by Hermes).

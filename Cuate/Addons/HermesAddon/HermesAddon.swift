@@ -194,6 +194,12 @@ final class HermesAddon: ObservableObject {
 
     private func pollBoundSessions() async {
         guard let sessions = try? await transport().sessions(limit: 50) else { return }
+        // A session appeared or vanished on ANOTHER surface (their app,
+        // CLI, Telegram) — the sidebar list must learn without a reopen.
+        let ids = Set(sessions.map(\.id))
+        if ids != Set(lastSeenCounts.keys) {
+            NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
+        }
         updateReadWatermarks(sessions: sessions)
         // conversationKey ↔ sessionID (the map is stored the other way).
         let bindings = settings.sessionMap // [conversationKey: sessionID]

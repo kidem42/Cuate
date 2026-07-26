@@ -129,6 +129,8 @@ enum AgentChatService {
                         conversationKey: conversationKey
                     )
                     Diagnostics.log("agent", "turn.end role=\(role.id) chars=\(displayedText.count) steps=\(journal.steps.count) final=\(sawFinalText)")
+                    // Counters/previews in the sidebar's session rows moved.
+                    NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
                     continuation.finish()
                 } catch {
                     // Best effort: tell the gateway to stop the run the user

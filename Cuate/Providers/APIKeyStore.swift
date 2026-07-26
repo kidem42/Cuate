@@ -368,6 +368,7 @@ nonisolated enum APIKeyStore {
         case deepgram
         case fal // ImageAddon (Addons/ImageAddon)
         case hermes // HermesAddon gateway token (Addons/HermesAddon)
+        case hermesDashboard // HermesAddon dashboard session token (remote files)
 
         var displayName: String {
             switch self {
@@ -375,6 +376,7 @@ nonisolated enum APIKeyStore {
             case .deepgram: return "Deepgram"
             case .fal: return "fal.ai"
             case .hermes: return "Hermes Agent"
+            case .hermesDashboard: return "Hermes Dashboard"
             }
         }
     }
@@ -414,4 +416,8 @@ extension Notification.Name {
     static let selectSettingsTab = Notification.Name("selectSettingsTab")
     /// Opens the Settings window from anywhere (AppDelegate listens).
     static let openSettingsWindow = Notification.Name("openSettingsWindow")
+    /// Deep link past the tab level: switches Settings to the API Keys tab,
+    /// scrolls to the speech-to-text key section and flashes it. Posted by the
+    /// composer's mic button when no STT provider has a key.
+    static let revealSpeechKeySection = Notification.Name("revealSpeechKeySection")
 }

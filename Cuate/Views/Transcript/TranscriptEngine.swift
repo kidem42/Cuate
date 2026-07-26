@@ -44,6 +44,20 @@ final class TranscriptController {
         engine?.scrollToBottom(animated: animated)
     }
 
+    /// Scrolls a specific row (message id) into view — pinned-message
+    /// navigation. Drops the bottom pin like a manual scroll would.
+    func scrollTo(id: String, animated: Bool = true) {
+        if engine == nil { Diagnostics.log("transcript", "scrollTo no-engine id=\(id)") }
+        engine?.scrollTo(id: id, animated: animated)
+    }
+
+    /// Whether the row is meaningfully on screen right now. The pinned bar
+    /// uses it for Telegram-style clicks: jump to the shown pin first, and
+    /// only cycle onward once that pin is in view.
+    func isRowVisible(id: String) -> Bool {
+        engine?.isRowVisible(id: id) ?? false
+    }
+
     /// Whether the viewport is currently pinned to the newest content.
     var isPinnedToBottom: Bool { engine?.isPinnedToBottom ?? true }
 }
@@ -181,7 +195,10 @@ final class TranscriptEngineView: NSScrollView {
         // lands" case).
         let newIDs = Set(items.map(\.id))
         var anchor: (id: String, offsetInViewport: CGFloat)?
-        if !isPinnedToBottom, !isReset {
+        // Skip while a programmatic glide is in flight (pinned-message jump):
+        // anchoring to the not-yet-moved origin would cancel the animation
+        // and snap the view right back.
+        if !isPinnedToBottom, !isReset, programmaticScrollDepth == 0 {
             let visibleTop = contentView.bounds.origin.y
             for row in rows where newIDs.contains(row.id) {
                 let rowMaxY = row.host.frame.maxY
@@ -208,7 +225,7 @@ final class TranscriptEngineView: NSScrollView {
 
         if isPinnedToBottom {
             scrollToBottomInstant()
-        } else if let anchor,
+        } else if programmaticScrollDepth == 0, let anchor,
                   let row = rows.first(where: { $0.id == anchor.id }) {
             setOriginY(row.host.frame.minY - anchor.offsetInViewport)
         }
@@ -280,6 +297,43 @@ final class TranscriptEngineView: NSScrollView {
 
     private func scrollToBottomInstant() {
         setOriginY(bottomOriginY)
+    }
+
+    /// Brings a row to (near) the top of the viewport — the pinned-message
+    /// jump. Behaves like a user scroll: the bottom pin is dropped so the
+    /// next stream flush cannot yank the view back down.
+    func scrollTo(id: String, animated: Bool) {
+        guard let row = rows.first(where: { $0.id == id }) else {
+            Diagnostics.log("transcript", "scrollTo miss id=\(id) rows=\(rows.count)")
+            return
+        }
+        stack.layoutSubtreeIfNeeded()
+        isPinnedToBottom = false
+        let target = max(0, min(row.host.frame.minY - 24, bottomOriginY))
+        guard animated else {
+            setOriginY(target)
+            return
+        }
+        programmaticScrollDepth += 1
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
+        } completionHandler: { [weak self] in
+            self?.programmaticScrollDepth -= 1
+        }
+        reflectScrolledClipView(contentView)
+    }
+
+    /// A row counts as visible when a meaningful slice of it (32pt, or the
+    /// whole row if shorter) is inside the viewport — a sliver peeking from
+    /// an edge shouldn't satisfy "I'm looking at it".
+    func isRowVisible(id: String) -> Bool {
+        guard let row = rows.first(where: { $0.id == id }) else { return false }
+        stack.layoutSubtreeIfNeeded()
+        let overlap = row.host.frame.intersection(contentView.documentVisibleRect)
+        guard !overlap.isNull else { return false }
+        return overlap.height >= min(row.host.frame.height, 32)
     }
 
     private func setOriginY(_ y: CGFloat) {

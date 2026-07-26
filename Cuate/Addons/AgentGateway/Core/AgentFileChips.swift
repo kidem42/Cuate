@@ -32,12 +32,36 @@ enum AgentFilePaths {
     /// Resolves a mentioned path against the LOCAL filesystem (the gateway
     /// host is this Mac): ~ expands to the real home. nil when the file
     /// does not exist locally (remote gateway, or the path is prose).
+    /// Paths already reported missing (debug breadcrumb fires once each).
+    private static var loggedMisses = Set<String>()
+
     static func localURL(for path: String) -> URL? {
         let expanded = path.hasPrefix("~")
             ? NSHomeDirectory() + path.dropFirst()
             : path
-        return FileManager.default.fileExists(atPath: expanded)
-            ? URL(fileURLWithPath: expanded) : nil
+        if FileManager.default.fileExists(atPath: expanded) {
+            return URL(fileURLWithPath: expanded)
+        }
+        // Breadcrumb for "the preview vanished" reports: the EXACT string
+        // that failed, hex-dumped head, so invisible characters show.
+        if loggedMisses.insert(path).inserted {
+            let hexHead = expanded.utf8.prefix(80).map { String(format: "%02x", $0) }.joined()
+            Diagnostics.log("agent", "file.miss path=\(expanded) hex=\(hexHead)")
+        }
+        return nil
+    }
+
+    /// Whether a mentioned path is a FILE worth listing in the chat-wide
+    /// files popover (preview / download / open). Local directories and
+    /// extension-less prose paths are chatter there — but the per-bubble
+    /// chips keep them (a directory chip revealing in Finder is useful in
+    /// context; e2e 2026-07-26).
+    static func isListableFile(_ path: String) -> Bool {
+        let expanded = path.hasPrefix("~") ? NSHomeDirectory() + path.dropFirst() : path
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory)
+        if exists { return !isDirectory.boolValue }
+        return !(path as NSString).pathExtension.isEmpty
     }
 }
 
@@ -136,6 +160,76 @@ struct AgentFileChipsView: View {
     }
 }
 
+/// The attached-files note woven into an outgoing agent message is a
+/// CONTRACT the agent reads ("Attached files…:\n- path"); on screen it
+/// renders as pills instead of raw paths. This splits a message into the
+/// display text and the note's paths (all UI languages recognized).
+enum AgentAttachNote {
+    /// Every localized header the courier can produce.
+    private static let headers: Set<String> = {
+        var result = Set<String>()
+        for key in ["agent.attach.fileNote.header", "agent.attach.filesNote.header"] {
+            for (_, value) in AgentGatewayStrings.table[key] ?? [:] {
+                result.insert(value)
+            }
+        }
+        return result
+    }()
+
+    /// Returns the text WITHOUT the trailing note, plus the note's paths
+    /// (empty when the message carries no note).
+    static func split(_ text: String) -> (display: String, paths: [String]) {
+        let lines = text.components(separatedBy: "\n")
+        // The note is a header line followed by "- path" lines at the END.
+        var index = lines.count - 1
+        var paths: [String] = []
+        while index >= 0, lines[index].hasPrefix("- ") {
+            paths.insert(String(lines[index].dropFirst(2)), at: 0)
+            index -= 1
+        }
+        guard !paths.isEmpty, index >= 0,
+              headers.contains(lines[index].trimmingCharacters(in: .whitespaces)) else {
+            return (text, [])
+        }
+        let display = lines[..<index].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (display, paths)
+    }
+}
+
+/// Pills for the files of an outgoing message (user bubble): filename chip,
+/// click reveals a local file in Finder, full path in the tooltip.
+struct AgentAttachPillsView: View {
+    @Environment(\.themePalette) private var palette
+
+    let paths: [String]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(paths, id: \.self) { path in
+                Button {
+                    if let local = AgentFilePaths.localURL(for: path) {
+                        NSWorkspace.shared.activateFileViewerSelecting([local])
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "doc.fill")
+                            .font(.system(size: 10))
+                        Text((path as NSString).lastPathComponent)
+                            .font(.system(size: 11, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.secondary.opacity(0.14), in: Capsule())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(path)
+            }
+        }
+    }
+}
+
 /// Popover with EVERY file the agent handed over in this conversation
 /// (header folder button, e2e feedback 2026-07-25): open with the default
 /// app, reveal in Finder, or copy the path when the file lives on a remote
@@ -143,8 +237,10 @@ struct AgentFileChipsView: View {
 struct AgentChatFilesView: View {
     @Environment(\.themePalette) private var palette
 
-    /// Deduped paths, newest first (collected from the transcript).
+    /// Deduped paths, newest first: files the AGENT produced, and files the
+    /// USER attached (a separate group; e2e request 2026-07-26).
     let paths: [String]
+    var userPaths: [String] = []
     @State private var copiedPath: String?
 
     var body: some View {
@@ -153,7 +249,7 @@ struct AgentChatFilesView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .textCase(.uppercase)
                 .foregroundColor(.secondary)
-            if paths.isEmpty {
+            if paths.isEmpty, userPaths.isEmpty {
                 Text(AGL("agent.files.empty"))
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
@@ -162,6 +258,16 @@ struct AgentChatFilesView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(paths, id: \.self) { path in
                             row(for: path)
+                        }
+                        if !userPaths.isEmpty {
+                            Text(AGL("agent.files.fromUser"))
+                                .font(.system(size: 10, weight: .semibold))
+                                .textCase(.uppercase)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 6)
+                            ForEach(userPaths, id: \.self) { path in
+                                row(for: path)
+                            }
                         }
                     }
                 }

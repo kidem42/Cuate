@@ -50,12 +50,57 @@ struct HermesSettingsView: View {
     ssh USER@HOST "grep '^API_SERVER_KEY=' ~/.hermes/.env"
     """
 
+    @State private var dashboardTokenInput = ""
+    @State private var dashboardTokenMasked: String? = APIKeyStore.maskedKey(aux: .hermesDashboard)
+
+    /// Remote-file courier: the dashboard's files API (needed only when the
+    /// gateway is on another machine).
+    private var dashboardSection: some View {
+        Section {
+            TextField(HL("hermes.dash.url"), text: $settings.dashboardURL,
+                      prompt: Text(HL("hermes.dash.url.placeholder")))
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+            HStack {
+                if let masked = dashboardTokenMasked {
+                    Text(masked)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(HL("hermes.conn.key.remove")) {
+                        _ = APIKeyStore.remove(aux: .hermesDashboard)
+                        dashboardTokenMasked = nil
+                    }
+                } else {
+                    SecureField(HL("hermes.dash.token"), text: $dashboardTokenInput)
+                        .textFieldStyle(.roundedBorder)
+                    Button(HL("hermes.conn.key.save")) {
+                        if APIKeyStore.set(dashboardTokenInput, aux: .hermesDashboard) {
+                            dashboardTokenInput = ""
+                            dashboardTokenMasked = APIKeyStore.maskedKey(aux: .hermesDashboard)
+                        }
+                    }
+                    .disabled(dashboardTokenInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        } header: {
+            Text(HL("hermes.dash.header"))
+        } footer: {
+            Text(HL("hermes.dash.caption"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     var body: some View {
         Form {
             connectionSection
+            dashboardSection
             setupSection
             modelSection
             historySection
+            appFeaturesSection
             notificationsSection
             sessionsSection
         }
@@ -240,6 +285,21 @@ struct HermesSettingsView: View {
             Text(HL("hermes.history.header"))
         } footer: {
             Text(HL("hermes.history.caption"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Host app features (separate opt-in, ImageAddon + OCR)
+
+    private var appFeaturesSection: some View {
+        Section {
+            Toggle(HL("hermes.appFeatures.toggle"), isOn: $settings.imageFeaturesEnabled)
+        } header: {
+            Text(HL("hermes.appFeatures.header"))
+        } footer: {
+            Text(HL("hermes.appFeatures.caption"))
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

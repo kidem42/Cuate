@@ -29,7 +29,11 @@ struct ChatWindow: View {
     @State private var quoteToInsert: String?
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: AppState
-    @State private var pendingAttachment: ChatAttachment?
+    /// Staged images, oldest first (up to `Self.maxPendingAttachments`).
+    /// ONE image keeps the full toolbar (ImageAddon actions, Extract Text);
+    /// several collapse to bare thumbnails — a batch goes to the model as
+    /// vision content parts, and per-image editing tools would be ambiguous.
+    @State private var pendingAttachments: [ChatAttachment] = []
     @State private var isExtractingText = false
 
     /// What a failed turn should re-run: the chat request (message already in
@@ -59,19 +63,115 @@ struct ChatWindow: View {
     @State private var slashDismissedText: String?
     /// Header folder popover: all files the agent shared in this chat.
     @State private var showAgentFiles = false
+    /// Agent mode: non-image files picked for the next message — sent as
+    /// PATHS the agent's file tools read (uploaded first via the dashboard
+    /// courier when the gateway is remote). Multiple files are fine.
+    @State private var pendingAgentFilePaths: [String] = []
+    /// A drag hovers over the panel (drop-zone highlight).
+    @State private var isDropTargeted = false
+    /// Pinned-message navigation: which pin the bar targets next (cycles,
+    /// Telegram-style; resets on conversation switch via task(id:)).
+    @State private var pinCycleIndex = 0
 
-    /// File paths from every agent reply of the conversation, deduped,
-    /// newest first (the header folder popover).
-    private func collectAgentFilePaths() -> [String] {
+    /// Pinned messages of the OPEN agent conversation that are actually in
+    /// the loaded window (stale ids — cleared chats — drop out silently).
+    private var resolvedPinnedMessages: [ChatMessage] {
+        guard chatStore.conversation.isAgent else { return [] }
+        let ids = hermesSettings.pinnedMessages(forConversationKey: chatStore.conversation.storageKey)
+        guard !ids.isEmpty else { return [] }
+        return ids.compactMap { id in
+            chatStore.messages.first { $0.id.uuidString == id }
+        }
+    }
+
+    /// Telegram-style bar over the transcript: shows the target pin, click
+    /// jumps to it and advances the cycle; ✕ unpins the shown one.
+    @ViewBuilder
+    private var pinnedMessagesBar: some View {
+        let pins = resolvedPinnedMessages
+        if !pins.isEmpty {
+            let index = pinCycleIndex % pins.count
+            let target = pins[index]
+            HStack(spacing: 8) {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(palette.ink)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(AGL("agent.pin.title"))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(palette.ink)
+                        if pins.count > 1 {
+                            Text("\(index + 1)/\(pins.count)")
+                                .font(.system(size: 10))
+                                .foregroundColor(palette.secondaryText)
+                        }
+                    }
+                    Text(target.text.replacingOccurrences(of: "\n", with: " "))
+                        .font(.system(size: 11))
+                        .foregroundColor(palette.primaryText)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    hermesSettings.toggleMessagePin(
+                        target.id.uuidString,
+                        conversationKey: chatStore.conversation.storageKey)
+                    pinCycleIndex = 0
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(palette.secondaryText)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(AGL("agent.pin.unpin"))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // Telegram mechanics: if the shown pin is off-screen, the
+                // first click brings you TO it; cycling to the next pin only
+                // starts once the current target is in view.
+                if transcriptController.isRowVisible(id: target.id.uuidString) {
+                    let next = (index + 1) % pins.count
+                    transcriptController.scrollTo(id: pins[next].id.uuidString)
+                    pinCycleIndex = next
+                } else {
+                    transcriptController.scrollTo(id: target.id.uuidString)
+                    pinCycleIndex = index
+                }
+            }
+            .background(Color.secondary.opacity(0.07))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1)
+            }
+            .help(AGL("agent.pin.barHelp"))
+        }
+    }
+
+    /// File paths from the conversation, deduped, newest first (the header
+    /// folder popover). FILES only — directory mentions stay on the
+    /// per-bubble chips but are noise in this list. Two groups: produced by
+    /// the AGENT, and attached BY THE USER (from the attach notes).
+    private func collectAgentFilePaths() -> (agent: [String], user: [String]) {
         var seen = Set<String>()
-        var result: [String] = []
-        for message in chatStore.messages.reversed() where !message.isUser {
-            for path in AgentFilePaths.extract(from: message.text)
-            where seen.insert(path).inserted {
-                result.append(path)
+        var agent: [String] = []
+        var user: [String] = []
+        for message in chatStore.messages.reversed() {
+            if message.isUser {
+                for path in AgentAttachNote.split(message.text).paths
+                where AgentFilePaths.isListableFile(path) && seen.insert(path).inserted {
+                    user.append(path)
+                }
+            } else {
+                for path in AgentFilePaths.extract(from: message.text)
+                where AgentFilePaths.isListableFile(path) && seen.insert(path).inserted {
+                    agent.append(path)
+                }
             }
         }
-        return result
+        return (agent, user)
     }
     /// In-flight assistant reply. Survives conversation switches (the reply
     /// keeps streaming in the background into its origin chat); cancelled
@@ -328,6 +428,12 @@ struct ChatWindow: View {
 
     private func messageItem(_ message: ChatMessage, rowWidth: CGFloat,
                              maxBubble: CGFloat, baseRevision: Int) -> TranscriptItem {
+        // Telegram-style pins, agent chats only (right-click → pin).
+        let conversationKey = chatStore.conversation.storageKey
+        let pinnable = chatStore.conversation.isAgent && message.messageType != .system
+        let isPinned = pinnable
+            && hermesSettings.isMessagePinned(message.id.uuidString, conversationKey: conversationKey)
+
         var hasher = Hasher()
         hasher.combine(baseRevision)
         hasher.combine(message.text)
@@ -336,14 +442,26 @@ struct ChatWindow: View {
         // Agent step journal attaches at delivery, after the last text
         // checkpoint — without this the row never rebuilds to show it.
         hasher.combine(message.agentSteps)
+        // Pin state feeds the row's context menu label.
+        hasher.combine(isPinned)
         for attachment in message.attachments {
             hasher.combine(attachment.id)
             hasher.combine(attachment.fileURLString)
             hasher.combine(attachment.ocrText)
         }
+        // The bubble owns its context menu (CopyableBubble) — the pin entry
+        // must ride inside it, an outer .contextMenu would be shadowed.
+        let pinMenu: MessageRow.PinMenu? = pinnable ? MessageRow.PinMenu(
+            isPinned: isPinned,
+            toggle: {
+                HermesSettings.shared.toggleMessagePin(
+                    message.id.uuidString, conversationKey: conversationKey)
+            }
+        ) : nil
+
         return TranscriptItem(id: message.id.uuidString, revision: hasher.finalize()) { [palette] in
             AnyView(
-                MessageRow(message: message, maxBubbleWidth: maxBubble)
+                MessageRow(message: message, maxBubbleWidth: maxBubble, pinMenu: pinMenu)
                     .environment(\.themePalette, palette)
                     .fontDesign(palette.fontDesign)
                     .frame(width: rowWidth, alignment: .leading)
@@ -383,6 +501,17 @@ struct ChatWindow: View {
             // fill the panel with their gradient + signature pattern instead
             // (see themedPanelSurface). Legibility comes from the bubbles.
             .themedPanelSurface(palette, cornerRadius: 18)
+            // Drop zone (pairs with the pin — an unpinned panel hides the
+            // moment Finder takes focus): agent mode accepts ANY file (it
+            // rides as a path for the agent's file tools), ordinary chats
+            // keep the image-only rule.
+            .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
+                handleFileDrop(providers)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.accentColor.opacity(isDropTargeted ? 0.8 : 0), lineWidth: 2)
+            )
         }
         // The window makes room for the column (grow left / shrink back);
         // the chat column itself never changes size.
@@ -392,6 +521,30 @@ struct ChatWindow: View {
                 userInfo: ["visible": visible]
             )
         }
+    }
+
+    /// Accepts a file dragged onto the panel. Images attach as usual (with
+    /// HEIC/TIFF conversion); other files only in agent mode, as a path.
+    private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+        for provider in fileProviders {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else {
+                    url = item as? URL
+                }
+                guard let url else { return }
+                DispatchQueue.main.async {
+                    acceptPickedFile(url)
+                }
+            }
+        }
+        return true
     }
 
     /// The chat column itself (header, transcript, composer).
@@ -453,6 +606,9 @@ struct ChatWindow: View {
                     .padding(.top, 5)
                 }
                 .frame(height: 22)
+
+                // Telegram-style pinned-message bar (agent chats).
+                pinnedMessagesBar
 
                 // Chat messages area — AppKit transcript engine
                 // (Views/Transcript/): point row updates, an owned scroll
@@ -551,6 +707,37 @@ struct ChatWindow: View {
                     // image commands, which intercept before sending.
                     agentSlashSuggestions
 
+                    // Agent mode: picked non-image files ride as paths.
+                    if !pendingAgentFilePaths.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(pendingAgentFilePaths, id: \.self) { filePath in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "doc")
+                                            .font(.system(size: 11))
+                                        Text((filePath as NSString).lastPathComponent)
+                                            .font(.system(size: 12, design: .monospaced))
+                                            .lineLimit(1)
+                                        Button {
+                                            pendingAgentFilePaths.removeAll { $0 == filePath }
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.system(size: 11))
+                                        }
+                                        .buttonStyle(PlainButtonStyle())
+                                    }
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.secondary.opacity(0.10), in: Capsule())
+                                    .help(filePath)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
                     ThemedComposerDivider(palette: palette)
 
                     // Retry after a failed turn — no re-typing / re-recording:
@@ -572,24 +759,8 @@ struct ChatWindow: View {
                         .padding(.horizontal, 12)
                     }
 
-                    if let attachment = pendingAttachment {
-                        PendingAttachmentPreview(
-                            attachment: attachment,
-                            isExtractingText: isExtractingText,
-                            canExtractText: OCRService.isAvailable && attachment.mimeType.hasPrefix("image"),
-                            removeAction: clearCurrentAttachment,
-                            extractTextAction: { extractText(from: attachment) }
-                        )
-                        .padding(.horizontal, 12)
-
-                        // ImageAddon actions (Addons/ImageAddon) — renders
-                        // nothing while the addon is disabled.
-                        ImageAttachmentActionsBar(
-                            attachment: attachment,
-                            chatStore: chatStore,
-                            clearAttachment: clearCurrentAttachment
-                        )
-                        .padding(.horizontal, 12)
+                    if !pendingAttachments.isEmpty {
+                        attachmentCard
                     }
 
                     HStack(alignment: .bottom, spacing: 8) {
@@ -787,7 +958,7 @@ struct ChatWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: .agentRunCommandRemotely)) { note in
             guard let command = note.object as? String,
                   settings.activeAgentRole != nil, !chatStore.isLoading else { return }
-            performSend(text: String(format: AGL("agent.code.remotePrompt"), command), attachment: nil)
+            performSend(text: String(format: AGL("agent.code.remotePrompt"), command), attachments: [])
         }
         .modifier(agentSyncHandlers)
     }
@@ -831,7 +1002,12 @@ struct ChatWindow: View {
                 }
             }
             refreshAvailableProviders()
-            self.pendingAttachment = appState.pendingAttachment
+            // AppState is an INBOX for externally-produced attachments
+            // (screenshot hotkeys): consume into the staging row and clear.
+            if let staged = appState.pendingAttachment {
+                appendPendingAttachment(staged)
+                appState.clearPendingAttachment()
+            }
             installPanelKeyMonitor()
             ChatWindowBridge.chatStore = chatStore // ImageAddon (Addons/ImageAddon)
             // Safety net: ChatStore.init resolved the conversation from
@@ -856,7 +1032,12 @@ struct ChatWindow: View {
             }
         }
         .onReceive(appState.$pendingAttachment) { attachment in
-            self.pendingAttachment = attachment
+            // Inbox semantics: a new arrival is APPENDED (screenshots stack
+            // with what's already staged); the publisher's nil on clear is
+            // not a command to drop the local staging row.
+            guard let attachment else { return }
+            appendPendingAttachment(attachment)
+            appState.clearPendingAttachment()
         }
         .onReceive(appState.$pendingInputText) { text in
             guard let text, !text.isEmpty else { return }
@@ -957,6 +1138,15 @@ struct ChatWindow: View {
     /// underneath), else the quick provider switcher.
     // MARK: - Agent composer controls (slash autocomplete, model/effort)
 
+    /// Whether the app's OWN model-backed image features (ImageAddon bar,
+    /// OCR extract, /upscale-style slash commands) may surface in the
+    /// CURRENT conversation. Ordinary chats: always. Agent conversations:
+    /// only behind the separate Hermes opt-in — the agent owns its sessions,
+    /// our tools don't mix in uninvited (Settings → Hermes → App features).
+    private var imageFeaturesAllowed: Bool {
+        !chatStore.conversation.isAgent || hermesSettings.imageFeaturesEnabled
+    }
+
     /// The "/query" being typed, when the composer is in slash-prefix state
     /// (agent mode, single line, no space after the command yet).
     private var slashQuery: String? {
@@ -972,7 +1162,7 @@ struct ChatWindow: View {
     private func slashSuggestionItems() -> [(command: String, description: String?)] {
         guard let query = slashQuery, messageText != slashDismissedText else { return [] }
         var items: [(String, String?)] = []
-        if ImageAddonSettings.shared.enabled {
+        if ImageAddonSettings.shared.enabled, imageFeaturesAllowed {
             items += ["/upscale", "/bg", "/cleanup"]
                 .filter { query.isEmpty || $0.dropFirst().contains(query) }
                 .map { ($0, nil) }
@@ -1189,7 +1379,8 @@ struct ChatWindow: View {
             .buttonStyle(PlainButtonStyle())
             .help(AGL("agent.files.title"))
             .popover(isPresented: $showAgentFiles, arrowEdge: .bottom) {
-                AgentChatFilesView(paths: collectAgentFilePaths())
+                let collected = collectAgentFilePaths()
+                AgentChatFilesView(paths: collected.agent, userPaths: collected.user)
                     .environment(\.themePalette, palette)
             }
         } else if availableProviders.count <= 1 {
@@ -1631,17 +1822,20 @@ struct ChatWindow: View {
     private var composerIsEmpty: Bool {
         messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && quotedText == nil
-            && pendingAttachment == nil
+            && pendingAttachments.isEmpty
+            && pendingAgentFilePaths.isEmpty
     }
 
     private func sendMessage() {
         // ImageAddon slash commands (/upscale, /bg, /cleanup) act on the
-        // pending attachment instead of being sent as chat text.
-        if ImageSlashCommands.handle(
+        // pending attachment instead of being sent as chat text. Behind the
+        // Hermes opt-in in agent conversations — there a "/..." the app
+        // doesn't claim goes to the agent as an ordinary message.
+        if imageFeaturesAllowed, pendingAttachments.count <= 1, ImageSlashCommands.handle(
             input: messageText,
-            attachment: pendingAttachment,
+            attachment: pendingAttachments.first,
             chatStore: chatStore,
-            clearAttachment: clearCurrentAttachment
+            clearAttachment: clearPendingAttachments
         ) {
             messageText = ""
             return
@@ -1649,15 +1843,36 @@ struct ChatWindow: View {
 
         // The quote region (if any) becomes a markdown blockquote in the
         // outgoing text; on screen it was a styled block without markers.
-        let text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
+        var text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
+
         // Attachment-only sends are allowed: the image goes to the model as
         // is and the conversation's system prompt drives what happens to it.
         // Providers already handle the empty text (vision → image block only,
         // non-vision → OCR text is injected in buildLLMMessages).
-        guard !text.isEmpty || pendingAttachment != nil else { return }
+        guard !text.isEmpty || !pendingAttachments.isEmpty else { return }
         guard ensureChatConfigured() else {
             messageText = ""
             quotedText = nil
+            return
+        }
+
+        // Agent mode with files: the courier resolves the paths first —
+        // local gateway keeps them as-is, a REMOTE one gets the files
+        // uploaded through the dashboard API and the note lists the remote
+        // paths (Hermes' API server itself takes no file inputs).
+        if settings.activeAgentRole != nil, !pendingAgentFilePaths.isEmpty {
+            let paths = pendingAgentFilePaths
+            pendingAgentFilePaths = []
+            let baseText = text
+            let attachments = pendingAttachments
+            Task { @MainActor in
+                let delivery = await HermesFileCourier.deliver(paths: paths)
+                if let warning = delivery.warning {
+                    chatStore.addMessage(text: warning, isUser: false, messageType: .system)
+                }
+                let full = baseText.isEmpty ? delivery.note : baseText + "\n\n" + delivery.note
+                performSend(text: full, attachments: attachments)
+            }
             return
         }
 
@@ -1665,28 +1880,30 @@ struct ChatWindow: View {
         // implicitly load it (time + RAM) — confirm first. Otherwise send now.
         // Not for agent roles: chatProvider is dormant there.
         if settings.chatProvider.isLocal, settings.activeAgentRole == nil {
-            let attachment = pendingAttachment
-            confirmLocalModelIfNeeded { performSend(text: text, attachment: attachment) }
+            let attachments = pendingAttachments
+            confirmLocalModelIfNeeded { performSend(text: text, attachments: attachments) }
             return
         }
-        performSend(text: text, attachment: pendingAttachment)
+        performSend(text: text, attachments: pendingAttachments)
     }
 
     /// Appends the user message and streams the reply, clearing the composer.
-    private func performSend(text: String, attachment: ChatAttachment?) {
+    /// The whole staged batch rides on ONE message — providers turn each
+    /// attachment into a vision content part (or OCR text for non-vision
+    /// models) in `buildMessages`.
+    private func performSend(text: String, attachments: [ChatAttachment]) {
         // An attachment restored from an existing chat message (ImageAddon
         // «продолжить редактирование») already owns a store row; posting the
         // same id again would collide with the unique index and persist an
         // attachment-less message — re-wrap with a fresh identity.
-        let posted = attachment.map {
+        let posted = attachments.map {
             ImageOperations.isRestoredFromChat($0) ? ImageOperations.freshCopyForPosting($0) : $0
         }
-        let attachments = posted.map { [$0] } ?? []
-        let userMessage = ChatMessage(text: text, isUser: true, attachments: attachments)
+        let userMessage = ChatMessage(text: text, isUser: true, attachments: posted)
         chatStore.appendNow(userMessage)
         messageText = "" // the editor re-measures itself back to one line
         quotedText = nil
-        clearCurrentAttachment()
+        clearPendingAttachments()
         streamAssistantReply()
     }
 
@@ -2051,8 +2268,97 @@ struct ChatWindow: View {
 
     // MARK: - Attachments / OCR
 
-    private func clearCurrentAttachment() {
-        pendingAttachment = nil
+    /// Compact card hugging its content — the attachment zone must not read
+    /// as a full-width band across the chat. ONE image: preview, filename,
+    /// and ONE pill row — the ImageAddon actions (render nothing while the
+    /// addon is off; behind the separate Hermes opt-in in agent
+    /// conversations) with Extract Text at the same level and height.
+    /// SEVERAL images: a bare thumbnail row (each with its ✕) — the batch
+    /// goes to the model as-is, per-image tools would be ambiguous. Top
+    /// alignment keeps the right pills in place when the bar unfolds its
+    /// mask editor below. Own property: inlining this in the composer body
+    /// blew the type-checker's budget.
+    @ViewBuilder
+    private var attachmentCard: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                if pendingAttachments.count == 1, let attachment = pendingAttachments.first {
+                    PendingAttachmentPreview(
+                        attachment: attachment,
+                        removeAction: clearPendingAttachments
+                    )
+                    HStack(alignment: .top, spacing: 8) {
+                        if imageFeaturesAllowed {
+                            ImageAttachmentActionsBar(
+                                attachment: attachment,
+                                chatStore: chatStore,
+                                clearAttachment: clearPendingAttachments
+                            )
+                        }
+                        if OCRService.isAvailable, attachment.mimeType.hasPrefix("image"),
+                           imageFeaturesAllowed {
+                            Button {
+                                extractText(from: attachment)
+                            } label: {
+                                Label(isExtractingText ? L("panel.extracting") : L("panel.extractText"),
+                                      systemImage: "text.viewfinder")
+                                    .font(.system(size: 11))
+                                    .frame(height: 14)
+                            }
+                            .actionPillStyle(.generic(palette: palette, dark: colorScheme == .dark),
+                                             glass: palette.isGlass)
+                            .disabled(isExtractingText)
+                            .help(L("tooltip.extract"))
+                        }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        ForEach(pendingAttachments) { attachment in
+                            PendingAttachmentThumbnail(attachment: attachment) {
+                                removePendingAttachment(attachment)
+                            }
+                        }
+                    }
+                    Text(String(format: L("panel.attachCount"),
+                                pendingAttachments.count, Self.maxPendingAttachments))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+    }
+
+    /// Batch ceiling. 5 is comfortably inside every supported provider's
+    /// per-request image limit (the tightest cloud cap is Mistral's 8;
+    /// Anthropic allows 100, OpenAI/Gemini hundreds) — and past ~5 images
+    /// answer quality degrades faster than limits bind.
+    static let maxPendingAttachments = 5
+
+    /// Appends to the staging row; over the ceiling the image is dropped
+    /// with an in-chat notice (never silently).
+    private func appendPendingAttachment(_ attachment: ChatAttachment) {
+        guard pendingAttachments.count < Self.maxPendingAttachments else {
+            chatStore.addMessage(
+                text: String(format: L("panel.attachLimit"), Self.maxPendingAttachments),
+                isUser: false, messageType: .system)
+            return
+        }
+        pendingAttachments.append(attachment)
+    }
+
+    private func removePendingAttachment(_ attachment: ChatAttachment) {
+        pendingAttachments.removeAll { $0.id == attachment.id }
+    }
+
+    private func clearPendingAttachments() {
+        pendingAttachments = []
         appState.clearPendingAttachment()
     }
 
@@ -2063,16 +2369,47 @@ struct ChatWindow: View {
     /// "Attach an image" via a system dialog. Presented as a SHEET of the
     /// floating panel: the dialog takes key status, and a free-standing
     /// dialog would trigger the panel's auto-hide (see `hideChatWindow`).
+    ///
+    /// Agent mode accepts ANY file: Hermes has no upload API, but its host
+    /// is (usually) this very Mac and its file tools read paths — so a
+    /// non-image attachment travels as a PATH REFERENCE in the message,
+    /// not as bytes (e2e request 2026-07-26).
     private func presentAttachOpenPanel() {
         guard let window = FloatingPanelWindow.chatPanel else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.png, .jpeg, .webP, .heic, .heif, .tiff, .gif]
+        // Multiple selection everywhere: images stage as a batch (up to
+        // `maxPendingAttachments`); agent mode additionally takes any file
+        // as a path reference.
+        panel.allowsMultipleSelection = true
+        if settings.activeAgentRole == nil {
+            panel.allowedContentTypes = [.png, .jpeg, .webP, .heic, .heif, .tiff, .gif]
+        }
         panel.beginSheetModal(for: window) { response in
-            guard response == .OK, let url = panel.url else { return }
+            guard response == .OK else { return }
+            for url in panel.urls {
+                acceptPickedFile(url)
+            }
+        }
+    }
+
+    /// Routes one picked/dropped file: images join the staged batch until
+    /// the ceiling; non-images (and image overflow in agent mode) join the
+    /// path list for the agent.
+    private func acceptPickedFile(_ url: URL) {
+        let mime = UTType(filenameExtension: url.pathExtension.lowercased())?.preferredMIMEType ?? ""
+        if mime.hasPrefix("image"), pendingAttachments.count < Self.maxPendingAttachments {
             _ = attachImageFile(at: url)
+        } else if settings.activeAgentRole != nil {
+            if !pendingAgentFilePaths.contains(url.path) {
+                pendingAgentFilePaths.append(url.path)
+            }
+        } else if mime.hasPrefix("image") {
+            // Ordinary chat, batch full: report instead of silently dropping.
+            chatStore.addMessage(
+                text: String(format: L("panel.attachLimit"), Self.maxPendingAttachments),
+                isUser: false, messageType: .system)
         }
     }
 
@@ -2146,7 +2483,7 @@ struct ChatWindow: View {
     /// then-cancelled file is reclaimed. Falls back to inline base64 only if
     /// the write fails, so attaching never silently drops the image.
     private func attach(data: Data, mime: String, filename: String) {
-        appState.pendingAttachment = ChatAttachment.fileBacked(data: data, mimeType: mime, filename: filename)
+        appendPendingAttachment(ChatAttachment.fileBacked(data: data, mimeType: mime, filename: filename))
     }
 
     /// Re-encodes arbitrary image bytes (HEIC, TIFF, …) to PNG.
@@ -2172,7 +2509,7 @@ struct ChatWindow: View {
                 // Same dual-flavor copy as the bubble button: tables get an
                 // HTML <table> flavor so spreadsheets split them into cells.
                 MarkdownBlocksView.copyMarkdownToPasteboard(markdown)
-                clearCurrentAttachment()
+                clearPendingAttachments()
                 // Show the source screenshot in the chat, then the extracted text.
                 chatStore.appendNow(ChatMessage(text: "", isUser: true, attachments: [attachment]))
                 chatStore.addMessage(text: markdown, isUser: false)
@@ -2351,15 +2688,15 @@ struct ChatWindow: View {
                 chatStore.addMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system)
                 return
             }
-            if let attachment = pendingAttachment {
-                // Dictation over a staged image: voice here is just an input
+            if !pendingAttachments.isEmpty {
+                // Dictation over staged images: voice here is just an input
                 // method (instead of typing), so the transcript goes out as a
-                // regular text message under the image — no audio kept, no
-                // voice reply. (A failed transcription keeps the attachment
+                // regular text message under the images — no audio kept, no
+                // voice reply. (A failed transcription keeps the attachments
                 // staged for retry.)
-                let userMessage = ChatMessage(text: transcript, isUser: true, attachments: [attachment])
+                let userMessage = ChatMessage(text: transcript, isUser: true, attachments: pendingAttachments)
                 chatStore.appendNow(userMessage)
-                clearCurrentAttachment()
+                clearPendingAttachments()
                 try? FileManager.default.removeItem(at: audioURL)
             } else {
                 let voiceMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
@@ -2378,12 +2715,52 @@ struct ChatWindow: View {
 
 // MARK: - Pending Attachment Preview
 
+/// Compact tile for the multi-image staging row: a square thumbnail with an
+/// ✕ badge. No per-image tools — the batch goes to the model as-is.
+private struct PendingAttachmentThumbnail: View {
+    let attachment: ChatAttachment
+    let removeAction: () -> Void
+    @State private var decodedImage: NSImage?
+
+    var body: some View {
+        Group {
+            if let image = decodedImage ?? AttachmentImageCache.cachedImage(for: attachment) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.08))
+                    .overlay(ThinkingEqualizer().scaleEffect(0.5))
+            }
+        }
+        .frame(width: 72, height: 72)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Button(action: removeAction) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(Color.black.opacity(0.55)))
+            }
+            .buttonStyle(.plain)
+            .padding(3)
+            .help(L("tooltip.removeAttachment"))
+        }
+        .help(attachment.filename)
+        .task(id: attachment.id) {
+            decodedImage = AttachmentImageCache.cachedImage(for: attachment)
+            decodedImage = await AttachmentImageCache.image(for: attachment)
+        }
+    }
+}
+
 private struct PendingAttachmentPreview: View {
     let attachment: ChatAttachment
-    let isExtractingText: Bool
-    let canExtractText: Bool
+    /// Detach: an ✕ badge on the preview's corner (the iMessage pattern) —
+    /// keeping it out of the pill row keeps the attachment card narrow.
     let removeAction: () -> Void
-    let extractTextAction: () -> Void
     /// Decoded off the main thread (see AttachmentImageCache).
     @State private var decodedImage: NSImage?
 
@@ -2396,39 +2773,28 @@ private struct PendingAttachmentPreview: View {
                     .scaledToFit()
                     .frame(maxHeight: 140)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .topTrailing) { removeBadge }
             } else if attachment.mimeType.hasPrefix("image") {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.08))
                     .frame(width: 180, height: 120)
                     .overlay(ThinkingEqualizer().scaleEffect(0.8))
+                    .overlay(alignment: .topTrailing) { removeBadge }
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.fill")
                         .foregroundColor(.secondary)
                     Text(attachment.filename)
                         .font(.callout)
+                    removeBadge
                 }
             }
 
-            HStack {
-                Text(attachment.filename)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                if canExtractText {
-                    Button(isExtractingText ? L("panel.extracting") : L("panel.extractText")) {
-                        extractTextAction()
-                    }
-                    .buttonStyle(.link)
-                    .disabled(isExtractingText)
-                    .help(L("tooltip.extract"))
-                }
-                Button(L("keys.remove")) {
-                    removeAction()
-                }
-                .buttonStyle(.link)
-                .help(L("tooltip.removeAttachment"))
-            }
+            // Extract Text moved to the host's pill row next to the
+            // ImageAddon actions — the preview keeps only the filename.
+            Text(attachment.filename)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
         // On the container, not the placeholder: the pending attachment can
         // be REPLACED while this view lives — the id-keyed task both resets
@@ -2437,5 +2803,20 @@ private struct PendingAttachmentPreview: View {
             decodedImage = AttachmentImageCache.cachedImage(for: attachment)
             decodedImage = await AttachmentImageCache.image(for: attachment)
         }
+    }
+
+    /// Small circled ✕ over the preview corner. Dark scrim + white glyph
+    /// stays legible over any image and any theme.
+    private var removeBadge: some View {
+        Button(action: removeAction) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.black.opacity(0.55)))
+        }
+        .buttonStyle(.plain)
+        .padding(5)
+        .help(L("tooltip.removeAttachment"))
     }
 }
