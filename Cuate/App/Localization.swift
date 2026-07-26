@@ -216,6 +216,9 @@ enum Localization {
         "voice.sttModel": [.english: "STT model", .spanish: "Modelo STT", .russian: "Модель STT"],
         "voice.footer": [.english: "Voice messages are transcribed with this provider, then the text is sent to the chat model.", .spanish: "Los mensajes de voz se transcriben con este proveedor y el texto se envía al modelo de chat.", .russian: "Голосовые сообщения распознаются этим провайдером, затем текст отправляется в чат-модель."],
         "voice.needKey": [.english: "No API key for this provider — add it in the API Keys tab.", .spanish: "No hay clave API para este proveedor — añádela en la pestaña Claves API.", .russian: "Нет ключа API для этого провайдера — добавьте его во вкладке «Ключи API»."],
+        "voice.noKey.tooltip": [.english: "Voice input needs an API key — click to set it up", .spanish: "La entrada de voz necesita una clave API — haz clic para configurarla", .russian: "Для голосового ввода нужен ключ API — нажмите, чтобы настроить"],
+        "voice.noKey.text": [.english: "To record voice messages, add an API key for a speech-to-text provider (Mistral, OpenAI or Deepgram).", .spanish: "Para grabar mensajes de voz, añade una clave API de un proveedor de voz a texto (Mistral, OpenAI o Deepgram).", .russian: "Чтобы записывать голосовые, добавьте ключ API провайдера распознавания речи (Mistral, OpenAI или Deepgram)."],
+        "voice.noKey.open": [.english: "Open API Keys…", .spanish: "Abrir Claves API…", .russian: "Открыть «Ключи API»…"],
         "ocr.header": [.english: "OCR (Text from Images)", .spanish: "OCR (texto de imágenes)", .russian: "OCR (текст с изображений)"],
         "ocr.provider": [.english: "Provider", .spanish: "Proveedor", .russian: "Провайдер"],
         "ocr.model": [.english: "OCR model", .spanish: "Modelo OCR", .russian: "Модель OCR"],
@@ -360,6 +363,8 @@ enum Localization {
         "panel.emptyReply": [.english: "(empty reply)", .spanish: "(respuesta vacía)", .russian: "(пустой ответ)"],
         "panel.ocrDone": [.english: "Extracted with OCR — text copied to the clipboard.", .spanish: "Extraído con OCR — texto copiado al portapapeles.", .russian: "Распознано через OCR — текст скопирован в буфер обмена."],
         "panel.ocrFailed": [.english: "OCR failed: %@", .spanish: "Falló el OCR: %@", .russian: "Ошибка OCR: %@"],
+        "panel.attachCount": [.english: "%d of %d images", .spanish: "%d de %d imágenes", .russian: "%d из %d изображений"],
+        "panel.attachLimit": [.english: "You can attach up to %d images to one message.", .spanish: "Puedes adjuntar hasta %d imágenes a un mensaje.", .russian: "К одному сообщению можно прикрепить не больше %d изображений."],
 
         // MARK: Tooltips
         "tooltip.input": [.english: "Enter — send, Shift+Enter — new line", .spanish: "Intro — enviar, Mayús+Intro — nueva línea", .russian: "Enter — отправить, Shift+Enter — новая строка"],

@@ -48,7 +48,10 @@ struct ImageAttachmentActionsBar: View {
                             showingKeyHint = true
                         }
                     }
-                    Spacer()
+                    // No trailing Spacer: the host hugs this row into its
+                    // compact attachment card (Extract Text / ✕ follow on
+                    // the same line) — a greedy row would stretch the card
+                    // back to full chat width.
                 }
 
                 if showingCleanupEditor {
@@ -270,6 +273,16 @@ struct ThemedPillColors {
     let fg: Color
     var dash: [CGFloat] = [1.5, 2.5]
     var lineWidth: CGFloat = 1.5
+
+    /// Generic single-accent pill — the same fallback the function pills use
+    /// outside per-theme specs. Host-side actions (Extract Text, ✕ remove on
+    /// the attachment preview) share it so every themed pill row matches.
+    static func generic(palette: ThemePalette, dark: Bool) -> ThemedPillColors {
+        let base = palette.accent
+        return ThemedPillColors(border: base.opacity(0.55),
+                                fill: dark ? base.opacity(0.08) : Color.white.opacity(0.5),
+                                fg: palette.ink)
+    }
 }
 
 /// Día-style action pill: rounded rect (r6), 1.5px dotted border and a
@@ -295,9 +308,10 @@ struct ThemedPillButtonStyle: ButtonStyle {
     }
 }
 
-private extension View {
+extension View {
     /// Applies the themed dotted pill (non-glass) or keeps the native small
-    /// bordered button (glass / Current).
+    /// bordered button (glass / Current). Internal: the host's attachment
+    /// preview (Extract Text / ✕) wears the same pills as the addon's row.
     @ViewBuilder
     func actionPillStyle(_ colors: ThemedPillColors, glass: Bool) -> some View {
         if glass {

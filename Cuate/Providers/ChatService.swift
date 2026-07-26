@@ -359,7 +359,9 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                 if message.id == lastUserID {
                     if supportsVision {
                         images = message.attachments.map {
-                            LLMImage(mimeType: $0.mimeType, base64: $0.contentBase64)
+                            // Downscaled copy for the wire; originals stay
+                            // untouched for OCR / image-processing tracks.
+                            LLMImage.forModel(mimeType: $0.mimeType, base64: $0.contentBase64)
                         }
                     } else {
                         // Non-vision provider: OCR the attachments into text.

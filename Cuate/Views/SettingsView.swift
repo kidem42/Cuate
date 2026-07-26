@@ -46,6 +46,10 @@ struct SettingsView: View {
     // persisted so a tall editor stays tall on the next open.
     @AppStorage("settings.promptEditorHeight") private var promptEditorHeight: Double = 140
     @State private var promptDragBase: Double?
+    // Speech-key deep link: set when .revealSpeechKeySection arrives, consumed
+    // by keysTab once it is on screen (the tab may still be materializing).
+    @State private var pendingSpeechKeysReveal = false
+    @State private var highlightSpeechKeys = false
     @State private var accessibilityGranted = true
     @State private var screenGranted = true
     @State private var micGranted = true
@@ -65,6 +69,12 @@ struct SettingsView: View {
             if let raw = note.object as? String, let t = SettingsTab(rawValue: raw) {
                 selectedTab = t
             }
+        }
+        // Deep link from the composer's key-less mic button: land on the API
+        // Keys tab, then keysTab scrolls to the speech section and flashes it.
+        .onReceive(NotificationCenter.default.publisher(for: .revealSpeechKeySection)) { _ in
+            selectedTab = .keys
+            pendingSpeechKeysReveal = true
         }
         // Addon tabs disappear with their master switch — bounce the selection
         // back to General so the detail pane never shows an orphaned tab.
@@ -203,7 +213,7 @@ struct SettingsView: View {
         Group {
             switch selectedTab {
             case .chat: tab { chatSection; parametersSection; ocrSection }
-            case .keys: tab { keysSection; speechKeysSection; webSection }
+            case .keys: keysTab
             case .voice: tab { voiceSection; dictationSection }
             case .general: tab { behaviorSection; modelsSection; addonsSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection; aboutSection }
             case .appearance: tab { appearanceSection }
@@ -224,6 +234,39 @@ struct SettingsView: View {
         .background(BehindWindowBlur().ignoresSafeArea())
         // No .navigationTitle: the section name already shows in the sidebar
         // and the form headers — the toolbar copy was the third one.
+    }
+
+    /// The API Keys tab, wrapped in a ScrollViewReader so the speech-key deep
+    /// link (composer mic without a key) can scroll to and flash its section.
+    private var keysTab: some View {
+        ScrollViewReader { proxy in
+            tab { keysSection; speechKeysSection; webSection }
+                .onAppear { revealSpeechKeysIfPending(proxy) }
+                .onChange(of: pendingSpeechKeysReveal) { _, pending in
+                    if pending { revealSpeechKeysIfPending(proxy) }
+                }
+        }
+    }
+
+    /// Scrolls to the speech-to-text key section and flashes an orange ring
+    /// around it for a moment — enough to say "paste it here" without a modal.
+    private func revealSpeechKeysIfPending(_ proxy: ScrollViewProxy) {
+        guard pendingSpeechKeysReveal else { return }
+        pendingSpeechKeysReveal = false
+        // Let the form finish its first layout before asking it to scroll.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                proxy.scrollTo("speechKeysSection", anchor: .center)
+            }
+            withAnimation(.easeInOut(duration: 0.3).delay(0.3)) {
+                highlightSpeechKeys = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                withAnimation(.easeOut(duration: 0.6)) {
+                    highlightSpeechKeys = false
+                }
+            }
+        }
     }
 
     /// Wraps a tab's sections in a Form and appends the shared status line.
@@ -742,6 +785,14 @@ struct SettingsView: View {
             }
             keyErrorLine(for: "deepgram")
             }
+            .id("speechKeysSection") // scroll anchor for the mic deep link
+            // Flash ring for the deep link: drawn just outside the row content
+            // so it hugs the section card without repainting its background.
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.orange.opacity(highlightSpeechKeys ? 0.8 : 0), lineWidth: 2)
+                    .padding(-8)
+            )
         } header: {
             Text(L("voice.header"))
         }

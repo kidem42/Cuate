@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 // MARK: - Provider identifiers
 
@@ -251,6 +253,66 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
 struct LLMImage {
     let mimeType: String
     let base64: String
+}
+
+extension LLMImage {
+    /// Longest side beyond which cloud providers downscale server-side anyway
+    /// (Anthropic caps at 1568px; OpenAI/Gemini tile below that). Pixels above
+    /// this never reach the model — they only cost upload bytes and latency.
+    private static let maxModelDimension = 1568
+    /// Payloads at or under this many bytes pass through un-recoded when the
+    /// pixels already fit — recompression would only lose quality.
+    private static let maxPassthroughBytes = 4 << 20
+
+    /// Wire image for cloud providers: downscaled to fit `maxModelDimension`
+    /// and re-encoded (JPEG for opaque images, PNG when alpha is present).
+    /// Small-enough images, non-images, GIFs (animation would be flattened)
+    /// and anything undecodable pass through unchanged. Hermes does NOT go
+    /// through here — the addon ships original attachments over its own
+    /// transport, where the gateway owns any preprocessing.
+    static func forModel(mimeType: String, base64: String) -> LLMImage {
+        let original = LLMImage(mimeType: mimeType, base64: base64)
+        guard mimeType.hasPrefix("image"), mimeType != "image/gif",
+              let data = Data(base64Encoded: base64),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int
+        else { return original }
+
+        let fitsPixels = max(width, height) <= maxModelDimension
+        if fitsPixels && data.count <= maxPassthroughBytes { return original }
+
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxModelDimension,
+            kCGImageSourceCreateThumbnailWithTransform: true, // bake EXIF orientation
+        ]
+        guard let scaled = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
+        else { return original }
+
+        let hasAlpha: Bool
+        switch scaled.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: hasAlpha = false
+        default: hasAlpha = true
+        }
+        let encoded = NSMutableData()
+        let type: UTType = hasAlpha ? .png : .jpeg
+        guard let destination = CGImageDestinationCreateWithData(encoded, type.identifier as CFString, 1, nil)
+        else { return original }
+        let encodeOptions: [CFString: Any] = hasAlpha
+            ? [:]
+            : [kCGImageDestinationLossyCompressionQuality: 0.85]
+        CGImageDestinationAddImage(destination, scaled, encodeOptions as CFDictionary)
+        guard CGImageDestinationFinalize(destination), encoded.length > 0 else { return original }
+        // Recode of an already-fitting (but heavy) image must actually shrink
+        // it; a downscale is kept regardless — fewer pixels is the point.
+        guard !fitsPixels || encoded.length < data.count else { return original }
+        return LLMImage(
+            mimeType: hasAlpha ? "image/png" : "image/jpeg",
+            base64: (encoded as Data).base64EncodedString()
+        )
+    }
 }
 
 struct LLMMessage {
