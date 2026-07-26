@@ -636,9 +636,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
     private static let worldTimeFrameName = "CuateWorldTimePanel"
 
-    /// The menu item toggles the panel: visible → hide, hidden → summon.
+    /// The menu item / hotkey toggles the panel — but "visible" alone is not
+    /// enough to mean "hide": a pinned panel stays visible BEHIND other apps,
+    /// and summoning must then raise it, not order it out. Hide only when the
+    /// user is actually in it (key); otherwise (re-)summon to the front.
     @objc private func openWorldTime(_ sender: Any?) {
-        if let window = worldTimeWindow, window.isVisible {
+        if let window = worldTimeWindow, window.isVisible, window.isKeyWindow {
             window.orderOut(nil)
         } else {
             showWorldTimePanel()
@@ -719,7 +722,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             let screen = screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
             spotlightCenter(window, on: screen)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        // Same raising dance as the chat panel (`activatePanel`): cooperative
+        // activation can be silently denied for an accessory app summoned by
+        // a global hotkey, and without an actual activation
+        // makeKeyAndOrderFront only orders the window front WITHIN this app —
+        // it stays behind other apps' (and fullscreen) windows.
+        window.orderFrontRegardless()
+        NSRunningApplication.current.activate()
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         window.makeKeyAndOrderFront(nil)
     }
 
