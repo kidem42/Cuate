@@ -15,6 +15,13 @@ struct ChatWindow: View {
     // load and the media sweep — and orphan the in-flight streaming state.
     @StateObject private var chatStore = ChatStore()
     @ObservedObject private var settings = AppSettings.shared
+    // Agent roles in the switcher + the role chip's connection dot
+    // (Addons/HermesAddon; renders nothing while the addon is off).
+    // Both objects are observed: roles derive from the SETTINGS' cached
+    // agent list — without this the chips would not appear until some other
+    // state change happened to re-render the header.
+    @ObservedObject private var hermesAddon = HermesAddon.shared
+    @ObservedObject private var hermesSettings = HermesSettings.shared
     @StateObject private var audioRecorder = AudioRecorder()
     @State private var messageText = ""
     /// Captured selection shown as an editable styled region in the composer.
@@ -39,6 +46,33 @@ struct ChatWindow: View {
         let send: () -> Void
     }
     @State private var pendingLocalStart: PendingLocalStart?
+    /// Pending agent approval request rendered as an inline card
+    /// (AgentGateway). Cleared on resolve and when the turn ends.
+    private struct PendingAgentApproval {
+        let approval: AgentApproval
+        let resolve: @MainActor (AgentApprovalDecision) -> Void
+    }
+    @State private var pendingAgentApproval: PendingAgentApproval?
+    /// Slash autocomplete: keyboard-selected row, and the exact text for
+    /// which the popup was dismissed with Esc (typing anything re-arms it).
+    @State private var slashSelection = 0
+    @State private var slashDismissedText: String?
+    /// Header folder popover: all files the agent shared in this chat.
+    @State private var showAgentFiles = false
+
+    /// File paths from every agent reply of the conversation, deduped,
+    /// newest first (the header folder popover).
+    private func collectAgentFilePaths() -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for message in chatStore.messages.reversed() where !message.isUser {
+            for path in AgentFilePaths.extract(from: message.text)
+            where seen.insert(path).inserted {
+                result.append(path)
+            }
+        }
+        return result
+    }
     /// In-flight assistant reply. Survives conversation switches (the reply
     /// keeps streaming in the background into its origin chat); cancelled
     /// only when the origin chat itself is deleted.
@@ -72,6 +106,19 @@ struct ChatWindow: View {
     @State private var textEditorHeight: CGFloat = 27 // Default height for one line
     /// Providers offered by the header switcher (see `refreshAvailableProviders`).
     @State private var availableProviders: [ProviderID] = []
+    /// Agent conversations: the last catch-up sync could not reach the
+    /// gateway — the transcript shows an honest plaque instead of silently
+    /// pretending the local mirror is complete.
+    @State private var agentGatewayOffline = false
+    /// Whether the agent sidebar should show at all (role active and not
+    /// collapsed by the user for this role). The CHAT column is invariant:
+    /// the window grows LEFT by exactly the sidebar width when this flips
+    /// on, and shrinks back when it flips off — the AppDelegate applies the
+    /// delta on `.agentSidebarVisibilityChanged`.
+    private var agentSidebarVisible: Bool {
+        guard let role = settings.activeAgentRole else { return false }
+        return !hermesSettings.isSidebarCollapsed(roleID: role.id)
+    }
 
     /// Windowed history rendering: only the newest `visibleCount` messages
     /// live in the view tree, so the bottom-anchored layout lands on the
@@ -164,6 +211,28 @@ struct ChatWindow: View {
 
         var items: [TranscriptItem] = []
 
+        // Agent conversation, gateway unreachable: older history lives on
+        // the agent — an empty scroll-past-the-top must say so, not stay
+        // silently blank (notes §6.1).
+        if agentGatewayOffline, chatStore.conversation.isAgent {
+            items.append(TranscriptItem(id: "agent-offline-plaque", revision: baseRevision) { [palette] in
+                AnyView(
+                    HStack(spacing: 6) {
+                        Image(systemName: "wifi.slash")
+                            .font(.caption)
+                        Text(AGL("agent.offline.older"))
+                            .font(.footnote)
+                    }
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .frame(width: rowWidth)
+                    .environment(\.themePalette, palette)
+                    .fontDesign(palette.fontDesign)
+                )
+            })
+        }
+
         if chatStore.messages.count > visibleCount || chatStore.hasOlderMessages {
             items.append(TranscriptItem(id: "backfill-spinner", revision: baseRevision) {
                 AnyView(
@@ -237,6 +306,22 @@ struct ChatWindow: View {
             })
         }
 
+        if let pending = pendingAgentApproval {
+            let approval = pending.approval
+            let resolve = pending.resolve
+            items.append(TranscriptItem(id: "agent-approval-\(approval.id)", revision: baseRevision) { [palette] in
+                AnyView(
+                    AgentApprovalCard(approval: approval) { decision in
+                        pendingAgentApproval = nil
+                        resolve(decision)
+                    }
+                    .environment(\.themePalette, palette)
+                    .fontDesign(palette.fontDesign)
+                    .frame(width: rowWidth, alignment: .leading)
+                )
+            })
+        }
+
         return items
     }
 
@@ -247,6 +332,9 @@ struct ChatWindow: View {
         hasher.combine(message.text)
         hasher.combine(message.messageType.rawValue)
         hasher.combine(message.audioURL)
+        // Agent step journal attaches at delivery, after the last text
+        // checkpoint — without this the row never rebuilds to show it.
+        hasher.combine(message.agentSteps)
         for attachment in message.attachments {
             hasher.combine(attachment.id)
             hasher.combine(attachment.fileURLString)
@@ -263,12 +351,50 @@ struct ChatWindow: View {
     }
 
     var body: some View {
+        // Split into three expressions on purpose: body as ONE expression
+        // (the giant container + ~25 handlers) blew the type-checker's
+        // budget when the agent-role handlers joined.
+        applyLifecycleHandlers(applyConversationHandlers(panelContent))
+    }
+
+    /// The panel itself (glass container, agent sidebar, chat column).
+    private var panelContent: some View {
         // Liquid Glass: the panel itself is a transient overlay (functional
         // layer), so a single glassEffect wraps everything. Content inside
         // (message bubbles, input field) stays on opaque backings — no
         // glass-on-glass stacking. Pre-macOS 26 the same surface renders as
         // a translucent material (see AdaptiveGlass.swift).
+        //
+        // The agent management column joins INSIDE the one glass surface
+        // (left, sidebar convention): the surface itself is unconditional —
+        // recreating glassEffect in if-branches is the known backdrop bug.
         AdaptiveGlassContainer(spacing: 24) {
+            HStack(spacing: 0) {
+                if agentSidebarVisible, let role = settings.activeAgentRole {
+                    HermesSidebarView(role: role)
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.15))
+                        .frame(width: 1)
+                }
+                chatColumn
+            }
+            // Untinted regular glass for the Current theme; the other themes
+            // fill the panel with their gradient + signature pattern instead
+            // (see themedPanelSurface). Legibility comes from the bubbles.
+            .themedPanelSurface(palette, cornerRadius: 18)
+        }
+        // The window makes room for the column (grow left / shrink back);
+        // the chat column itself never changes size.
+        .onChange(of: agentSidebarVisible) { _, visible in
+            NotificationCenter.default.post(
+                name: .agentSidebarVisibilityChanged, object: nil,
+                userInfo: ["visible": visible]
+            )
+        }
+    }
+
+    /// The chat column itself (header, transcript, composer).
+    private var chatColumn: some View {
             VStack(spacing: 0) {
                 // Window drag handle (transparent area at the top)
                 ZStack(alignment: .trailing) {
@@ -283,54 +409,10 @@ struct ChatWindow: View {
                     // The Spacer between the zones stays click-through, so the
                     // middle of the strip still drags the window.
                     HStack(alignment: .center, spacing: 12) {
-                        // Settings, one click from the chat — the status-bar
-                        // menu was the only way in. Leads the row, ahead of the
-                        // provider switcher and set apart from it: they are
-                        // unrelated controls that happen to share a corner.
-                        SettingsGearButton(
-                            tab: .general,
-                            // Plain secondary grey in every theme — the same
-                            // ink as the provider and preset switchers, so the
-                            // header stays one quiet row instead of sprouting
-                            // a coloured accent.
-                            color: .secondary,
-                            help: L("panel.settingsHelp")
-                        )
-                        .padding(.trailing, 4)
-
-                        // Quick chat-provider switcher — only providers with keys
-                        let available = availableProviders
-                        if available.count > 1 {
-                            Menu {
-                                ForEach(available) { provider in
-                                    Button {
-                                        settings.chatProvider = provider
-                                        // Loads the provider's model list, or the
-                                        // OpenRouter catalog for manual entry —
-                                        // never clobbers a user-typed slug.
-                                        settings.autoLoadModelsIfNeeded(for: provider)
-                                    } label: {
-                                        Label {
-                                            Text(provider == settings.chatProvider
-                                                 ? "\(provider.displayName) ✓"
-                                                 : provider.displayName)
-                                        } icon: {
-                                            ProviderLogo(provider: provider, size: 16)
-                                        }
-                                    }
-                                }
-                            } label: {
-                                headerControlLabel(
-                                    text: settings.chatProvider.displayName
-                                ) {
-                                    ProviderLogo(provider: settings.chatProvider, size: 12)
-                                }
-                            }
-                            .menuIndicator(.hidden)
-                            .buttonStyle(PlainButtonStyle())
-                            .fixedSize()
-                            .help(L("panel.providerHelp"))
-                        }
+                        // Agent role active → the role chip; otherwise the
+                        // quick provider switcher (extracted: the inline
+                        // branch pushed body past the type-checker's budget).
+                        headerProviderControl
 
                         Spacer(minLength: 12)
 
@@ -353,6 +435,17 @@ struct ChatWindow: View {
                         // Extra gap: visually separates "new chat" from the
                         // preset zone so a mis-click doesn't wipe the chat.
                         .padding(.leading, 10)
+
+                        // Settings, one click from the chat — at the far
+                        // right, apart from everything else (moved from the
+                        // leading corner; e2e feedback 2026-07-25). Same
+                        // quiet secondary ink as the rest of the header.
+                        SettingsGearButton(
+                            tab: .general,
+                            color: .secondary,
+                            help: L("panel.settingsHelp")
+                        )
+                        .padding(.leading, 4)
                     }
                     .frame(height: 20)
                     .padding(.horizontal, 12)
@@ -451,6 +544,12 @@ struct ChatWindow: View {
                     // Recording status (shown when recording)
                     RecordingStatusView(isRecording: $audioRecorder.isRecording)
 
+                    // Slash autocomplete (agent mode): "/" lists the agent's
+                    // skills — the agent itself interprets "/skill-name …"
+                    // in plain text (probed live) — plus Cuate's own local
+                    // image commands, which intercept before sending.
+                    agentSlashSuggestions
+
                     ThemedComposerDivider(palette: palette)
 
                     // Retry after a failed turn — no re-typing / re-recording:
@@ -493,6 +592,12 @@ struct ChatWindow: View {
                     }
 
                     HStack(alignment: .bottom, spacing: 8) {
+                        // Agent mode: session model + reasoning effort, the
+                        // Hermes composer's own control brought over.
+                        if settings.activeAgentRole != nil {
+                            agentModelControl
+                        }
+
                         // Attach an image (opens as a sheet so the panel
                         // doesn't auto-hide on losing key status)
                         Button(action: presentAttachOpenPanel) {
@@ -613,11 +718,79 @@ struct ChatWindow: View {
                         .background(Color.clear)
                 )
             }
-            // Untinted regular glass for the Current theme; the other themes
-            // fill the panel with their gradient + signature pattern instead
-            // (see themedPanelSurface). Legibility comes from the bubbles.
-            .themedPanelSurface(palette, cornerRadius: 18)
+    }
+
+    /// Conversation-routing handlers (presets, agent roles, mirror sync).
+    private func applyConversationHandlers<V: View>(_ view: V) -> some View {
+        view
+        // The switcher's provider list is state, not a body computation — keep
+        // it in step with the things it depends on.
+        .onReceive(NotificationCenter.default.publisher(for: .apiKeysDidChange)) { _ in
+            refreshAvailableProviders()
         }
+        .onChange(of: settings.onlineModelsEnabled) { refreshAvailableProviders() }
+        .onChange(of: settings.localModelsEnabled) { refreshAvailableProviders() }
+        .onChange(of: settings.localEndpointVerified) { refreshAvailableProviders() }
+        // Isolated preset chats: follow the active preset (panel switcher AND
+        // the Settings picker) and react to the isolation toggle itself.
+        .onChange(of: settings.activePresetName) {
+            syncConversation()
+        }
+        .onChange(of: settings.isolatedPresets) {
+            syncConversation()
+        }
+        // Agent roles: selecting/leaving a role switches to its forced
+        // isolated conversation; the addon toggling off drops the role.
+        .onChange(of: settings.activeAgentRoleID) {
+            syncConversation()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hermesAddonDidChange)) { _ in
+            // Role list changed (addon toggled, profiles refreshed). If the
+            // active role vanished, fall back to conventional chat.
+            if settings.activeAgentRoleID != nil, settings.activeAgentRole == nil {
+                settings.activeAgentRoleID = nil
+            }
+            syncConversation()
+        }
+        // Settings' sessions list: "continue here" binds the role's chat to
+        // an existing gateway session and mirrors it in.
+        .onReceive(NotificationCenter.default.publisher(for: .hermesContinueSession)) { note in
+            guard let sessionID = note.userInfo?["sessionID"] as? String else { return }
+            continueHermesSession(sessionID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .presetDeleted)) { note in
+            guard let name = note.object as? String else { return }
+            handlePresetDeleted(name)
+        }
+        // ▶ menu "run at the agent": the command goes over as a normal turn
+        // and passes the gateway's own policy — never auto-run (§7.3).
+        .onReceive(NotificationCenter.default.publisher(for: .agentRunCommandRemotely)) { note in
+            guard let command = note.object as? String,
+                  settings.activeAgentRole != nil, !chatStore.isLoading else { return }
+            performSend(text: String(format: AGL("agent.code.remotePrompt"), command), attachment: nil)
+        }
+        .modifier(agentSyncHandlers)
+    }
+
+    /// Mirror-sync triggers for agent conversations, bundled: a fourth
+    /// handler group — the modifier chains are split so no single expression
+    /// blows the type-checker's budget.
+    private var agentSyncHandlers: some ViewModifier {
+        AgentSyncHandlersModifier(
+            isAgent: chatStore.conversation.isAgent,
+            conversationKey: chatStore.conversation.storageKey,
+            isHistoryLoaded: chatStore.isHistoryLoaded,
+            canPoll: {
+                FloatingPanelWindow.chatPanel?.isVisible == true
+                    && (streamingOrigin != chatStore.conversation || streamingTask == nil)
+            },
+            catchUp: { runAgentCatchUpIfNeeded() }
+        )
+    }
+
+    /// Environment, focus, appearance and composer-side handlers.
+    private func applyLifecycleHandlers<V: View>(_ view: V) -> some View {
+        view
         .environment(\.themePalette, palette)
         // Terminal → monospaced, Pastel → rounded, others → system (.default,
         // a no-op). Applies across the whole panel per the design spec.
@@ -655,26 +828,6 @@ struct ChatWindow: View {
                 panelKeyMonitor = nil
             }
         }
-        // The switcher's provider list is state, not a body computation — keep
-        // it in step with the things it depends on.
-        .onReceive(NotificationCenter.default.publisher(for: .apiKeysDidChange)) { _ in
-            refreshAvailableProviders()
-        }
-        .onChange(of: settings.onlineModelsEnabled) { refreshAvailableProviders() }
-        .onChange(of: settings.localModelsEnabled) { refreshAvailableProviders() }
-        .onChange(of: settings.localEndpointVerified) { refreshAvailableProviders() }
-        // Isolated preset chats: follow the active preset (panel switcher AND
-        // the Settings picker) and react to the isolation toggle itself.
-        .onChange(of: settings.activePresetName) {
-            syncConversation()
-        }
-        .onChange(of: settings.isolatedPresets) {
-            syncConversation()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .presetDeleted)) { note in
-            guard let name = note.object as? String else { return }
-            handlePresetDeleted(name)
-        }
         // ImageAddon: retry-after-error and «Продолжить редактирование»
         // hand an attachment back to the composer.
         .onReceive(NotificationCenter.default.publisher(for: .imageAddonAttachRequest)) { note in
@@ -695,21 +848,67 @@ struct ChatWindow: View {
             appState.pendingInputText = nil
         }
         .onChange(of: audioRecorder.autoStoppedDueToLimit) {
-            guard audioRecorder.autoStoppedDueToLimit == true else { return }
-            // When the recorder auto-stops due to limit, send the message automatically
-            Task {
-                let limitMinutes = Int(Config.maxVoiceRecordingDuration / 60)
-                // Small delay to ensure file is finalized
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                if let audioURL = audioRecorder.recordingURL {
-                    await sendVoiceMessage(audioURL: audioURL)
-                    _ = await MainActor.run {
-                        chatStore.addMessage(text: String(format: L("panel.recordLimitSent"), limitMinutes), isUser: false, messageType: .system)
+            handleAutoStoppedRecording()
+        }
+    }
+
+    /// Mirror-sync triggers for an agent conversation (§6.1): catch-up on
+    /// load/appear/summon, plus a ~20s on-screen poll — Hermes has no push
+    /// channel, so the transcript is only as fresh as our last ask.
+    private struct AgentSyncHandlersModifier: ViewModifier {
+        let isAgent: Bool
+        let conversationKey: String
+        let isHistoryLoaded: Bool
+        let canPoll: () -> Bool
+        let catchUp: () -> Void
+
+        func body(content: Content) -> some View {
+            content
+                .onChange(of: isHistoryLoaded) { _, loaded in
+                    if loaded { catchUp() }
+                }
+                // Cold start: the history may finish loading BEFORE the
+                // handler above attaches — without this the sync never ran
+                // until the user re-entered the conversation (e2e 2026-07-25).
+                .onAppear { catchUp() }
+                // Every summon re-syncs — the agent kept working while the
+                // panel was hidden.
+                .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
+                    catchUp()
+                }
+                // On-screen poll (skipped while our own stream runs — its
+                // events are live). Restarts per conversation via task(id:).
+                .task(id: conversationKey) {
+                    guard isAgent else { return }
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 20_000_000_000)
+                        guard !Task.isCancelled, canPoll() else { continue }
+                        catchUp()
                     }
-                } else {
-                    _ = await MainActor.run {
-                        chatStore.addMessage(text: String(format: L("panel.recordLimitStopped"), limitMinutes), isUser: false, messageType: .system)
-                    }
+                }
+        }
+    }
+
+    /// The recorder auto-stopped at the length limit: send what was recorded
+    /// and drop a system notice. Extracted from `body` — the inline closure
+    /// was the straw that pushed the modifier chain past the type-checker's
+    /// budget once the agent-role handlers joined it.
+    private func handleAutoStoppedRecording() {
+        guard audioRecorder.autoStoppedDueToLimit == true else { return }
+        Task {
+            let limitMinutes = Int(Config.maxVoiceRecordingDuration / 60)
+            // Small delay to ensure file is finalized
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if let audioURL = audioRecorder.recordingURL {
+                await sendVoiceMessage(audioURL: audioURL)
+                let notice = String(format: L("panel.recordLimitSent"), limitMinutes)
+                _ = await MainActor.run {
+                    chatStore.addMessage(text: notice, isUser: false, messageType: .system)
+                }
+            } else {
+                let notice = String(format: L("panel.recordLimitStopped"), limitMinutes)
+                _ = await MainActor.run {
+                    chatStore.addMessage(text: notice, isUser: false, messageType: .system)
                 }
             }
         }
@@ -728,8 +927,286 @@ struct ChatWindow: View {
     /// `setupChatWindow`, before anything is on screen) blocked launch there
     /// for seconds, or indefinitely behind an authorization dialog.
     private func refreshAvailableProviders() {
-        let resolved = ProviderID.allCases.filter { settings.isAvailable($0) }
+        // Agents are excluded by design: roles live in the preset switcher.
+        let resolved = ProviderID.allCases.filter { !$0.isAgent && settings.isAvailable($0) }
         if resolved != availableProviders { availableProviders = resolved }
+    }
+
+    /// Left header slot: the agent role chip while a role is active (the
+    /// provider pair is the agent's business; chatProvider stays untouched
+    /// underneath), else the quick provider switcher.
+    // MARK: - Agent composer controls (slash autocomplete, model/effort)
+
+    /// The "/query" being typed, when the composer is in slash-prefix state
+    /// (agent mode, single line, no space after the command yet).
+    private var slashQuery: String? {
+        guard settings.activeAgentRole != nil,
+              messageText.hasPrefix("/"),
+              !messageText.contains("\n"),
+              !messageText.dropFirst().contains(" ") else { return nil }
+        return String(messageText.dropFirst()).lowercased()
+    }
+
+    /// The flat suggestion list for the current query — ONE source for the
+    /// popup rows and the ↑/↓/⏎ keyboard handling in the panel key monitor.
+    private func slashSuggestionItems() -> [(command: String, description: String?)] {
+        guard let query = slashQuery, messageText != slashDismissedText else { return [] }
+        var items: [(String, String?)] = []
+        if ImageAddonSettings.shared.enabled {
+            items += ["/upscale", "/bg", "/cleanup"]
+                .filter { query.isEmpty || $0.dropFirst().contains(query) }
+                .map { ($0, nil) }
+        }
+        items += hermesAddon.cachedSkills
+            .filter { query.isEmpty || $0.name.lowercased().contains(query) }
+            .prefix(12)
+            .map { ("/\($0.name)", $0.description) }
+        return items
+    }
+
+    /// Applies a picked suggestion to the composer.
+    private func acceptSlashSuggestion(_ command: String) {
+        messageText = command + " "
+        slashSelection = 0
+        isInputFocused = true
+    }
+
+    @ViewBuilder
+    private var agentSlashSuggestions: some View {
+        let items = slashSuggestionItems()
+        if !items.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(items.enumerated()), id: \.element.command) { index, item in
+                            slashRow(command: item.command, description: item.description,
+                                     selected: index == slashSelection)
+                                .id(index)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 220)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+                .padding(.horizontal, 12)
+                // Keyboard selection stays in view while ↑/↓ walk the list.
+                .onChange(of: slashSelection) { _, index in
+                    withAnimation(.easeInOut(duration: 0.1)) { proxy.scrollTo(index) }
+                }
+                .onChange(of: messageText) { _, _ in slashSelection = 0 }
+            }
+        }
+    }
+
+    private func slashRow(command: String, description: String?, selected: Bool) -> some View {
+        Button {
+            acceptSlashSuggestion(command)
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(command)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(.primary)
+                if let description, !description.isEmpty {
+                    Text(description)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(selected ? Color.accentColor.opacity(0.18) : .clear,
+                        in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    /// The model pair shown in the composer, most specific first: the OPEN
+    /// session's own lock → the global default for new sessions → the
+    /// agent's configured model. Every gateway session carries its own lock.
+    private var composerModelPair: (provider: String, model: String)? {
+        if chatStore.conversation.isAgent,
+           let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey),
+           let lock = hermesSettings.modelLock(forSession: sessionID) {
+            return lock
+        }
+        if !hermesSettings.lockProvider.isEmpty, !hermesSettings.lockModel.isEmpty {
+            return (hermesSettings.lockProvider, hermesSettings.lockModel)
+        }
+        return hermesAddon.currentModelPair
+    }
+
+    /// Compact "model · effort" menu — the Hermes composer's own control:
+    /// picking a model re-locks the CURRENT gateway session (and becomes the
+    /// default for new ones); effort rides as `model_options` per request.
+    private var agentModelControl: some View {
+        Menu {
+            ForEach(hermesAddon.cachedProviders.filter { !$0.models.isEmpty }) { provider in
+                Menu(provider.name) {
+                    ForEach(provider.models, id: \.self) { model in
+                        Button {
+                            switchSessionModel(provider: provider.slug, model: model)
+                        } label: {
+                            if composerModelPair?.model == model, composerModelPair?.provider == provider.slug {
+                                Label(model, systemImage: "checkmark")
+                            } else {
+                                Text(model)
+                            }
+                        }
+                    }
+                }
+            }
+            Divider()
+            Menu(HL("hermes.composer.effort")) {
+                Button {
+                    hermesSettings.reasoningEffort = ""
+                } label: {
+                    hermesSettings.reasoningEffort.isEmpty
+                        ? Label(HL("hermes.composer.effort.default"), systemImage: "checkmark")
+                        : Label(HL("hermes.composer.effort.default"), systemImage: "circle")
+                }
+                ForEach(HermesSettings.effortLevels, id: \.self) { level in
+                    Button {
+                        hermesSettings.reasoningEffort = level
+                    } label: {
+                        hermesSettings.reasoningEffort == level
+                            ? Label(level.capitalized, systemImage: "checkmark")
+                            : Label(level.capitalized, systemImage: "circle")
+                    }
+                }
+            }
+        } label: {
+            Text(composerModelLabel)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .frame(height: 27)
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(PlainButtonStyle())
+        .fixedSize()
+        .help(HL("hermes.composer.model.help"))
+    }
+
+    private var composerModelLabel: String {
+        let model = composerModelPair?.model ?? "—"
+        let short = model.split(separator: "/").last.map(String.init) ?? model
+        let effort = hermesSettings.reasoningEffort
+        let effortLabel = effort.isEmpty ? "" : " · \(effort.prefix(3).capitalized)"
+        return String(short.prefix(16)) + effortLabel
+    }
+
+    /// Re-locks the model on the gateway session bound to the CURRENT
+    /// conversation (each session is its own thread now) and stores the
+    /// pair as the default for new sessions.
+    private func switchSessionModel(provider: String, model: String) {
+        hermesSettings.lockProvider = provider
+        hermesSettings.lockModel = model
+        guard chatStore.conversation.isAgent,
+              let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey)
+        else { return }
+        hermesSettings.recordModelLock(provider: provider, model: model, forSession: sessionID)
+        Task {
+            try? await hermesAddon.transport().lockModel(sessionID: sessionID, provider: provider, model: model)
+        }
+    }
+
+    /// Pin toggle: keeps the panel on screen when it loses focus (the World
+    /// Time panel's escape hatch, brought to the chat). Leftmost in normal
+    /// mode; between the sidebar toggle and the role chip in agent mode.
+    private var pinButton: some View {
+        Button {
+            settings.panelPinned.toggle()
+        } label: {
+            Image(systemName: settings.panelPinned ? "pin.fill" : "pin")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(settings.panelPinned ? Color.accentColor : .secondary)
+                .frame(height: 20)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .help(settings.panelPinned ? WTL("wt.unpin") : WTL("wt.pin"))
+    }
+
+    @ViewBuilder
+    private var headerProviderControl: some View {
+        if let role = settings.activeAgentRole {
+            // Sidebar toggle leads (it controls the column right next to
+            // it), then the pin, then the role chip with the connection dot.
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    hermesSettings.setSidebarCollapsed(
+                        !hermesSettings.isSidebarCollapsed(roleID: role.id), roleID: role.id)
+                }
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(height: 20)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help(HL("hermes.sidebar.toggle"))
+            pinButton
+            AgentRoleChip(role: role, state: hermesAddon.connectionState)
+                .onTapGesture {
+                    // The dot's detail lives in the addon tab.
+                    NotificationCenter.default.post(
+                        name: .selectSettingsTab, object: SettingsTab.hermes.rawValue)
+                    NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
+                }
+            // Every file the agent handed over in this conversation —
+            // open / reveal without scrolling the transcript.
+            Button {
+                showAgentFiles.toggle()
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(height: 20)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help(AGL("agent.files.title"))
+            .popover(isPresented: $showAgentFiles, arrowEdge: .bottom) {
+                AgentChatFilesView(paths: collectAgentFilePaths())
+                    .environment(\.themePalette, palette)
+            }
+        } else if availableProviders.count <= 1 {
+            // No switcher to show — the pin still needs its corner.
+            pinButton
+        } else {
+            pinButton
+            Menu {
+                ForEach(availableProviders) { provider in
+                    Button {
+                        settings.chatProvider = provider
+                        // Loads the provider's model list, or the OpenRouter
+                        // catalog for manual entry — never clobbers a
+                        // user-typed slug.
+                        settings.autoLoadModelsIfNeeded(for: provider)
+                    } label: {
+                        Label {
+                            Text(provider == settings.chatProvider
+                                 ? "\(provider.displayName) ✓"
+                                 : provider.displayName)
+                        } icon: {
+                            ProviderLogo(provider: provider, size: 16)
+                        }
+                    }
+                }
+            } label: {
+                headerControlLabel(
+                    text: settings.chatProvider.displayName
+                ) {
+                    ProviderLogo(provider: settings.chatProvider, size: 12)
+                }
+            }
+            .menuIndicator(.hidden)
+            .buttonStyle(PlainButtonStyle())
+            .fixedSize()
+            .help(L("panel.providerHelp"))
+        }
     }
 
     /// Shared look for the header controls: small icon + 11pt secondary text,
@@ -751,13 +1228,15 @@ struct ChatWindow: View {
     // MARK: - Preset switcher (header)
 
     /// Menu entries for a list of presets; a checkmark marks the active one.
+    /// A preset click also leaves the agent role — one list, one gesture.
     @ViewBuilder
     private func presetMenuItems(_ presets: [AppSettings.PromptPreset]) -> some View {
         ForEach(presets) { preset in
             Button {
+                settings.activeAgentRoleID = nil
                 settings.applyPreset(named: preset.name)
             } label: {
-                if preset.name == settings.activePresetName {
+                if preset.name == settings.activePresetName, settings.activeAgentRoleID == nil {
                     Label(preset.name, systemImage: "checkmark")
                 } else {
                     Text(preset.name)
@@ -766,13 +1245,42 @@ struct ChatWindow: View {
         }
     }
 
-    /// Classic dropdown: icon + active preset name.
+    /// Agent roles join the same switcher as one more section — an agent is
+    /// "just another role" next to Assistant and Translator (notes §6).
+    @ViewBuilder
+    private var agentRoleMenuItems: some View {
+        let roles = hermesAddon.roles
+        if !roles.isEmpty {
+            Divider()
+            ForEach(roles) { role in
+                Button {
+                    settings.activeAgentRoleID = role.id
+                } label: {
+                    Label {
+                        Text(role.id == settings.activeAgentRoleID
+                             ? "\(role.displayName) ✓"
+                             : role.displayName)
+                    } icon: {
+                        ProviderGlyph(name: role.addonID,
+                                      fallbackLetter: String(role.icon.prefix(1)),
+                                      size: 16)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Classic dropdown: icon + active preset (or agent role) name.
     private var presetMenu: some View {
         Menu {
             presetMenuItems(settings.switcherPresets)
+            agentRoleMenuItems
         } label: {
-            headerControlLabel(text: settings.activePresetName) {
-                Image(systemName: "person.crop.square")
+            headerControlLabel(
+                text: settings.activeAgentRole?.displayName ?? settings.activePresetName
+            ) {
+                Image(systemName: settings.activeAgentRole == nil
+                      ? "person.crop.square" : "brain.head.profile")
                     .font(.system(size: 11))
             }
         }
@@ -787,22 +1295,47 @@ struct ChatWindow: View {
 
     /// One-click chip row. When the active preset is hidden in the overflow,
     /// the "…" button borrows its icon so the active state stays visible.
+    /// Agent roles ride after the presets as emoji chips of the same size.
     private var presetChipsRow: some View {
         let presets = settings.switcherPresets
         let visible = Array(presets.prefix(Self.maxVisiblePresetChips))
         let overflow = Array(presets.dropFirst(Self.maxVisiblePresetChips))
+        let roleActive = settings.activeAgentRoleID != nil
         return HStack(spacing: 6) {
+            // Agent roles lead the group (leftmost), set off from the
+            // preset chips by a hairline — agents are a different kind of
+            // thing than prompt presets, the divider says so (e2e feedback
+            // 2026-07-25).
+            ForEach(hermesAddon.roles) { role in
+                Button {
+                    settings.activeAgentRoleID = role.id
+                } label: {
+                    ProviderGlyph(name: role.addonID,
+                                  fallbackLetter: String(role.icon.prefix(1)),
+                                  size: 14)
+                        .opacity(role.id == settings.activeAgentRoleID ? 1 : 0.45)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(role.displayName)
+            }
+            if !hermesAddon.roles.isEmpty {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.3))
+                    .frame(width: 1, height: 12)
+            }
             ForEach(visible) { preset in
                 Button {
+                    settings.activeAgentRoleID = nil
                     settings.applyPreset(named: preset.name)
                 } label: {
-                    presetChipIcon(preset, isActive: preset.name == settings.activePresetName)
+                    presetChipIcon(preset, isActive: !roleActive && preset.name == settings.activePresetName)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .help(preset.name)
             }
             if !overflow.isEmpty {
-                let hiddenActive = overflow.first { $0.name == settings.activePresetName }
+                let hiddenActive = overflow.first { !roleActive && $0.name == settings.activePresetName }
                 Menu {
                     presetMenuItems(overflow)
                 } label: {
@@ -856,17 +1389,85 @@ struct ChatWindow: View {
             chatStore.statusText = nil
             chatStore.setLoading(false)
         }
+        // Agent conversation: "new chat" must also mean a NEW gateway
+        // session — clearing only the local mirror would leave the agent
+        // answering with the old context, which reads as a haunted chat.
+        // The next send creates a fresh session; the role's "which session
+        // is open" memory resets to the default thread.
+        if chatStore.conversation.isAgent {
+            HermesSettings.shared.unbindSession(forConversationKey: chatStore.conversation.storageKey)
+            if let role = role(for: chatStore.conversation) {
+                HermesSettings.shared.setActiveSession(nil, roleID: role.id)
+            }
+            agentGatewayOffline = false
+        }
         chatStore.clearMessages()
         chatStore.addMessage(text: welcomeText(), isUser: false)
     }
 
+    // MARK: - Agent mirror sync
+
+    /// Kicks a catch-up sync for the on-screen agent conversation; flips the
+    /// offline plaque on failure.
+    private func runAgentCatchUpIfNeeded() {
+        guard chatStore.conversation.isAgent,
+              let role = role(for: chatStore.conversation) else {
+            agentGatewayOffline = false
+            return
+        }
+        Task { @MainActor in
+            let reachable = await HermesMirrorSync.catchUp(role: role, store: chatStore)
+            // The conversation may have moved on during the fetch.
+            if chatStore.conversation == role.conversationID {
+                agentGatewayOffline = !reachable
+            }
+        }
+    }
+
+    /// "Continue here": opens the chosen gateway session AS ITS OWN
+    /// conversation (own store, own streaming isolation — switching away
+    /// leaves any in-flight reply finishing into its home thread, exactly
+    /// like isolated presets). Nothing is cleared or replaced.
+    private func continueHermesSession(_ sessionID: String) {
+        // Ensure an agent role is active (the first one when none is).
+        if settings.activeAgentRole == nil {
+            guard let first = hermesAddon.roles.first else { return }
+            settings.activeAgentRoleID = first.id
+        }
+        guard let role = settings.activeAgentRole else { return }
+        let conversation = role.conversationID(sessionID: sessionID)
+        HermesSettings.shared.bindSession(sessionID, toConversationKey: conversation.storageKey)
+        HermesSettings.shared.setActiveSession(sessionID, roleID: role.id)
+        syncConversation()
+        runAgentCatchUpIfNeeded()
+        NotificationCenter.default.post(name: .chatWindowDidBecomeVisible, object: nil)
+    }
+
     // MARK: - Isolated preset chats
 
-    /// The conversation the active preset should be showing.
+    /// The conversation the active preset (or agent role) should be showing.
+    /// An active agent role wins: its isolation is forced, not a toggle —
+    /// the conversation also lives on the agent's side (notes §6). Which of
+    /// the role's SESSIONS is open comes from the addon's per-role memory:
+    /// each session is its own conversation (full stream isolation).
     private func targetConversation() -> ChatStore.ConversationID {
-        settings.isPresetIsolated(named: settings.activePresetName)
+        if let role = settings.activeAgentRole {
+            return role.conversationID(sessionID: hermesSettings.activeSession(roleID: role.id))
+        }
+        return settings.isPresetIsolated(named: settings.activePresetName)
             ? .preset(settings.activePresetName)
             : .general
+    }
+
+    /// Resolves the role that owns a conversation — from the addon's live
+    /// role list when possible, else reconstructed from the id so an
+    /// in-flight reply can finish even after the role list changed.
+    private func role(for conversation: ChatStore.ConversationID) -> AgentRole? {
+        guard case .agent(let addonID, let agentID, _) = conversation else { return nil }
+        let id = AgentRole.makeID(addonID: addonID, agentID: agentID)
+        if let live = HermesAddon.shared.roles.first(where: { $0.id == id }) { return live }
+        return AgentRole(id: id, addonID: addonID, agentID: agentID,
+                         displayName: agentID, icon: "🤖")
     }
 
     /// Aligns the store's conversation with the active preset. An in-flight
@@ -950,6 +1551,21 @@ struct ChatWindow: View {
         // answering "no key" there would be a lie — the send path awaits the
         // warm and reports a real, specific error if the key is truly missing.
         guard APIKeyStore.isWarm else { return true }
+        // Agent role: the addon owns configuration — no provider key or
+        // model selection applies. A missing token answers with a pointer
+        // to the addon tab; liveness errors surface per-send with the
+        // structured probe message.
+        if settings.activeAgentRole != nil {
+            guard HermesAddon.shared.isAvailable else {
+                chatStore.addMessage(text: HL("hermes.noKey"),
+                                     isUser: false, messageType: .system)
+                NotificationCenter.default.post(
+                    name: .selectSettingsTab, object: SettingsTab.hermes.rawValue)
+                NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
+                return false
+            }
+            return true
+        }
         guard settings.isAvailable(settings.chatProvider) else {
             chatStore.addMessage(text: L("panel.noProviderKey"), isUser: false, messageType: .system)
             return false
@@ -1001,7 +1617,8 @@ struct ChatWindow: View {
 
         // Local provider: if the selected model isn't in memory, sending would
         // implicitly load it (time + RAM) — confirm first. Otherwise send now.
-        if settings.chatProvider.isLocal {
+        // Not for agent roles: chatProvider is dormant there.
+        if settings.chatProvider.isLocal, settings.activeAgentRole == nil {
             let attachment = pendingAttachment
             confirmLocalModelIfNeeded { performSend(text: text, attachment: attachment) }
             return
@@ -1190,8 +1807,18 @@ struct ChatWindow: View {
                 var requestHistory = history
                 var round = 0
                 var lastRoundText = ""
+                // Agent conversation → the agent pipeline: one turn over the
+                // wire, context lives on the gateway. Everything below (live
+                // bubble, checkpoints, delivery) is shared with normal turns.
+                let agentRole = role(for: origin)
                 roundLoop: while true {
-                let stream = try await ChatService.streamReply(history: requestHistory, summary: summary, store: chatStore)
+                let stream: AsyncThrowingStream<ChatService.ChatEvent, Error>
+                if let agentRole {
+                    stream = AgentChatService.streamReply(role: agentRole, conversation: origin,
+                                                          history: requestHistory, store: chatStore)
+                } else {
+                    stream = try await ChatService.streamReply(history: requestHistory, summary: summary, store: chatStore)
+                }
                 for try await event in stream {
                     switch event {
                     case .text(let chunk):
@@ -1236,14 +1863,52 @@ struct ChatWindow: View {
                             current.toolContext = String(merged.suffix(6000))
                             reply = current
                         }
+                    case .replaceText(let full):
+                        // Agent turns: the authoritative full text — replaces
+                        // whatever streamed (deltas differ in whitespace, or
+                        // never came at all). Same mechanics as the
+                        // continue-marker strip below.
+                        pendingText = ""
+                        if var current = reply {
+                            current.text = full
+                            reply = current
+                            if liveReply === live { live.setFullText(full) }
+                            if isLive, chatStore.isHistoryLoaded,
+                               chatStore.messages.contains(where: { $0.id == current.id }) {
+                                chatStore.setText(full, for: current.id)
+                            }
+                        } else {
+                            // No bubble yet (no deltas): materialize through
+                            // the normal first-flush path.
+                            pendingText = full
+                            flush()
+                        }
+                    case .agentSteps(let summary):
+                        // Persisted tool-step journal for the reply; the
+                        // final delivery below writes it to the store.
+                        flush()
+                        if var current = reply {
+                            current.agentSteps = summary
+                            reply = current
+                        }
+                    case .agentApproval(let approval, let resolve):
+                        flush()
+                        if isLive {
+                            pendingAgentApproval = PendingAgentApproval(approval: approval, resolve: resolve)
+                            transcriptController.scrollToBottom(animated: true)
+                        }
                     }
                 }
                 flush()
+                // A turn that ended (either way) retires its approval card —
+                // the gateway resolved or timed it out on its side.
+                if pendingAgentApproval != nil { pendingAgentApproval = nil }
 
                 // Continuation round? Only when the model asked for one, the
                 // budget allows, and the round actually added text (a
-                // marker-only round would spin without progress).
-                if !Task.isCancelled, round < Self.maxAutoContinues,
+                // marker-only round would spin without progress). Agent turns
+                // never continue — the marker contract is ours, not theirs.
+                if !Task.isCancelled, agentRole == nil, round < Self.maxAutoContinues,
                    var current = reply {
                     let (stripped, wantsMore) = Self.strippingContinueMarker(current.text)
                     if wantsMore, stripped != lastRoundText, !stripped.isEmpty {
@@ -1326,8 +1991,10 @@ struct ChatWindow: View {
                 chatStore.statusText = nil
                 chatStore.setLoading(false)
                 // Fold older turns into the rolling summary when the context
-                // grows. Skipped on cancellation (the chat is being deleted).
-                if !Task.isCancelled {
+                // grows. Skipped on cancellation (the chat is being deleted)
+                // and for agent chats — compaction is the AGENT's job, we
+                // never send it our history (notes §6.1 p.2).
+                if !Task.isCancelled, !origin.isAgent {
                     await ChatService.compressHistoryIfNeeded(store: chatStore)
                 }
             }
@@ -1533,6 +2200,29 @@ struct ChatWindow: View {
             let plainKey = event.modifierFlags
                 .intersection([.command, .option, .control, .shift])
                 .isEmpty
+
+            // Slash autocomplete owns ↑/↓/⏎/⇥/Esc while its popup is open —
+            // BEFORE the text view sees them (⏎ must pick, not send).
+            let slashItems = slashSuggestionItems()
+            if !slashItems.isEmpty, plainKey {
+                switch event.keyCode {
+                case 125: // ↓
+                    slashSelection = min(slashSelection + 1, slashItems.count - 1)
+                    return nil
+                case 126: // ↑
+                    slashSelection = max(slashSelection - 1, 0)
+                    return nil
+                case 36, 48: // ⏎ / ⇥
+                    let index = min(slashSelection, slashItems.count - 1)
+                    acceptSlashSuggestion(slashItems[index].command)
+                    return nil
+                case 53: // Esc closes the popup for THIS text; typing re-arms
+                    slashDismissedText = messageText
+                    return nil
+                default:
+                    break
+                }
+            }
 
             // Space (keyCode 49)
             if event.keyCode == 49, plainKey {

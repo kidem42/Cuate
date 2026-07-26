@@ -36,6 +36,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private var worldTimeWindow: NSWindow? // WorldTimeAddon (Addons/WorldTimeAddon)
     private var hotkeyManager: HotkeyManager?
     private var statusItem: NSStatusItem?
+    /// Keeps the pending-approval → status-item subscription alive.
+    private var agentApprovalObserver: AnyCancellable?
     /// Status-bar submenu listing local models with per-model load/unload
     /// toggles — repopulated live in `menuNeedsUpdate` so its status stays fresh.
     private weak var localModelsSubmenu: NSMenu?
@@ -97,6 +99,73 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         // ImageAddon — self-contained; all code lives in Addons/ImageAddon.
         ImageAddon.shared.start()
+
+        // Agent notifications (AgentGateway addons): categories must register
+        // before the first banner or its buttons don't render. Permission is
+        // NOT requested here — that happens when an agent addon is enabled.
+        NotificationService.shared.activate()
+
+        // HermesAddon: refresh the gateway state (role list, connection dot)
+        // once the key cache is warm — silent, best-effort. The background
+        // poll then watches bound sessions for activity we didn't start
+        // (§7.1 — Hermes has no push channel, so we ask).
+        Task { @MainActor in
+            await APIKeyStore.warmIfNeeded()
+            if HermesAddon.shared.isAvailable {
+                await HermesAddon.shared.probe()
+            }
+            // The addon being ON is the user's standing opt-in — ask for
+            // notification permission here too, not only on the toggle flip
+            // (an already-enabled addon never showed the dialog and every
+            // banner died on the authorized-guard; e2e 2026-07-25).
+            if HermesSettings.shared.enabled {
+                NotificationService.shared.requestPermissionIfNeeded()
+            }
+            HermesAddon.shared.startBackgroundPolling()
+        }
+        // warmIfNeeded returns EARLY when another warm is already in flight
+        // (the key task above), and the sidebar's own probe can fire BEFORE
+        // the keys are warm — a keyless 401 then parked the state on
+        // "disconnected" and nothing retried until the settings tab
+        // (e2e 2026-07-25, twice). The real "keys are ready" signal is this
+        // notification: re-probe on it whenever we are not connected yet.
+        NotificationCenter.default.addObserver(forName: .apiKeysDidChange, object: nil, queue: .main) { _ in
+            Task { @MainActor in
+                if HermesAddon.shared.isAvailable,
+                   HermesAddon.shared.connectionState != .connected {
+                    await HermesAddon.shared.probe()
+                }
+            }
+        }
+
+        // Banner click → summon the panel on the role's conversation.
+        NotificationCenter.default.addObserver(forName: .agentNotificationOpened, object: nil, queue: .main) { [weak self] note in
+            let roleID = note.userInfo?["roleID"] as? String
+            Task { @MainActor in
+                if let roleID {
+                    AppSettings.shared.activeAgentRoleID = roleID
+                }
+                self?.showChatWindow()
+            }
+        }
+
+        // Pending-approval fallback indicator in the menu bar (rebuilds the
+        // status item when the count crosses zero).
+        agentApprovalObserver = NotificationService.shared.$pendingApprovalCount
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.setupStatusItem() }
+            }
+
+        // Agent sidebar ⇆ window frame: the CHAT column's size is sacred
+        // (e2e 2026-07-25) — when the column appears, the window grows LEFT
+        // by exactly its width (right edge fixed, the chat doesn't move or
+        // resize); when it hides, the same delta comes back off.
+        NotificationCenter.default.addObserver(forName: .agentSidebarVisibilityChanged, object: nil, queue: .main) { [weak self] note in
+            let visible = note.userInfo?["visible"] as? Bool ?? false
+            Task { @MainActor in self?.applySidebarWindowDelta(visible: visible) }
+        }
 
         // Re-register global shortcuts when the user rebinds them in Settings
         NotificationCenter.default.addObserver(forName: .hotkeysDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -217,7 +286,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            if let symbolImage = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "AI Assistant") {
+            // Pending agent approval + notifications denied → the menu-bar
+            // icon is the fallback indicator (badge symbol; §7.1 degradation
+            // rule: approvals must not get lost to a TCC refusal).
+            let pendingApproval = NotificationService.shared.pendingApprovalCount > 0
+                && NotificationService.shared.authorized != true
+            let symbolName = pendingApproval ? "exclamationmark.bubble" : "brain.head.profile"
+            if let symbolImage = NSImage(systemSymbolName: symbolName, accessibilityDescription: "AI Assistant") {
                 button.image = symbolImage
                 button.image?.isTemplate = true
                 button.title = ""
@@ -799,8 +874,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if !window.setFrameUsingName(Self.panelFrameName, force: true) {
             window.center() // first launch
         }
+        // The autosaved frame may already include the agent sidebar's width
+        // (quit with an active role) — the size limits must match it.
+        if UserDefaults.standard.bool(forKey: Self.sidebarDeltaKey) {
+            window.minSize = NSSize(width: 480 + AgentSidebarLayout.width, height: 320)
+            window.maxSize = NSSize(width: 1000 + AgentSidebarLayout.width, height: 850)
+        }
         window.orderOut(nil)
         self.chatWindow = window
+    }
+
+    // MARK: - Agent sidebar: window width delta
+
+    /// Whether the sidebar's width is currently baked into the window frame.
+    /// Persisted: the autosaved frame already includes the delta, so a
+    /// relaunch with an active role must not widen a second time.
+    private static let sidebarDeltaKey = "agentSidebarWidthApplied"
+
+    /// Pure ±delta on the window frame: grow left by the sidebar width /
+    /// shrink back. No stored frames — the chat keeps whatever size the
+    /// user gave it, exactly.
+    private func applySidebarWindowDelta(visible: Bool) {
+        guard let window = chatWindow else { return }
+        let defaults = UserDefaults.standard
+        let applied = defaults.bool(forKey: Self.sidebarDeltaKey)
+        guard visible != applied else { return }
+        let delta = AgentSidebarLayout.width
+        var frame = window.frame
+        if visible {
+            frame.origin.x -= delta
+            frame.size.width += delta
+            // Clamped to the screen: at the left edge the window shifts
+            // right instead — the chat may move, but never shrinks.
+            if let bounds = (window.screen ?? NSScreen.main)?.visibleFrame,
+               frame.minX < bounds.minX {
+                frame.origin.x = bounds.minX
+            }
+            window.maxSize = NSSize(width: 1000 + delta, height: 850)
+            window.minSize = NSSize(width: 480 + delta, height: 320)
+        } else {
+            frame.origin.x += delta
+            frame.size.width = max(480, frame.size.width - delta)
+            window.minSize = NSSize(width: 480, height: 320)
+            window.maxSize = NSSize(width: 1000, height: 850)
+        }
+        defaults.set(visible, forKey: Self.sidebarDeltaKey)
+        window.setFrame(frame, display: true, animate: true)
     }
 
     // MARK: - Panel placement
@@ -994,6 +1113,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     private func hideChatWindow() {
+        // The pin (panel header) opts out of auto-hide entirely — same
+        // escape hatch the World Time panel has.
+        guard !AppSettings.shared.panelPinned else { return }
         guard let window = chatWindow, window.isVisible else { return }
         // Keep the panel visible while the user works in Settings
         if let settingsWindow, settingsWindow.isKeyWindow { return }

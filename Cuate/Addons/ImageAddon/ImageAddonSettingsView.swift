@@ -354,7 +354,7 @@ struct ImageAddonEnableToggle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Toggle(IAL("ia.general.enable"), isOn: $settings.enabled)
+            Toggle(isOn: $settings.enabled) { FeatureTitle(raw: IAL("ia.general.enable")) }
             Text(IAL("ia.general.enable.caption"))
                 .font(.caption)
                 .foregroundColor(.secondary)

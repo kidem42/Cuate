@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- Stylized Hermes wing: three fanned feathers, filled monochrome
+       (rendered as a template image — alpha defines the glyph). -->
+  <g fill="#000">
+    <path d="M21.5 2.8 C14.2 2.2 6.8 4.6 2.2 9.4 C7.6 10.9 15.2 9.0 21.5 2.8 Z"/>
+    <path d="M20.6 7.6 C14.8 7.7 8.9 10.3 4.9 14.7 C9.9 15.7 15.9 13.4 20.6 7.6 Z"/>
+    <path d="M19.2 12.6 C14.8 13.1 10.7 15.6 7.9 19.9 C12.3 20.3 16.8 17.6 19.2 12.6 Z"/>
+  </g>
+</svg>

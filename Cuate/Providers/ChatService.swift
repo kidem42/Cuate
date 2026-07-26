@@ -14,6 +14,19 @@ enum ChatService {
         /// digest of the results, to be stored on the reply message so
         /// follow-up turns keep their grounding (see ChatMessage.toolContext).
         case toolContext(String)
+        /// Agent turns (AgentGateway): the authoritative full reply text.
+        /// Replaces everything streamed so far — Hermes deltas and the final
+        /// `assistant.completed` text differ in whitespace, and a turn with
+        /// the agent's streaming off delivers ONLY this event.
+        case replaceText(String)
+        /// Agent turns: the persisted tool-step summary for the reply
+        /// (`ChatMessage.agentSteps`), emitted once at the end.
+        case agentSteps(String)
+        /// Agent turns: the gateway asked the human for permission mid-run.
+        /// The window renders the inline card; `resolve` answers the gateway
+        /// (and clears the matching banner). Dormant on Hermes 0.19.0 —
+        /// wired for gateways that emit approval frames.
+        case agentApproval(AgentApproval, resolve: @MainActor (AgentApprovalDecision) -> Void)
     }
 
 

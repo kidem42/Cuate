@@ -106,6 +106,22 @@ nonisolated struct ChatMessage: Identifiable, Codable {
     /// recent reply that has one, so follow-up questions ("what did the second
     /// source say?") keep their grounding across turns.
     var toolContext: String?
+    /// Agent conversations (AgentGateway): the message's ID on the gateway
+    /// side. The agent's history exists (and grows) without us — Telegram,
+    /// CLI, cron all write into the same session — so catch-up sync needs a
+    /// stable identity to dedupe against: our own sends come back again in
+    /// the gateway transcript. nil for ordinary provider chats.
+    var externalID: String?
+    /// Agent conversations: the gateway's sequence number for this message.
+    /// Orders catch-up and cursor backfill correctly when timestamps collide
+    /// (tool bursts land within one clock tick). nil for ordinary chats.
+    var seq: Int?
+    /// Agent conversations: compact summary of the tool steps behind an
+    /// assistant reply (name · status · duration per line). The full event
+    /// log is deliberately NOT persisted — one agent turn can emit hundreds
+    /// of tool events; the summary is what the collapsible journal renders
+    /// after a restart. nil for ordinary chats and user messages.
+    var agentSteps: String?
 
     enum MessageType: String, Codable {
         case text
@@ -122,11 +138,14 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         self.audioURL = audioURL
         self.attachments = attachments
         self.toolContext = nil
+        self.externalID = nil
+        self.seq = nil
+        self.agentSteps = nil
     }
 
     /// Reconstructs a message with explicit identity and timestamp — used by
     /// persistence (SwiftData rows) and the legacy-JSON migration.
-    init(id: UUID, text: String, isUser: Bool, timestamp: Date, messageType: MessageType, audioURL: URL?, attachments: [ChatAttachment], toolContext: String? = nil) {
+    init(id: UUID, text: String, isUser: Bool, timestamp: Date, messageType: MessageType, audioURL: URL?, attachments: [ChatAttachment], toolContext: String? = nil, externalID: String? = nil, seq: Int? = nil, agentSteps: String? = nil) {
         self.id = id
         self.text = text
         self.isUser = isUser
@@ -135,11 +154,15 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         self.audioURL = audioURL
         self.attachments = attachments
         self.toolContext = toolContext
+        self.externalID = externalID
+        self.seq = seq
+        self.agentSteps = agentSteps
     }
 
     // Custom coding keys to handle URL encoding
     enum CodingKeys: String, CodingKey {
         case id, text, isUser, timestamp, messageType, audioURLString, attachments, toolContext
+        case externalID, seq, agentSteps
     }
 
     init(from decoder: Decoder) throws {
@@ -151,6 +174,9 @@ nonisolated struct ChatMessage: Identifiable, Codable {
         messageType = try container.decode(MessageType.self, forKey: .messageType)
         attachments = (try? container.decode([ChatAttachment].self, forKey: .attachments)) ?? []
         toolContext = try container.decodeIfPresent(String.self, forKey: .toolContext)
+        externalID = try container.decodeIfPresent(String.self, forKey: .externalID)
+        seq = try container.decodeIfPresent(Int.self, forKey: .seq)
+        agentSteps = try container.decodeIfPresent(String.self, forKey: .agentSteps)
 
         if let urlString = try container.decodeIfPresent(String.self, forKey: .audioURLString) {
             audioURL = URL(string: urlString)
@@ -170,6 +196,9 @@ nonisolated struct ChatMessage: Identifiable, Codable {
             try container.encode(attachments, forKey: .attachments)
         }
         try container.encodeIfPresent(toolContext, forKey: .toolContext)
+        try container.encodeIfPresent(externalID, forKey: .externalID)
+        try container.encodeIfPresent(seq, forKey: .seq)
+        try container.encodeIfPresent(agentSteps, forKey: .agentSteps)
 
         if let audioURL = audioURL {
             try container.encode(audioURL.absoluteString, forKey: .audioURLString)
@@ -181,10 +210,19 @@ nonisolated struct ChatMessage: Identifiable, Codable {
 class ChatStore: ObservableObject {
 
     /// Identifies which persisted conversation the store is showing: the
-    /// shared chat, or a preset's own isolated chat (Settings → Prompts).
+    /// shared chat, a preset's own isolated chat (Settings → Prompts), or an
+    /// agent role's chat (AgentGateway addons — isolation is forced there,
+    /// the conversation also lives on the agent's side).
     nonisolated enum ConversationID: Equatable {
         case general
         case preset(String)
+        /// An agent role's conversation: `addonID` names the addon ("hermes"),
+        /// `agentID` the role within it (profile/agent name), `sessionID`
+        /// the gateway session when the user opened a SPECIFIC one — each
+        /// session is its own conversation with its own store and streaming
+        /// isolation, exactly like isolated presets (nil = the role's
+        /// default thread). Hashed like preset names — remote strings.
+        case agent(addonID: String, agentID: String, sessionID: String? = nil)
 
         var fileURL: URL {
             switch self {
@@ -192,6 +230,8 @@ class ChatStore: ObservableObject {
                 return ChatStore.baseDirectory.appendingPathComponent("chat.json")
             case .preset(let name):
                 return ChatStore.baseDirectory.appendingPathComponent("chat-\(Self.fileHash(name)).json")
+            case .agent:
+                return ChatStore.baseDirectory.appendingPathComponent("chat-\(storageKey).json")
             }
         }
 
@@ -202,7 +242,20 @@ class ChatStore: ObservableObject {
             switch self {
             case .general: return "general"
             case .preset(let name): return Self.fileHash(name)
+            // Prefixed so an agent chat can never collide with a preset chat,
+            // and the addon is recoverable from the key (role cleanup). A
+            // specific session hashes (agentID#sessionID) — its own store;
+            // the default thread keeps the original stem.
+            case .agent(let addonID, let agentID, let sessionID):
+                let identity = sessionID.map { "\(agentID)#\($0)" } ?? agentID
+                return "agent-\(addonID)-\(Self.fileHash(identity))"
             }
+        }
+
+        /// Whether this conversation belongs to an agent role.
+        var isAgent: Bool {
+            if case .agent = self { return true }
+            return false
         }
 
         /// Stable filesystem-safe file identity for arbitrary preset names
@@ -402,6 +455,27 @@ class ChatStore: ObservableObject {
     /// disk-queue block so no flush/load can interleave.
     nonisolated private static func mergeMessage(_ message: ChatMessage, into target: ConversationID) {
         ChatPersistence.merge(message, intoKey: target.storageKey)
+    }
+
+    // MARK: Agent mirror sync (AgentGateway)
+
+    /// Replaces the loaded window with the merged local+gateway list after a
+    /// catch-up sync (agent conversations; main thread only). The merged rows
+    /// carry `externalID`/`seq`, so the next sync dedupes against them. The
+    /// normal debounced sync persists the result.
+    func applyAgentMerge(_ merged: [ChatMessage]) {
+        guard isHistoryLoaded else { return }
+        messages = merged
+        scheduleSave()
+    }
+
+    /// Prepends older gateway messages (scroll past the local mirror cache).
+    /// Only meaningful when the whole store window is already loaded — pages
+    /// still in the store must come out first (`loadOlderPage`).
+    func prependFromGateway(_ older: [ChatMessage]) {
+        guard isHistoryLoaded, windowStart == 0, !older.isEmpty else { return }
+        messages.insert(contentsOf: older, at: 0)
+        scheduleSave()
     }
 
     /// Deletes a preset's dormant chat file and its media without loading it

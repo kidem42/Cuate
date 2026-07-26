@@ -38,6 +38,11 @@ struct MarkdownBlocksView: View {
         case artifact(kind: ArtifactKind, content: String, complete: Bool)
         /// A ```mermaid fence rendered inline as a native-looking diagram.
         case mermaid(code: String, complete: Bool)
+        /// A standalone `![alt](url)` line — agents send screenshots and
+        /// plots as image links; without this they were dead markdown text.
+        /// Loading goes through `AgentInlineImageView` (adds the gateway's
+        /// Bearer token for its own host).
+        case image(alt: String, url: String)
     }
 
     private var isDocument: Bool { style == .document }
@@ -128,6 +133,8 @@ struct MarkdownBlocksView: View {
                 truncated: !complete && !isStreaming
             )
 
+        case .image(let alt, let url):
+            AgentInlineImageView(urlString: url, alt: alt)
         case .mermaid(let code, let complete):
             // Once the stream is over an unterminated fence still gets a render
             // attempt; the parser decides whether it degrades to source.
@@ -207,13 +214,31 @@ struct MarkdownBlocksView: View {
         var language: String = ""
         @State private var justCopied = false
         @State private var justRan = false
+        /// Long logs render folded (the tail); the user can unfold.
+        @State private var showFullLog = false
         @Environment(\.themePalette) private var palette
         @ObservedObject private var settings = AppSettings.shared
 
-        /// ▶ shows only on shell-tagged blocks, and only while the feature
-        /// is enabled in Settings → General.
+        /// A single message can carry a 20k-line log — rendering it whole
+        /// hangs the panel (notes §7.2 п.4). Above this the block folds.
+        private static let foldThreshold = 300
+
+        /// ▶ shows on shell-tagged blocks — and, in AGENT chats, on untagged
+        /// blocks that read as commands (agents don't follow our prompt's
+        /// tagging rules). Only while the feature is enabled in Settings.
         private var showsRun: Bool {
-            settings.terminalRunMode != .off && TerminalCommandRunner.isShellLanguage(language)
+            guard settings.terminalRunMode != .off else { return false }
+            if TerminalCommandRunner.isShellLanguage(language) { return true }
+            return language.isEmpty
+                && settings.activeAgentRole != nil
+                && AgentTerminalText.looksLikeShellCommands(content)
+        }
+
+        /// The active agent role, when the block lives in an agent chat —
+        /// enables "run at the agent" and the host label (§7.3: the local ▶
+        /// default never changes; remote is a separate, explicit action).
+        private var agentRole: AgentRole? {
+            settings.activeAgentRole
         }
 
         private func copyContent() {
@@ -225,13 +250,90 @@ struct MarkdownBlocksView: View {
             }
         }
 
-        var body: some View {
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(content)
+        /// Line count of the raw content (fold decision).
+        private var lineCount: Int {
+            content.reduce(into: 1) { if $1 == "\n" { $0 += 1 } }
+        }
+
+        private var isFolded: Bool {
+            !showFullLog && lineCount > Self.foldThreshold
+        }
+
+        /// The text actually rendered: folded logs keep the TAIL (that is
+        /// where a failed command's verdict lives, terminal-style).
+        private var displayContent: String {
+            guard isFolded else { return content }
+            let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+            return lines.suffix(Self.foldThreshold).joined(separator: "\n")
+        }
+
+        /// Theme-tuned ANSI palette: Terminal theme brings its own signature
+        /// green; everything else uses the readable defaults.
+        private var ansiPalette: AgentTerminalText.AnsiPalette {
+            var ansi = AgentTerminalText.AnsiPalette()
+            if palette.placeholderCaret { // Terminal/Blueprint family
+                ansi.green = palette.accent
+            }
+            return ansi
+        }
+
+        private var baseTextColor: Color {
+            palette.isGlass ? .primary : palette.codeText
+        }
+
+        /// The rendered text: unified diffs get line colors, ANSI output
+        /// gets its terminal colors (with `\r` redraws collapsed), plain
+        /// code stays plain.
+        @ViewBuilder
+        private var codeText: some View {
+            if AgentTerminalText.isUnifiedDiff(content: displayContent, language: language) {
+                Text(AgentTerminalText.diffAttributed(displayContent, palette: ansiPalette, baseColor: baseTextColor))
                     .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundColor(palette.isGlass ? .primary : palette.codeText)
-                    .textSelection(.enabled)
-                    .padding(8)
+            } else if AgentTerminalText.containsANSI(displayContent) {
+                Text(AgentTerminalText.ansiAttributed(displayContent, palette: ansiPalette, baseColor: baseTextColor))
+                    .font(.system(size: 11.5, design: .monospaced))
+            } else {
+                Text(displayContent)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundColor(baseTextColor)
+            }
+        }
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                // Title strip: the diff's file name, and the agent-host label
+                // when a role is active (where a remote run would execute).
+                if let title = blockTitle {
+                    HStack(spacing: 4) {
+                        Image(systemName: title.icon)
+                            .font(.system(size: 9))
+                        Text(title.text)
+                            .font(.system(size: 10, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(palette.secondaryText)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 6)
+                }
+
+                if isFolded {
+                    Button {
+                        showFullLog = true
+                    } label: {
+                        Text(String(format: AGL("agent.code.showAll"), lineCount))
+                            .font(.system(size: 10))
+                            .foregroundColor(palette.ink)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 6)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    codeText
+                        .textSelection(.enabled)
+                        .padding(8)
+                }
             }
             .background(palette.isGlass ? AnyShapeStyle(Color.secondary.opacity(0.12)) : palette.codeFill)
             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -239,24 +341,21 @@ struct MarkdownBlocksView: View {
                 // Real buttons with generous (22 pt) hit zones: a near-miss
                 // on ▶ must not fall through to the block's tap-to-copy.
                 HStack(spacing: 0) {
-                    if showsRun {
+                    if lineCount > Self.foldThreshold {
                         Button {
-                            TerminalCommandRunner.run(content)
-                            withAnimation { justRan = true }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                withAnimation { justRan = false }
-                            }
+                            saveLogToFile()
                         } label: {
-                            Image(systemName: justRan ? "checkmark" : "play.fill")
+                            Image(systemName: "square.and.arrow.down")
                                 .font(.system(size: 9))
-                                .foregroundColor(justRan ? .green : .secondary)
+                                .foregroundColor(.secondary)
                                 .frame(width: 22, height: 22)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help(settings.terminalRunMode == .autorun
-                            ? L("tooltip.runInTerminal")
-                            : L("tooltip.insertIntoTerminal"))
+                        .help(AGL("agent.code.saveLog"))
+                    }
+                    if showsRun {
+                        runControl
                     }
                     Button {
                         copyContent()
@@ -276,6 +375,69 @@ struct MarkdownBlocksView: View {
                 copyContent()
             }
             .help(L("tooltip.tapToCopy"))
+        }
+
+        private var blockTitle: (icon: String, text: String)? {
+            if AgentTerminalText.isUnifiedDiff(content: content, language: language),
+               let file = AgentTerminalText.diffFileName(content) {
+                return ("doc.text", file)
+            }
+            if showsRun, let role = agentRole {
+                // The label answers "where would a remote run land" BEFORE
+                // the user opens the ▶ menu.
+                let host = HermesSettings.shared.baseURL.host ?? role.displayName
+                return ("desktopcomputer", host)
+            }
+            return nil
+        }
+
+        /// ▶ with the default LOCAL action; when an agent role is active a
+        /// context menu adds the explicit "run at the agent" alternative.
+        /// Autorun composes with the local default only — a remote run is
+        /// always a deliberate menu pick, never automatic (§7.3).
+        @ViewBuilder
+        private var runControl: some View {
+            Button {
+                TerminalCommandRunner.run(content)
+                withAnimation { justRan = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation { justRan = false }
+                }
+            } label: {
+                Image(systemName: justRan ? "checkmark" : "play.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(justRan ? .green : .secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(settings.terminalRunMode == .autorun
+                ? L("tooltip.runInTerminal")
+                : L("tooltip.insertIntoTerminal"))
+            .contextMenu {
+                if let role = agentRole {
+                    Button {
+                        NotificationCenter.default.post(
+                            name: .agentRunCommandRemotely, object: content)
+                    } label: {
+                        Label(String(format: AGL("agent.code.runAtAgent"),
+                                     HermesSettings.shared.baseURL.host ?? role.displayName),
+                              systemImage: "desktopcomputer")
+                    }
+                }
+            }
+        }
+
+        /// Save the full log via a sheet (a free-standing dialog would
+        /// trigger the floating panel's auto-hide, see presentAttachOpenPanel).
+        private func saveLogToFile() {
+            guard let window = FloatingPanelWindow.chatPanel else { return }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "agent-log.txt"
+            panel.beginSheetModal(for: window) { response in
+                guard response == .OK, let url = panel.url else { return }
+                try? content.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
     }
 
@@ -508,6 +670,18 @@ struct MarkdownBlocksView: View {
                 flushTable()
             }
 
+            // Standalone image line: ![alt](url)
+            if trimmed.hasPrefix("!["), trimmed.hasSuffix(")"),
+               let close = trimmed.range(of: "](") {
+                let alt = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<close.lowerBound])
+                let url = String(trimmed[close.upperBound..<trimmed.index(before: trimmed.endIndex)])
+                if url.hasPrefix("http://") || url.hasPrefix("https://") || url.hasPrefix("data:image") {
+                    flushAllText()
+                    blocks.append(.image(alt: alt, url: url))
+                    continue
+                }
+            }
+
             // Horizontal rule: a line of only --- / *** / ___
             if trimmed.count >= 3, let first = trimmed.first,
                "-*_".contains(first), trimmed.allSatisfy({ $0 == first }) {
@@ -682,6 +856,8 @@ struct MarkdownBlocksView: View {
                 html += "<pre>\(escapeHTML(content))</pre>"
             case .divider:
                 html += "<hr>"
+            case .image(let alt, let url):
+                html += "<img src=\"\(escapeHTML(url))\" alt=\"\(escapeHTML(alt))\">"
             case .table(let rows):
                 html += "<table>"
                 for (rowIndex, row) in rows.enumerated() {

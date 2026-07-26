@@ -186,7 +186,7 @@ struct LayoutFixEnableToggle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Toggle(LFL("lf.general.enable"), isOn: $settings.enabled)
+            Toggle(isOn: $settings.enabled) { FeatureTitle(raw: LFL("lf.general.enable")) }
             Text(LFL("lf.general.enable.caption"))
                 .font(.caption)
                 .foregroundColor(.secondary)

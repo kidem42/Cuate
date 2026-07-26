@@ -11,6 +11,7 @@ enum SettingsTab: String, Hashable {
     case imageAddon // ImageAddon (Addons/ImageAddon)
     case calendarAddon // CalendarAddon (Addons/CalendarAddon)
     case worldTime // WorldTimeAddon (Addons/WorldTimeAddon)
+    case hermes // HermesAddon (Addons/HermesAddon)
 }
 
 struct SettingsView: View {
@@ -19,6 +20,7 @@ struct SettingsView: View {
     @ObservedObject private var imageAddon = ImageAddonSettings.shared // addon: gates its tab
     @ObservedObject private var calendarAddon = CalendarSettings.shared // addon: gates its tab
     @ObservedObject private var worldTime = WorldTimeSettings.shared // addon: gates its tab
+    @ObservedObject private var hermes = HermesSettings.shared // addon: gates its tab
 
     enum KeyTestState: Equatable {
         case testing
@@ -74,6 +76,9 @@ struct SettingsView: View {
         }
         .onChange(of: calendarAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .calendarAddon { selectedTab = .general }
+        }
+        .onChange(of: hermes.enabled) { _, enabled in
+            if !enabled && selectedTab == .hermes { selectedTab = .general }
         }
         // Local-models tab bounces back to General when the feature is turned off.
         .onChange(of: settings.localModelsEnabled) { _, enabled in
@@ -138,7 +143,7 @@ struct SettingsView: View {
 
             // Addon rows appear only while the addon is enabled
             // (master switches live in the General section).
-            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled {
+            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled || hermes.enabled {
                 Section(L("sidebar.addons")) {
                     if layoutFix.enabled {
                         sidebarRow(LFL("lf.tab"), systemImage: "keyboard.fill", color: .indigo)
@@ -155,6 +160,23 @@ struct SettingsView: View {
                     if worldTime.enabled {
                         sidebarRow(WTL("wt.tab"), systemImage: "globe", color: .cyan)
                             .tag(SettingsTab.worldTime)
+                    }
+                    if hermes.enabled {
+                        // The addon's wing glyph, not an SF Symbol — the
+                        // same mark the chat switcher uses.
+                        Label {
+                            Text(HL("hermes.tab"))
+                        } icon: {
+                            Image("Provider-hermes")
+                                .resizable()
+                                .renderingMode(.template)
+                                .scaledToFit()
+                                .frame(width: 13, height: 13)
+                                .foregroundStyle(.white)
+                                .frame(width: 21, height: 21)
+                                .background(RoundedRectangle(cornerRadius: 5.5).fill(Color.teal.gradient))
+                        }
+                        .tag(SettingsTab.hermes)
                     }
                 }
             }
@@ -183,7 +205,7 @@ struct SettingsView: View {
             case .chat: tab { chatSection; parametersSection; ocrSection }
             case .keys: tab { keysSection; speechKeysSection; webSection }
             case .voice: tab { voiceSection; dictationSection }
-            case .general: tab { generalSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection; aboutSection }
+            case .general: tab { behaviorSection; modelsSection; addonsSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection; aboutSection }
             case .appearance: tab { appearanceSection }
             case .prompts: tab { switcherSection; promptSection }
             case .costs: CostsSettingsView()           // brings its own Form
@@ -192,6 +214,7 @@ struct SettingsView: View {
             case .imageAddon: ImageAddonSettingsView() // brings its own Form
             case .calendarAddon: CalendarSettingsView() // brings its own Form
             case .worldTime: WorldTimeSettingsView()   // brings its own Form
+            case .hermes: HermesSettingsView()         // brings its own Form
             }
         }
         // The "glass" part: hide the forms' opaque scroll background (the
@@ -226,7 +249,9 @@ struct SettingsView: View {
             Picker(L("chat.provider"), selection: $settings.chatProvider) {
                 // Only classes the user has switched on (cloud vs local) — the
                 // local provider appears once "Local models" is enabled.
-                ForEach(ProviderID.allCases.filter { settings.isProviderClassEnabled($0) }) { provider in
+                // Agents never appear here: roles are selected in the chat
+                // header's preset switcher, not the provider picker.
+                ForEach(ProviderID.allCases.filter { !$0.isAgent && settings.isProviderClassEnabled($0) }) { provider in
                     Label {
                         Text(provider.displayName)
                     } icon: {
@@ -300,7 +325,7 @@ struct SettingsView: View {
     /// that is now disabled, onto the first still-enabled one (if any).
     private func reselectProviderIfOrphaned() {
         guard !settings.isProviderClassEnabled(settings.chatProvider) else { return }
-        if let next = ProviderID.allCases.first(where: { settings.isProviderClassEnabled($0) }) {
+        if let next = ProviderID.allCases.first(where: { !$0.isAgent && settings.isProviderClassEnabled($0) }) {
             settings.chatProvider = next
         }
     }
@@ -352,9 +377,22 @@ struct SettingsView: View {
     private var keysSection: some View {
         Section {
             // Local providers have no API key — they're configured in the
-            // Local models tab, not here.
-            ForEach(ProviderID.allCases.filter { !$0.isLocal }) { provider in
+            // Local models tab, not here. Agent gateways keep their token in
+            // the addon's own tab; a link row points there when enabled.
+            ForEach(ProviderID.allCases.filter { !$0.isLocal && !$0.isAgent }) { provider in
                 keyRow(for: provider)
+            }
+            if hermes.enabled {
+                HStack {
+                    HStack(spacing: 6) {
+                        ProviderLogo(provider: .hermes, size: 14)
+                        Text(ProviderID.hermes.displayName)
+                    }
+                    .frame(width: 150, alignment: .leading)
+                    Spacer()
+                    Button(HL("hermes.tab")) { selectedTab = .hermes }
+                        .font(.callout)
+                }
             }
         } header: {
             Text(L("keys.header"))
@@ -915,44 +953,119 @@ struct SettingsView: View {
 
     // MARK: - Panel placement
 
-    private var generalSection: some View {
-        Section {
-            Button(L("ob.showTour")) {
-                NotificationCenter.default.post(name: .showOnboarding, object: nil)
-            }
-            Toggle(L("general.launchAtLogin"), isOn: $settings.launchAtLogin)
-            VStack(alignment: .leading, spacing: 3) {
-                Toggle(L("general.prefillSelection"), isOn: $settings.prefillFromSelection)
-                    .help(L("general.prefillSelection.help"))
-                Text(L("general.prefillSelection.caption"))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Picker(L("general.terminalRun"), selection: $settings.terminalRunMode) {
-                    ForEach(TerminalRunMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
+    // Split into three titled groups (behavior / models / add-ons) with a
+    // colored SF-symbol badge per row so the features stop reading as one
+    // undifferentiated list. Addon rows reuse the exact symbol+color of the
+    // sidebar tab the toggle reveals — flipping the switch shows a tab with
+    // the same badge.
+    private var behaviorSection: some View {
+        Section(L("general.group.behavior")) {
+            featureRow("sparkles", .purple) {
+                Button(L("ob.showTour")) {
+                    NotificationCenter.default.post(name: .showOnboarding, object: nil)
                 }
-                .help(L("general.terminalRun.help"))
-                Text(L("general.terminalRun.caption"))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            LocalModelsEnableToggle() // local models master switch
+            featureRow("power", .gray) {
+                Toggle(L("general.launchAtLogin"), isOn: $settings.launchAtLogin)
+            }
+            featureRow("character.cursor.ibeam", .blue) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Toggle(L("general.prefillSelection"), isOn: $settings.prefillFromSelection)
+                        .help(L("general.prefillSelection.help"))
+                    Text(L("general.prefillSelection.caption"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            featureRow("terminal.fill", Color(red: 0.26, green: 0.28, blue: 0.32)) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Picker(L("general.terminalRun"), selection: $settings.terminalRunMode) {
+                        ForEach(TerminalRunMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .help(L("general.terminalRun.help"))
+                    Text(L("general.terminalRun.caption"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var modelsSection: some View {
+        Section(L("general.group.models")) {
+            featureRow("cpu", .mint) {
+                LocalModelsEnableToggle() // local models master switch
+            }
             // Cloud master switch is a NESTED row of local models: turning
             // cloud off only makes sense when local models exist to fall back
             // on (AppSettings re-enables cloud when the parent turns off).
             if settings.localModelsEnabled {
-                OnlineModelsEnableToggle()
-                    .padding(.leading, 20)
+                featureRow("cloud.fill", Color(red: 0.36, green: 0.68, blue: 0.95), small: true) {
+                    OnlineModelsEnableToggle()
+                }
+                .padding(.leading, 24)
             }
-            LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
-            ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
-            CalendarEnableToggle() // CalendarAddon master switch (Addons/CalendarAddon)
-            WorldTimeEnableToggle() // WorldTimeAddon master switch (Addons/WorldTimeAddon)
+        }
+    }
+
+    private var addonsSection: some View {
+        Section(L("general.group.addons")) {
+            featureRow("keyboard.fill", .indigo) {
+                LayoutFixEnableToggle() // LayoutFix addon master switch (Addons/LayoutFix)
+            }
+            featureRow("photo.fill", .green) {
+                ImageAddonEnableToggle() // ImageAddon master switch (Addons/ImageAddon)
+            }
+            featureRow("calendar", .red) {
+                CalendarEnableToggle() // CalendarAddon master switch (Addons/CalendarAddon)
+            }
+            featureRow("globe", .cyan) {
+                WorldTimeEnableToggle() // WorldTimeAddon master switch (Addons/WorldTimeAddon)
+            }
+            featureRow(asset: "Provider-hermes", .teal) {
+                HermesEnableToggle() // HermesAddon master switch (Addons/HermesAddon)
+            }
+        }
+    }
+
+    /// System-Settings-style badge in front of a feature row: white SF symbol
+    /// on a colored rounded rect (same idiom as `sidebarRow`, a size up).
+    /// Centered against the row so two-line rows (toggle + caption) keep the
+    /// badge on the toggle's optical middle.
+    private func featureRow<Content: View>(
+        _ systemImage: String, _ color: Color, small: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: small ? 10 : 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: small ? 20 : 24, height: small ? 20 : 24)
+                .background(RoundedRectangle(cornerRadius: small ? 5 : 6, style: .continuous).fill(color.gradient))
+            content()
+        }
+    }
+
+    /// featureRow variant for a template ASSET glyph (brand marks like the
+    /// Hermes wing) instead of an SF Symbol.
+    private func featureRow<Content: View>(
+        asset: String, _ color: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(asset)
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 14, height: 14)
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(color.gradient))
+            content()
         }
     }
 
@@ -1530,5 +1643,43 @@ private struct OpenRouterModelField: View {
         settings.recordOpenRouterModel(s)
         focused = false
         hoveringSuggestions = false
+    }
+}
+
+// MARK: - Feature title with a beta capsule
+
+/// Feature-toggle title whose localized string may end in a "(beta)" marker
+/// (any language): the marker comes off the text and renders as a small
+/// outlined capsule, so titles stay short and line up across the list.
+/// Shared by the addon enable-toggles mounted in the General tab.
+struct FeatureTitle: View {
+    let raw: String
+
+    var body: some View {
+        let parts = Self.split(raw)
+        HStack(spacing: 6) {
+            Text(parts.title)
+            if let beta = parts.beta {
+                Text(beta.uppercased())
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.5), lineWidth: 0.5)
+                    )
+            }
+        }
+    }
+
+    /// "Автосвитчер (бета)" → ("Автосвитчер", "бета"); no marker → (raw, nil).
+    static func split(_ raw: String) -> (title: String, beta: String?) {
+        guard let range = raw.range(
+            of: #"\s*\((beta|бета)\)\s*$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) else { return (raw, nil) }
+        let marker = raw[range].trimmingCharacters(in: CharacterSet(charactersIn: " ()"))
+        return (String(raw[..<range.lowerBound]), marker)
     }
 }

@@ -1,0 +1,215 @@
+import Foundation
+
+/// Self-contained localization for the HermesAddon (pattern:
+/// `CalendarLocalization.CAL`). Core AgentGateway strings live in `AGL`.
+func HL(_ key: String) -> String {
+    let lang = Localization.currentLanguage
+    guard let table = HermesAddonStrings.table[key] else { return key }
+    return table[lang] ?? table[.english] ?? key
+}
+
+enum HermesAddonStrings {
+    static let table: [String: [AppLanguage: String]] = [
+        "hermes.tab": [.english: "Hermes Agent", .spanish: "Agente Hermes", .russian: "Hermes-агент"],
+
+        // MARK: General tab master switch
+        "hermes.general.enable": [
+            .english: "Hermes Agent (beta)",
+            .spanish: "Agente Hermes (beta)",
+            .russian: "Hermes-агент (бета)"
+        ],
+        "hermes.general.enable.caption": [
+            .english: "Connect your self-hosted Hermes agent (Nous Research) as a role in the chat switcher. The agent keeps its own memory, tools and model keys; conversations continue across Telegram, CLI and this app.",
+            .spanish: "Conecta tu agente Hermes autoalojado (Nous Research) como un rol en el selector del chat. El agente mantiene su propia memoria, herramientas y claves de modelos; las conversaciones continúan entre Telegram, CLI y esta app.",
+            .russian: "Подключите свой самохостируемый Hermes-агент (Nous Research) как роль в свитчере чата. Агент хранит собственную память, инструменты и ключи моделей; беседы продолжаются между Telegram, CLI и этим приложением."
+        ],
+
+        // MARK: Connection section
+        "hermes.conn.header": [.english: "Connection", .spanish: "Conexión", .russian: "Подключение"],
+        "hermes.conn.endpoint": [.english: "Gateway address", .spanish: "Dirección del gateway", .russian: "Адрес гейтвея"],
+        "hermes.conn.endpoint.help": [
+            .english: "http://127.0.0.1:8642 for a gateway on this Mac; a Tailscale/LAN address for a remote one.",
+            .spanish: "http://127.0.0.1:8642 para un gateway en este Mac; una dirección de Tailscale/LAN para uno remoto.",
+            .russian: "http://127.0.0.1:8642 для гейтвея на этом Mac; адрес Tailscale/LAN — для удалённого."
+        ],
+        "hermes.conn.key": [.english: "API key", .spanish: "Clave API", .russian: "API-ключ"],
+        "hermes.conn.key.placeholder": [
+            .english: "API_SERVER_KEY from the gateway's .env",
+            .spanish: "API_SERVER_KEY del .env del gateway",
+            .russian: "API_SERVER_KEY из .env гейтвея"
+        ],
+        "hermes.conn.key.save": [.english: "Save", .spanish: "Guardar", .russian: "Сохранить"],
+        "hermes.conn.key.remove": [.english: "Remove", .spanish: "Eliminar", .russian: "Удалить"],
+        "hermes.conn.test": [.english: "Test connection", .spanish: "Probar conexión", .russian: "Проверить соединение"],
+        "hermes.conn.testing": [.english: "Checking…", .spanish: "Comprobando…", .russian: "Проверяю…"],
+        "hermes.conn.security": [
+            .english: "The key is stored only in the Keychain. It grants full access to the agent's tools — including its terminal. For a remote gateway, prefer Tailscale/WireGuard over exposing the port.",
+            .spanish: "La clave se guarda solo en el Llavero. Da acceso completo a las herramientas del agente — incluida su terminal. Para un gateway remoto, prefiere Tailscale/WireGuard antes que exponer el puerto.",
+            .russian: "Ключ хранится только в Keychain. Он даёт полный доступ к инструментам агента — включая его терминал. Для удалённого гейтвея используйте Tailscale/WireGuard, а не открытый порт."
+        ],
+
+        // MARK: Onboarding (server-side setup)
+        "hermes.setup.header": [.english: "Gateway setup", .spanish: "Configuración del gateway", .russian: "Настройка гейтвея"],
+        "hermes.setup.intro": [
+            .english: "On the machine running Hermes, enable the API server and start the gateway:",
+            .spanish: "En la máquina donde corre Hermes, activa el servidor API y arranca el gateway:",
+            .russian: "На машине с Hermes включите API-сервер и запустите гейтвей:"
+        ],
+        "hermes.setup.local.title": [
+            .english: "Hermes on this Mac — run in Terminal once:",
+            .spanish: "Hermes en este Mac — ejecuta en Terminal una vez:",
+            .russian: "Hermes на этом Mac — выполните в Терминале один раз:"
+        ],
+        "hermes.setup.showKey": [
+            .english: "The API server is already enabled? Just read the existing key:",
+            .spanish: "¿El servidor API ya está activado? Solo lee la clave existente:",
+            .russian: "API-сервер уже включён? Просто покажите существующий ключ:"
+        ],
+        "hermes.setup.remote.title": [
+            .english: "Hermes on a remote machine (server, Mac mini) — over SSH:",
+            .spanish: "Hermes en una máquina remota (servidor, Mac mini) — por SSH:",
+            .russian: "Hermes на удалённой машине (сервер, Mac mini) — через SSH:"
+        ],
+        "hermes.setup.remote.caption": [
+            .english: "Then set the gateway address above to http://HOST:8642. API_SERVER_HOST=0.0.0.0 is required — by default the server listens on loopback only. Prefer a Tailscale/WireGuard address over exposing the port to the internet.",
+            .spanish: "Luego pon la dirección del gateway arriba como http://HOST:8642. API_SERVER_HOST=0.0.0.0 es obligatorio — por defecto el servidor escucha solo en loopback. Prefiere una dirección de Tailscale/WireGuard antes que exponer el puerto a internet.",
+            .russian: "Затем укажите адрес гейтвея выше: http://ХОСТ:8642. API_SERVER_HOST=0.0.0.0 обязателен — по умолчанию сервер слушает только loopback. Для доступа используйте адрес Tailscale/WireGuard, а не открытый в интернет порт."
+        ],
+        "hermes.setup.copy": [.english: "Copy", .spanish: "Copiar", .russian: "Скопировать"],
+
+        // MARK: Model routing
+        "hermes.model.header": [.english: "Agent model", .spanish: "Modelo del agente", .russian: "Модель агента"],
+        "hermes.model.auto": [
+            .english: "Agent's own default",
+            .spanish: "Predeterminado del agente",
+            .russian: "Как настроено у агента"
+        ],
+        "hermes.model.caption": [
+            .english: "The agent is a black box with its own configuration — new sessions follow its configured model unless you pick another one here.",
+            .spanish: "El agente es una caja negra con su propia configuración — las sesiones nuevas siguen su modelo configurado salvo que elijas otro aquí.",
+            .russian: "Агент — чёрный ящик со своей конфигурацией: новые сессии идут на его модель, если здесь не выбрана другая."
+        ],
+
+        // MARK: History retention
+        "hermes.history.header": [.english: "Conversation history", .spanish: "Historial de conversación", .russian: "История бесед"],
+        "hermes.history.mirror": [.english: "Mirror (recommended)", .spanish: "Espejo (recomendado)", .russian: "Зеркало (рекомендуется)"],
+        "hermes.history.archive": [.english: "Archive", .spanish: "Archivo", .russian: "Архив"],
+        "hermes.history.caption": [
+            .english: "Mirror: the agent keeps the full history; this app caches the newest messages and loads older ones from the agent on scroll. If the agent's session is ever deleted, the mirror empties too. Archive: everything is also stored here forever, like ordinary chats.",
+            .spanish: "Espejo: el agente guarda el historial completo; esta app almacena en caché los mensajes más recientes y carga los antiguos desde el agente al desplazarte. Si la sesión del agente se borra, el espejo también se vacía. Archivo: todo se guarda además aquí para siempre, como en los chats normales.",
+            .russian: "Зеркало: полная история живёт у агента; приложение кэширует свежие сообщения, а старые подгружает с гейтвея при прокрутке. Если сессию агента удалят — зеркало тоже опустеет. Архив: всё дополнительно хранится здесь навсегда, как в обычных чатах."
+        ],
+
+        // MARK: Sessions section
+        "hermes.sessions.header": [.english: "Agent sessions", .spanish: "Sesiones del agente", .russian: "Сессии агента"],
+        "hermes.sessions.caption": [
+            .english: "The agent's sessions exist beyond this app (Telegram, CLI, cron). \"Continue here\" binds the role's chat to an existing session.",
+            .spanish: "Las sesiones del agente existen más allá de esta app (Telegram, CLI, cron). \"Continuar aquí\" vincula el chat del rol a una sesión existente.",
+            .russian: "Сессии агента существуют и без этого приложения (Telegram, CLI, крон). «Продолжить здесь» привязывает чат роли к выбранной сессии."
+        ],
+        "hermes.sessions.continue": [.english: "Continue here", .spanish: "Continuar aquí", .russian: "Продолжить здесь"],
+        "hermes.sessions.delete": [.english: "Delete", .spanish: "Eliminar", .russian: "Удалить"],
+        "hermes.sessions.refresh": [.english: "Refresh", .spanish: "Actualizar", .russian: "Обновить"],
+        "hermes.sessions.empty": [.english: "No sessions on the gateway.", .spanish: "No hay sesiones en el gateway.", .russian: "На гейтвее нет сессий."],
+        "hermes.sessions.messages": [.english: "%d messages", .spanish: "%d mensajes", .russian: "%d сообщений"],
+
+        // MARK: Notifications
+        "hermes.notif.header": [.english: "Notifications", .spanish: "Notificaciones", .russian: "Уведомления"],
+        "hermes.notif.hideDetails": [
+            .english: "Hide command details in banners",
+            .spanish: "Ocultar detalles de comandos en los avisos",
+            .russian: "Скрывать детали команд в баннерах"
+        ],
+        "hermes.notif.hideDetails.caption": [
+            .english: "Banners say \"the agent asks permission\" without the command text — it can be visible on the lock screen.",
+            .spanish: "Los avisos dicen \"el agente pide permiso\" sin el texto del comando — puede verse en la pantalla bloqueada.",
+            .russian: "Баннер скажет «агент просит разрешение» без текста команды — он может быть виден на заблокированном экране."
+        ],
+
+        // MARK: Diagnostics
+        "hermes.diag.header": [.english: "Diagnostics", .spanish: "Diagnóstico", .russian: "Диагностика"],
+        "hermes.diag.server": [.english: "Gateway", .spanish: "Gateway", .russian: "Гейтвей"],
+
+        // MARK: Session management (sidebar)
+        "hermes.sessions.new": [.english: "New session", .spanish: "Nueva sesión", .russian: "Новая сессия"],
+        "hermes.sessions.rename": [.english: "Rename", .spanish: "Renombrar", .russian: "Переименовать"],
+        "hermes.sessions.pin": [.english: "Pin", .spanish: "Fijar", .russian: "Закрепить"],
+        "hermes.sessions.unpin": [.english: "Unpin", .spanish: "Soltar", .russian: "Открепить"],
+        "hermes.sessions.color": [.english: "Color", .spanish: "Color", .russian: "Цвет"],
+        "hermes.sessions.color.red": [.english: "Red", .spanish: "Rojo", .russian: "Красный"],
+        "hermes.sessions.color.orange": [.english: "Orange", .spanish: "Naranja", .russian: "Оранжевый"],
+        "hermes.sessions.color.yellow": [.english: "Yellow", .spanish: "Amarillo", .russian: "Жёлтый"],
+        "hermes.sessions.color.green": [.english: "Green", .spanish: "Verde", .russian: "Зелёный"],
+        "hermes.sessions.color.teal": [.english: "Teal", .spanish: "Turquesa", .russian: "Бирюзовый"],
+        "hermes.sessions.color.blue": [.english: "Blue", .spanish: "Azul", .russian: "Синий"],
+        "hermes.sessions.color.purple": [.english: "Purple", .spanish: "Morado", .russian: "Фиолетовый"],
+        "hermes.sessions.color.pink": [.english: "Pink", .spanish: "Rosa", .russian: "Розовый"],
+        "hermes.sessions.color.gray": [.english: "Gray", .spanish: "Gris", .russian: "Серый"],
+        "hermes.sessions.color.none": [.english: "No color", .spanish: "Sin color", .russian: "Без цвета"],
+        "hermes.sidebar.openApp": [
+            .english: "Configure in the Hermes app (skill toggles, backends, messengers)",
+            .spanish: "Configurar en la app de Hermes (habilidades, backends, mensajeros)",
+            .russian: "Настроить в приложении Hermes (тоглы скиллов, бэкенды, мессенджеры)"
+        ],
+        "hermes.slash.skills": [.english: "Agent skills", .spanish: "Habilidades del agente", .russian: "Скиллы агента"],
+        "hermes.slash.cuate": [.english: "Cuate (local)", .spanish: "Cuate (local)", .russian: "Cuate (локально)"],
+        "hermes.composer.effort": [.english: "Effort", .spanish: "Esfuerzo", .russian: "Усилие"],
+        "hermes.composer.effort.default": [.english: "Agent default", .spanish: "Predeterminado", .russian: "Как у агента"],
+        "hermes.composer.model.help": [
+            .english: "Model for THIS session (switches the gateway's session lock)",
+            .spanish: "Modelo para ESTA sesión (cambia el bloqueo de sesión del gateway)",
+            .russian: "Модель ЭТОЙ сессии (переключает session lock на гейтвее)"
+        ],
+
+        // MARK: Sidebar section tooltips (what the categories ARE)
+        "hermes.sessions.help": [
+            .english: "The agent's conversations across ALL its surfaces — Telegram, CLI, this app. Click one to continue it here; right-click to rename, pin, color or delete. The badge counts messages that arrived while the thread was closed.",
+            .spanish: "Las conversaciones del agente en TODAS sus superficies — Telegram, CLI, esta app. Clic para continuarla aquí; clic derecho para renombrar, fijar, colorear o borrar. La insignia cuenta mensajes llegados con el hilo cerrado.",
+            .russian: "Беседы агента на ВСЕХ его поверхностях — Telegram, CLI, это приложение. Клик — продолжить здесь; правый клик — переименовать, закрепить, цвет, удалить. Бейдж считает сообщения, пришедшие, пока тред был закрыт."
+        ],
+        "hermes.skills.help": [
+            .english: "The agent's saved skills — procedures it learned (notes, arXiv, ASCII art…). Invoke one in the chat by typing /skill-name; enable/disable them in the Hermes app.",
+            .spanish: "Las habilidades guardadas del agente — procedimientos aprendidos (notas, arXiv, ASCII art…). Invócalas en el chat con /nombre; se activan en la app de Hermes.",
+            .russian: "Сохранённые навыки агента — его выученные процедуры (заметки, arXiv, ASCII-арт…). Вызываются в чате через /имя-скилла; включаются и выключаются в приложении Hermes."
+        ],
+        "hermes.toolsets.help": [
+            .english: "Tool groups the agent can use on ITS host: web search, browser, terminal, files… Dimmed = disabled on the gateway; toggling lives in the Hermes app.",
+            .spanish: "Grupos de herramientas que el agente usa en SU host: web, navegador, terminal, archivos… Atenuado = desactivado en el gateway; se conmutan en la app de Hermes.",
+            .russian: "Группы инструментов, доступные агенту на ЕГО хосте: веб-поиск, браузер, терминал, файлы… Приглушённые — выключены на гейтвее; переключаются в приложении Hermes."
+        ],
+        "hermes.agent.help": [
+            .english: "The agent's passport: the model it currently thinks with, and the host where its commands and tools actually execute — check it before approving anything.",
+            .spanish: "El pasaporte del agente: el modelo con el que piensa ahora y el host donde se ejecutan sus comandos y herramientas — míralo antes de aprobar algo.",
+            .russian: "Паспорт агента: модель, которой он сейчас думает, и хост, где реально исполняются его команды и инструменты — сверяйтесь перед тем, как что-то одобрять."
+        ],
+
+        // MARK: Sidebar (management column)
+        "hermes.sidebar.skills": [.english: "Skills", .spanish: "Habilidades", .russian: "Скиллы"],
+        "hermes.sidebar.toolsets": [.english: "Toolsets", .spanish: "Herramientas", .russian: "Тулсеты"],
+        "hermes.sidebar.agent": [.english: "Agent", .spanish: "Agente", .russian: "Агент"],
+        "hermes.sidebar.toolsetOff": [.english: "disabled", .spanish: "desactivado", .russian: "выключен"],
+        "hermes.sidebar.more": [.english: "+%d more", .spanish: "+%d más", .russian: "ещё %d"],
+        "hermes.sidebar.execNote": [
+            .english: "Tools and commands run on this host",
+            .spanish: "Las herramientas y comandos se ejecutan en este host",
+            .russian: "Инструменты и команды выполняются на этом хосте"
+        ],
+        "hermes.sidebar.toggle": [
+            .english: "Agent panel",
+            .spanish: "Panel del agente",
+            .russian: "Панель агента"
+        ],
+
+        // MARK: Chat-side
+        "hermes.noKey": [
+            .english: "No gateway key yet — paste the API_SERVER_KEY in Settings → Hermes Agent (opening it now).",
+            .spanish: "Aún no hay clave del gateway — pega la API_SERVER_KEY en Ajustes → Agente Hermes (abriéndolo ahora).",
+            .russian: "Ключ гейтвея ещё не введён — вставьте API_SERVER_KEY в Настройках → Hermes-агент (открываю их)."
+        ],
+        "hermes.role.help": [
+            .english: "Hermes agent role — the conversation lives on the agent and continues across its other surfaces",
+            .spanish: "Rol del agente Hermes — la conversación vive en el agente y continúa en sus otras superficies",
+            .russian: "Роль Hermes-агента — беседа живёт у агента и продолжается на других его поверхностях"
+        ]
+    ]
+}

@@ -218,10 +218,31 @@ struct ArtifactCardView: View {
 enum ArtifactPreview {
     private static var window: NSWindow?
 
-    /// Preview size: always two thirds of the screen, centered.
+    /// The screen the preview belongs on: where the chat panel currently
+    /// is — the preview must appear next to the conversation it came from,
+    /// not on whatever screen is "main" (multi-monitor; e2e 2026-07-25).
+    private static var anchorScreen: NSScreen? {
+        FloatingPanelWindow.chatPanel?.screen ?? NSScreen.main
+    }
+
+    /// Preview size: always two thirds of the anchor screen.
     private static var previewSize: NSSize {
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let screen = anchorScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         return NSSize(width: screen.width * 2 / 3, height: screen.height * 2 / 3)
+    }
+
+    /// Centers the window on the anchor screen (NSWindow.center() always
+    /// uses the MAIN screen).
+    private static func place(_ window: NSWindow) {
+        guard let bounds = anchorScreen?.visibleFrame else {
+            window.center()
+            return
+        }
+        let size = window.frame.size
+        window.setFrameOrigin(NSPoint(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2
+        ))
     }
 
     static func show(kind: ArtifactKind, content: String, title: String) {
@@ -232,7 +253,7 @@ enum ArtifactPreview {
             window.contentViewController = hosting
             window.title = title
             window.setContentSize(previewSize)
-            window.center()
+            place(window)
             window.makeKeyAndOrderFront(nil)
         } else {
             let newWindow = NSWindow(contentViewController: hosting)
@@ -240,7 +261,7 @@ enum ArtifactPreview {
             newWindow.styleMask = [.titled, .closable, .resizable]
             newWindow.setContentSize(previewSize)
             newWindow.isReleasedWhenClosed = false
-            newWindow.center()
+            place(newWindow)
             newWindow.level = .floating
             window = newWindow
             newWindow.makeKeyAndOrderFront(nil)

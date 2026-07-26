@@ -251,6 +251,9 @@ enum Localization {
         "hotkeys.footer": [.english: "Click a shortcut, then press the new combination (must include ⌘, ⌃ or ⌥). Changes apply immediately, system-wide.", .spanish: "Haz clic en un atajo y pulsa la nueva combinación (debe incluir ⌘, ⌃ u ⌥). Los cambios se aplican al instante, en todo el sistema.", .russian: "Кликните по шорткату и нажмите новую комбинацию (обязательно с ⌘, ⌃ или ⌥). Изменения применяются сразу и во всей системе."],
 
         // MARK: General
+        "general.group.behavior": [.english: "Behavior", .spanish: "Comportamiento", .russian: "Поведение"],
+        "general.group.models": [.english: "Models", .spanish: "Modelos", .russian: "Модели"],
+        "general.group.addons": [.english: "Add-ons", .spanish: "Complementos", .russian: "Дополнения"],
         "general.launchAtLogin": [.english: "Launch at login", .spanish: "Abrir al iniciar sesión", .russian: "Запускать при входе в систему"],
         "general.prefillSelection": [.english: "Open panel with the selected text", .spanish: "Abrir el panel con el texto seleccionado", .russian: "Открывать панель с выделенным текстом"],
         // MARK: Permissions

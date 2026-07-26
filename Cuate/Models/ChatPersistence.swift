@@ -43,12 +43,21 @@ final class SDMessage {
     /// Web-search digest an assistant reply was grounded on (optional column —
     /// nil on rows written by older versions; lightweight migration covers it).
     var toolContext: String?
+    /// Agent conversations only (optional columns — nil everywhere else; the
+    /// lightweight migration covers them like `toolContext`): the message's
+    /// gateway-side ID (dedup during catch-up sync) and sequence number
+    /// (order during backfill), plus the persisted tool-step summary the
+    /// collapsible journal renders after a restart. See ChatMessage docs.
+    var externalID: String?
+    var seq: Int?
+    var agentSteps: String?
     var conversation: SDConversation?
     @Relationship(deleteRule: .cascade, inverse: \SDAttachment.message)
     var attachments: [SDAttachment]
 
     init(id: UUID, text: String, isUser: Bool, timestamp: Date,
-         typeRaw: String, audioURLString: String?, sortIndex: Int, toolContext: String? = nil) {
+         typeRaw: String, audioURLString: String?, sortIndex: Int, toolContext: String? = nil,
+         externalID: String? = nil, seq: Int? = nil, agentSteps: String? = nil) {
         self.id = id
         self.text = text
         self.isUser = isUser
@@ -57,6 +66,9 @@ final class SDMessage {
         self.audioURLString = audioURLString
         self.sortIndex = sortIndex
         self.toolContext = toolContext
+        self.externalID = externalID
+        self.seq = seq
+        self.agentSteps = agentSteps
         self.attachments = []
     }
 }
@@ -95,7 +107,8 @@ extension ChatMessage {
         let row = SDMessage(
             id: id, text: text, isUser: isUser, timestamp: timestamp,
             typeRaw: messageType.rawValue, audioURLString: audioURL?.absoluteString,
-            sortIndex: sortIndex, toolContext: toolContext
+            sortIndex: sortIndex, toolContext: toolContext,
+            externalID: externalID, seq: seq, agentSteps: agentSteps
         )
         row.attachments = attachments.enumerated().map { index, attachment in
             SDAttachment(
@@ -136,7 +149,8 @@ extension SDMessage {
             messageType: ChatMessage.MessageType(rawValue: typeRaw) ?? .text,
             audioURL: audioURLString.flatMap { Self.resolveAudioURL($0) },
             attachments: atts,
-            toolContext: toolContext
+            toolContext: toolContext,
+            externalID: externalID, seq: seq, agentSteps: agentSteps
         )
     }
 }
@@ -319,6 +333,12 @@ nonisolated enum ChatPersistence {
                     let audioString = message.audioURL?.absoluteString
                     if row.audioURLString != audioString { row.audioURLString = audioString }
                     if row.toolContext != message.toolContext { row.toolContext = message.toolContext }
+                    // Agent-chat metadata lands after the fact: catch-up sync
+                    // stamps externalID/seq onto our own already-persisted
+                    // sends, and the step summary attaches when a turn ends.
+                    if row.externalID != message.externalID { row.externalID = message.externalID }
+                    if row.seq != message.seq { row.seq = message.seq }
+                    if row.agentSteps != message.agentSteps { row.agentSteps = message.agentSteps }
                     reconcileAttachments(of: row, with: message, in: ctx)
                 } else {
                     let row = message.toSDMessage(sortIndex: index)
@@ -381,6 +401,9 @@ nonisolated enum ChatPersistence {
             if let row = convo.messages.first(where: { $0.id == message.id }) {
                 row.text = message.text
                 row.toolContext = message.toolContext
+                row.externalID = message.externalID
+                row.seq = message.seq
+                row.agentSteps = message.agentSteps
                 // Text-only updates were enough for streamed replies, but a
                 // delivered message may also carry attachments/audio (image
                 // results) — dropping them here would lose them silently.

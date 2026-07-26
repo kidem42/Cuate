@@ -71,6 +71,27 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(cachedModels, forKey: "cachedModels") }
     }
 
+    // MARK: - Agent roles (AgentGateway addons)
+
+    /// Active agent role ("hermes:<agentID>") or nil for conventional chat.
+    /// While set: the provider switcher hides (chatProvider itself is left
+    /// untouched, so returning to a normal preset restores it for free), and
+    /// the conversation is the role's forcibly isolated one.
+    @Published var activeAgentRoleID: String? {
+        didSet {
+            defaults.set(activeAgentRoleID, forKey: "activeAgentRoleID")
+            if activeAgentRoleID == nil { defaults.removeObject(forKey: "activeAgentRoleID") }
+        }
+    }
+
+    /// The active role resolved against the addons' current role lists —
+    /// nil when the id points at a role that no longer exists (addon off,
+    /// profile gone), which makes the chat fall back to conventional mode.
+    var activeAgentRole: AgentRole? {
+        guard let id = activeAgentRoleID else { return nil }
+        return HermesAddon.shared.roles.first { $0.id == id }
+    }
+
     // MARK: - Local models (Ollama / OpenAI-compatible endpoint)
 
     static let defaultLocalEndpointURL = "http://localhost:11434/v1"
@@ -320,6 +341,13 @@ final class AppSettings: ObservableObject {
     // MARK: - Panel placement
 
     /// Open the chat panel on the screen where the mouse cursor currently is.
+    /// Pin (panel header): the chat panel stays on screen when it loses key
+    /// status — the opt-out from auto-hide for people who park it next to
+    /// their work (same escape hatch as the World Time panel's pin).
+    @Published var panelPinned: Bool {
+        didSet { defaults.set(panelPinned, forKey: "panelPinned") }
+    }
+
     @Published var panelFollowsMouse: Bool {
         didSet { defaults.set(panelFollowsMouse, forKey: "panelFollowsMouse") }
     }
@@ -554,7 +582,11 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     }
 
     private init() {
-        chatProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
+        // An agent provider must never be the conventional chat provider —
+        // roles are selected via activeAgentRoleID, not this field.
+        let storedProvider = ProviderID(rawValue: defaults.string(forKey: "chatProvider") ?? "") ?? .openai
+        chatProvider = storedProvider.isAgent ? .openai : storedProvider
+        activeAgentRoleID = defaults.string(forKey: "activeAgentRoleID")
         selectedModels = defaults.dictionary(forKey: "selectedModels") as? [String: String] ?? [:]
         cachedModels = defaults.dictionary(forKey: "cachedModels") as? [String: [String]] ?? [:]
         localModelsEnabled = defaults.object(forKey: "localModelsEnabled") as? Bool ?? false
@@ -594,6 +626,7 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         theme = AppTheme(rawValue: defaults.string(forKey: "appTheme") ?? "") ?? .current
         holidayThemes = defaults.object(forKey: "holidayThemes") as? Bool ?? true
+        panelPinned = defaults.bool(forKey: "panelPinned")
         panelFollowsMouse = defaults.object(forKey: "panelFollowsMouse") as? Bool ?? true
         prefillFromSelection = defaults.object(forKey: "prefillFromSelection") as? Bool ?? true
         terminalRunMode = TerminalRunMode(rawValue: defaults.string(forKey: "terminalRunMode") ?? "") ?? .insert
@@ -846,24 +879,29 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     // MARK: - Local model availability & endpoint
 
     /// The key handed to a provider's request. Cloud providers must have one;
-    /// local providers get an empty string (their server ignores auth).
+    /// local providers get an empty string (their server ignores auth);
+    /// agent gateways read the addon's aux Keychain slot.
     func resolvedAPIKey(for provider: ProviderID) throws -> String {
+        if provider.isAgent { return APIKeyStore.key(aux: .hermes) ?? "" }
         if let key = APIKeyStore.key(for: provider) { return key }
         if provider.requiresAPIKey { throw ProviderError.missingAPIKey(provider) }
         return ""
     }
 
-    /// Whether the provider's class is switched on (cloud vs local master
-    /// toggle). Used by config pickers, where a key may not be entered yet.
+    /// Whether the provider's class is switched on. Three classes now:
+    /// local / cloud master toggles, and agents — gated on the owning
+    /// addon's own switch (Addons/HermesAddon).
     func isProviderClassEnabled(_ provider: ProviderID) -> Bool {
-        provider.isLocal ? localModelsEnabled : onlineModelsEnabled
+        if provider.isAgent { return HermesSettings.shared.enabled }
+        return provider.isLocal ? localModelsEnabled : onlineModelsEnabled
     }
 
     /// Whether the provider is actually ready to send: class enabled AND
-    /// reachable (local endpoint verified) / keyed (cloud). Used by the panel
-    /// provider switcher and the send guard.
+    /// reachable (local endpoint verified) / keyed (cloud) / addon available
+    /// (agent). Used by the panel provider switcher and the send guard.
     func isAvailable(_ provider: ProviderID) -> Bool {
         guard isProviderClassEnabled(provider) else { return false }
+        if provider.isAgent { return HermesAddon.shared.isAvailable }
         return provider.isLocal ? localEndpointVerified : APIKeyStore.hasKey(for: provider)
     }
 
@@ -1040,6 +1078,14 @@ enum ProviderRegistry {
                 ?? AppSettings.defaultLocalEndpointURL
             let url = URL(string: raw) ?? URL(string: AppSettings.defaultLocalEndpointURL)!
             return OpenAICompatibleProvider(providerID: .ollama, baseURL: url)
+        case .hermes:
+            // Agent gateway FALLBACK path only (quick "chat-only" mode /
+            // diagnostics): the primary channel is the sessions API via
+            // HermesAgentSession. Same UserDefaults pattern as ollama.
+            let raw = UserDefaults.standard.string(forKey: "hermes.endpointURL")
+                ?? HermesSettings.defaultEndpoint
+            let base = URL(string: raw) ?? URL(string: HermesSettings.defaultEndpoint)!
+            return OpenAICompatibleProvider(providerID: .hermes, baseURL: base.appendingPathComponent("v1"))
         }
     }
 }

@@ -11,6 +11,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case openrouter
     case kimi
     case ollama
+    case hermes // agent gateway (Addons/HermesAddon), not a конвенциональный provider
 
     var id: String { rawValue }
 
@@ -19,8 +20,15 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     /// endpoint reachability instead of a stored key.
     var isLocal: Bool { self == .ollama }
 
-    /// Cloud providers need a Keychain API key; local ones do not.
-    var requiresAPIKey: Bool { !isLocal }
+    /// Agent gateways (Hermes; OpenClaw later) — the third provider class.
+    /// Never offered in the provider switcher or the common key list: the
+    /// addon owns configuration, the role switcher owns selection, and the
+    /// registry entry exists only as the HTTP fallback path.
+    var isAgent: Bool { self == .hermes }
+
+    /// Cloud providers need a Keychain API key; local ones do not. Agent
+    /// tokens live in the addon's aux Keychain slot, not the provider slot.
+    var requiresAPIKey: Bool { !isLocal && !isAgent }
 
     var displayName: String {
         switch self {
@@ -32,6 +40,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .openrouter: return "OpenRouter"
         case .kimi: return "Kimi (Moonshot)"
         case .ollama: return "Ollama (Local)"
+        case .hermes: return "Hermes Agent"
         }
     }
 
@@ -61,6 +70,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .openrouter: return "OR"
         case .kimi: return "K"
         case .ollama: return "O"
+        case .hermes: return "H"
         }
     }
 
@@ -75,6 +85,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .openrouter: return 0x6467F2 // OpenRouter indigo
         case .kimi: return 0x16191E      // Kimi charcoal
         case .ollama: return 0x2B2B2B    // Ollama charcoal
+        case .hermes: return 0x0EA5A4    // Hermes teal (Nous palette)
         }
     }
 
@@ -90,6 +101,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .kimi: return URL(string: "https://platform.moonshot.ai/console/api-keys")!
         // Local: no key page — link to the install/download page instead.
         case .ollama: return URL(string: "https://ollama.com/download")!
+        // Agent: the key comes from the gateway's own .env, docs are the
+        // closest thing to a "key page".
+        case .hermes: return URL(string: "https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server")!
         }
     }
 
@@ -131,6 +145,10 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
             // Common local defaults, best first — matched against the models the
             // user has actually pulled (falls back to the first installed one).
             return ["gemma3", "llama3.2", "qwen2.5", "mistral"]
+        case .hermes:
+            // Agent: model selection belongs to the gateway (the addon's
+            // model lock), not to the common picker.
+            return []
         }
     }
 }
@@ -395,7 +413,7 @@ enum ModelCapabilities {
                 || m.contains("fable") || m.contains("mythos")
         case .gemini:
             return m.contains("2.5") || m.contains("gemini-3")
-        case .mistral, .deepseek, .openrouter, .kimi, .ollama:
+        case .mistral, .deepseek, .openrouter, .kimi, .ollama, .hermes:
             return false
         }
     }

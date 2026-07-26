@@ -142,7 +142,22 @@ struct MessageRow: View {
             .modifier(CopyableBubble(
                 text: { [liveModel] in liveModel?.fullText ?? message.text },
                 isHovering: $isHovering, justCopied: $justCopied))
-            
+
+            // Agent replies: collapsible tool-step journal, persisted on the
+            // message (AgentGateway; nil for ordinary provider replies).
+            if let steps = message.agentSteps, !steps.isEmpty {
+                AgentStepJournalView(summary: steps)
+                    .padding(.leading, 4)
+            }
+
+            // Agent replies: files the agent mentioned by path — reveal in
+            // Finder when the gateway host is this Mac, copy otherwise.
+            // Gated on agent-row markers so ordinary chats never scan text.
+            if message.agentSteps != nil || message.externalID != nil {
+                AgentFileChipsView(messageText: message.text)
+                    .padding(.leading, 4)
+            }
+
             Text(formatTime(message.timestamp))
                 .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
                 .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
@@ -150,7 +165,7 @@ struct MessageRow: View {
         }
         .frame(maxWidth: maxBubbleWidth, alignment: .leading)
     }
-    
+
     private var systemMessageBubble: some View {
         VStack(alignment: .center, spacing: 6) {
             HStack(spacing: 8) {

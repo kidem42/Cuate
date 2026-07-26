@@ -1,0 +1,166 @@
+import Foundation
+
+/// The agent-turn counterpart of `ChatService.streamReply`: sends ONE user
+/// turn to the active agent role and maps `AgentTurnEvent`s onto the same
+/// `ChatService.ChatEvent` stream the chat window already consumes — the
+/// window's streaming loop stays a single code path.
+///
+/// What deliberately does NOT happen here (AGENT-ADDONS-NOTES.md §5, §6.1):
+/// no history is sent (the agent holds the context), no system prompt, no
+/// presets, no local tools, no reasoning knob, no summary compression.
+@MainActor
+enum AgentChatService {
+
+    static func streamReply(
+        role: AgentRole,
+        conversation: ChatStore.ConversationID,
+        history: [ChatMessage],
+        store: ChatStore
+    ) -> AsyncThrowingStream<ChatService.ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { @MainActor in
+                // Only the NEW turn goes over the wire.
+                guard let userMessage = history.last(where: { $0.isUser }) else {
+                    continuation.finish()
+                    return
+                }
+                // Bound to the ORIGIN conversation: switching sessions mid
+                // stream must deliver the reply into its home thread, never
+                // the one on screen (stream isolation, as native chats).
+                let conversationKey = conversation.storageKey
+                let session = HermesAddon.shared.agentSession(for: role, conversationKey: conversationKey)
+                let journal = AgentStepJournal()
+                // One agent run can produce SEVERAL assistant messages
+                // (Hermes interim messages: "let me check…" → tools → the
+                // real answer). They all land in ONE bubble, joined by blank
+                // lines: `completedText` holds the finished messages,
+                // `currentText` the one still streaming.
+                var completedText = ""
+                var currentText = ""
+                var displayedText: String {
+                    if completedText.isEmpty { return currentText }
+                    return currentText.isEmpty ? completedText : completedText + "\n\n" + currentText
+                }
+                var sawFinalText = false
+                var turnUsage = TokenUsage()
+
+                do {
+                    continuation.yield(.status(AGL("agent.status.thinking")))
+                    // The background poll must not misread our own turn as
+                    // outside activity (double banner): paused while we
+                    // stream, baseline re-seeded once we finish.
+                    HermesAddon.shared.streamActive = true
+                    defer {
+                        HermesAddon.shared.streamActive = false
+                        Task { await HermesAddon.shared.reseedPollBaseline() }
+                    }
+                    let events = session.send(text: userMessage.text, attachments: userMessage.attachments)
+                    for try await event in events {
+                        switch event {
+                        case .text(let chunk):
+                            // First delta of a follow-up message: visually
+                            // separate it from the finished text before it.
+                            if currentText.isEmpty, !completedText.isEmpty {
+                                continuation.yield(.text("\n\n"))
+                            }
+                            currentText += chunk
+                            continuation.yield(.text(chunk))
+                        case .finalText(let full):
+                            sawFinalText = true
+                            // The authoritative copy of the CURRENT message —
+                            // deltas differ from it in whitespace (fixtures),
+                            // and with the agent's streaming off it is the
+                            // only text event. Replaces the bubble with all
+                            // finished messages joined.
+                            let trimmedFull = full.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let before = displayedText
+                            if !trimmedFull.isEmpty {
+                                completedText = completedText.isEmpty
+                                    ? trimmedFull
+                                    : completedText + "\n\n" + trimmedFull
+                            } else if !currentText.isEmpty {
+                                // Empty completed frame after real deltas —
+                                // keep what streamed.
+                                completedText = completedText.isEmpty
+                                    ? currentText
+                                    : completedText + "\n\n" + currentText
+                            }
+                            currentText = ""
+                            if completedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                != before.trimmingCharacters(in: .whitespacesAndNewlines) {
+                                continuation.yield(.replaceText(completedText))
+                            }
+                        case .step(let step):
+                            journal.record(step)
+                            if step.status == .running {
+                                continuation.yield(.status(String(format: AGL("agent.status.tool"), step.toolName)))
+                            } else {
+                                continuation.yield(.status(AGL("agent.status.thinking")))
+                            }
+                        case .approvalRequested(let approval):
+                            // Inline card in the chat + a time-sensitive
+                            // banner when the panel is elsewhere. Dormant on
+                            // Hermes 0.19.0 (no mid-run approval frames yet).
+                            NotificationService.shared.postApprovalRequest(
+                                approval, roleID: role.id, roleName: role.displayName,
+                                conversationKey: conversationKey
+                            )
+                            let resolvingSession = session
+                            continuation.yield(.agentApproval(approval) { decision in
+                                NotificationService.shared.revokeApproval(id: approval.id)
+                                Task {
+                                    try? await resolvingSession.resolveApproval(id: approval.id, decision: decision)
+                                }
+                            })
+                        case .usage(let usage):
+                            turnUsage = turnUsage.merged(with: usage)
+                        }
+                    }
+
+                    if let summary = journal.summary() {
+                        continuation.yield(.agentSteps(summary))
+                    }
+                    recordSpend(role: role, usage: turnUsage, sent: userMessage.text, receivedChars: displayedText.count)
+                    // Long-turn banner: suppressed automatically when the
+                    // panel is open on this very conversation (§7.1).
+                    NotificationService.shared.postTurnCompleted(
+                        roleID: role.id, roleName: role.displayName,
+                        preview: displayedText,
+                        conversationKey: conversationKey
+                    )
+                    Diagnostics.log("agent", "turn.end role=\(role.id) chars=\(displayedText.count) steps=\(journal.steps.count) final=\(sawFinalText)")
+                    continuation.finish()
+                } catch {
+                    // Best effort: tell the gateway to stop the run the user
+                    // just walked away from (new chat, deleted preset, stop).
+                    if Task.isCancelled {
+                        let abortable = session
+                        Task { await abortable.abort() }
+                    }
+                    recordSpend(role: role, usage: turnUsage, sent: userMessage.text, receivedChars: displayedText.count)
+                    Diagnostics.log("agent", "turn.error \(String(error.localizedDescription.prefix(200)))")
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Tokens land in the ledger without a cost: the gateway pays for its
+    /// own model calls, so money shown here would be a lie
+    /// (`PricingCatalog` has no entry for agents → cost stays nil).
+    private static func recordSpend(role: AgentRole, usage: TokenUsage, sent: String, receivedChars: Int) {
+        var usage = usage
+        var isEstimate = false
+        if usage.isEmpty {
+            guard receivedChars > 0 else { return }
+            usage.inputTokens = sent.count / 3
+            usage.outputTokens = receivedChars / 3
+            isEstimate = true
+        }
+        _ = SpendStore.shared.record(
+            kind: .chat, provider: ProviderID.hermes.rawValue, model: role.agentID,
+            usage: usage, costUSD: nil, isEstimate: isEstimate
+        )
+    }
+}

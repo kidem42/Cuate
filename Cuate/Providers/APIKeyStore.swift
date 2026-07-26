@@ -367,12 +367,14 @@ nonisolated enum APIKeyStore {
         case brave
         case deepgram
         case fal // ImageAddon (Addons/ImageAddon)
+        case hermes // HermesAddon gateway token (Addons/HermesAddon)
 
         var displayName: String {
             switch self {
             case .brave: return "Brave Search"
             case .deepgram: return "Deepgram"
             case .fal: return "fal.ai"
+            case .hermes: return "Hermes Agent"
             }
         }
     }

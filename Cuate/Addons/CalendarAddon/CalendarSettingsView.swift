@@ -212,7 +212,7 @@ struct CalendarEnableToggle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Toggle(CAL("cal.general.enable"), isOn: $settings.enabled)
+            Toggle(isOn: $settings.enabled) { FeatureTitle(raw: CAL("cal.general.enable")) }
                 .onChange(of: settings.enabled) { _, enabled in
                     if enabled {
                         Task { @MainActor in
