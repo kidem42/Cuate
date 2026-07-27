@@ -1,5 +1,5 @@
 #!/bin/bash
-# Canonical release build for AISpotlight Android — the only supported way to
+# Canonical release build for Cuate Android — the only supported way to
 # produce an installable APK (mirrors the mac's scripts/make-dmg.sh role).
 #
 # Usage:
@@ -47,7 +47,7 @@ VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' "$GRADLE_FILE")
 ./gradlew assembleRelease
 
 mkdir -p dist
-OUT="dist/AISpotlight-$VERSION.apk"
+OUT="dist/Cuate-$VERSION.apk"
 cp app/build/outputs/apk/release/app-release.apk "$OUT"
 
 # Signature check — catches an accidentally unsigned/foreign-key build.

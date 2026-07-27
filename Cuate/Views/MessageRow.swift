@@ -95,7 +95,30 @@ struct MessageRow: View {
                             .multilineTextAlignment(.leading)
                     }
                     if !attachSplit.paths.isEmpty {
-                        AgentAttachPillsView(paths: attachSplit.paths)
+                        // Images the courier put on the agent's host render
+                        // inline — that is what makes a photo sent from
+                        // ANOTHER device visible here (this device has no
+                        // pixels of its own for it). The sending device
+                        // already shows its local attachment, so it skips
+                        // this to avoid showing the same image twice.
+                        let imagePaths = message.attachments.isEmpty
+                            ? attachSplit.paths.filter {
+                                HermesFileCourier.imageExtensions.contains(
+                                    ($0 as NSString).pathExtension.lowercased())
+                            }
+                            : []
+                        ForEach(imagePaths, id: \.self) { path in
+                            if let url = HermesFileCourier.downloadURL(forRemotePath: path) {
+                                AgentInlineImageView(
+                                    urlString: url.absoluteString,
+                                    alt: (path as NSString).lastPathComponent
+                                )
+                            }
+                        }
+                        let filePaths = attachSplit.paths.filter { !imagePaths.contains($0) }
+                        if !filePaths.isEmpty {
+                            AgentAttachPillsView(paths: filePaths)
+                        }
                     }
                 }
             }
@@ -157,6 +180,10 @@ struct MessageRow: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            // Same gate as the chips row below: only agent replies rewrite
+            // in-text paths into AgentFileLink links.
+            .environment(\.agentFileLinksEnabled,
+                         message.agentSteps != nil || message.externalID != nil)
             .modifier(ThemedBubble(palette: palette, isUser: false))
             .shadow(color: Color.black.opacity(0.10), radius: 2.5, x: 0, y: 1)
             .modifier(CopyableBubble(
@@ -181,7 +208,7 @@ struct MessageRow: View {
             // Finder when the gateway host is this Mac, copy otherwise.
             // Gated on agent-row markers so ordinary chats never scan text.
             if message.agentSteps != nil || message.externalID != nil {
-                AgentFileChipsView(messageText: message.text)
+                AgentFileChipsView(messageText: message.text, messageDate: message.timestamp)
                     .padding(.leading, 4)
             }
 
@@ -374,6 +401,10 @@ struct CopyableBubble: ViewModifier {
                     copyPayload(payload)
                     return .handled
                 }
+                if let path = AgentFileLink.decode(url) {
+                    AgentFileLink.open(path)
+                    return .handled
+                }
                 return .systemAction
             })
             // The button stays in the hierarchy and is hidden via opacity —
@@ -438,6 +469,10 @@ struct MarkdownText: View {
     let linkColor: Color
     @Environment(\.themePalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
+    // Agent replies only: file paths in prose become clickable
+    // (AgentFileLink) — download/open through the same pipeline as the
+    // chips, instead of reading as dead text.
+    @Environment(\.agentFileLinksEnabled) private var agentFileLinks
 
     init(_ text: String, linkColor: Color = .blue) {
         self.text = text
@@ -466,7 +501,7 @@ struct MarkdownText: View {
     }
 
     private func cachedRender() -> AttributedString {
-        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(text)" as NSString
+        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(text)" as NSString
         if let boxed = Self.renderCache.object(forKey: key) { return boxed.value }
         let rendered = renderMarkdown()
         Self.renderCache.setObject(RenderBox(rendered), forKey: key)
@@ -489,6 +524,13 @@ struct MarkdownText: View {
         
         // Auto-link raw URLs
         attributed = linkifyRawURLs(in: attributed)
+
+        // Agent replies: file paths in prose act like the chips below the
+        // bubble ("Файл: /root/map.html" was dead text — e2e 2026-07-27).
+        // After the URL pass so a path inside a URL is never double-linked.
+        if agentFileLinks {
+            attributed = linkifyAgentPaths(in: attributed)
+        }
 
         // Inline monospace → Telegram-style: sits right in the text body and
         // is barely distinguishable from it (mono font, whisper of a backing)
@@ -527,6 +569,30 @@ struct MarkdownText: View {
     /// that per render (per streamed token on the growing message) burned
     /// main-thread CPU for nothing. NSDataDetector is thread-safe.
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// Turns file-path mentions into AgentFileLink links, mono-styled so
+    /// they read as "a thing on disk" (the inline-code look) rather than a
+    /// web link. Runs that already carry a link (URLs, code copy-links)
+    /// are left alone.
+    private func linkifyAgentPaths(in attributed: AttributedString) -> AttributedString {
+        var result = attributed
+        let plain = String(result.characters)
+        for path in AgentFilePaths.extract(from: plain) {
+            var searchRange = plain.startIndex..<plain.endIndex
+            while let found = plain.range(of: path, range: searchRange) {
+                searchRange = found.upperBound..<plain.endIndex
+                guard let lower = AttributedString.Index(found.lowerBound, within: result),
+                      let upper = AttributedString.Index(found.upperBound, within: result),
+                      !result[lower..<upper].runs.contains(where: { $0.link != nil }),
+                      let url = AgentFileLink.encode(path) else { continue }
+                result[lower..<upper].link = url
+                result[lower..<upper].font = .system(size: 12.5, design: .monospaced)
+                result[lower..<upper].foregroundColor = linkColor
+                result[lower..<upper].underlineStyle = .single
+            }
+        }
+        return result
+    }
 
     private func linkifyRawURLs(in attributed: AttributedString) -> AttributedString {
         var result = attributed

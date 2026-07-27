@@ -56,7 +56,27 @@ object ChatService {
         data class BudgetWarning(val text: String) : ChatEvent()
     }
 
-    private const val MAX_TOOL_ITERATIONS = 4
+    // Tool budget lives in Settings (1–12, AppSettings.maxToolIterations) —
+    // the desktop 3.20 port replaced the old MAX_TOOL_ITERATIONS constant.
+
+    /**
+     * How many extra working rounds one reply may request with a trailing
+     * `<continue/>` marker (each round gets a fresh tool budget). Bounds the
+     * auto-continuation so a marker-happy model can't loop forever.
+     */
+    const val MAX_AUTO_CONTINUES = 3
+
+    /**
+     * Detects a trailing `<continue/>` continuation marker and returns the
+     * text without it. The marker is a contract taught in
+     * [Presets.mandatoryPromptRules] (the desktop 3.20 mechanic).
+     */
+    fun stripContinueMarker(text: String): Pair<String, Boolean> {
+        val tail = text.trimEnd()
+        val marker = listOf("<continue/>", "<continue />").firstOrNull { tail.endsWith(it) }
+            ?: return text to false
+        return tail.removeSuffix(marker).trimEnd() to true
+    }
 
     /**
      * With the "recent images as pixels" option on, user photos within this
@@ -148,6 +168,7 @@ object ChatService {
             "chat", "turn.start provider=${providerID.id} model=$model history=${history.size} tools=${options.tools.size}"
         )
 
+        val maxToolIterations = settings.maxToolIterations.value
         var messages = initialMessages
         var iteration = 0
         // Search results gathered this turn — handed to the UI at the end so
@@ -175,7 +196,34 @@ object ChatService {
                 }
                 receivedChars += turnText.length
 
-                if (toolCalls.isEmpty() || iteration > MAX_TOOL_ITERATIONS) break
+                if (toolCalls.isEmpty()) break
+
+                if (iteration > maxToolIterations) {
+                    // Tool budget exhausted mid-hunt (the desktop 3.20 fix).
+                    // Breaking here used to end the turn SILENTLY — a
+                    // data-hungry request could burn every iteration on
+                    // searches and the user got "(empty reply)". Instead:
+                    // answer the pending calls with a budget notice, take the
+                    // tools away, and run ONE final turn so the model must
+                    // write its answer from what it already gathered.
+                    com.aispotlight.android.core.Diagnostics.log(
+                        "chat", "tool budget exhausted — forcing final answer"
+                    )
+                    messages = messages + LLMMessage(
+                        role = LLMMessage.Role.ASSISTANT, text = turnText, toolCalls = toolCalls
+                    )
+                    for (call in toolCalls) {
+                        messages = messages + LLMMessage(
+                            role = LLMMessage.Role.TOOL,
+                            text = "Tool budget for this turn is exhausted. Do not request more tools — write the final answer now from the information already gathered.",
+                            toolCallID = call.id,
+                            toolName = call.name,
+                        )
+                    }
+                    options = options.copy(tools = emptyList())
+                    emit(ChatEvent.Status("Thinking…"))
+                    continue
+                }
 
             // Record the assistant turn with its calls, execute the tools,
             // and loop for the follow-up turn.

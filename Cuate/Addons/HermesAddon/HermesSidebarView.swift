@@ -96,6 +96,59 @@ struct HermesSidebarView: View {
     }
 
     private var header: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            headerRow
+            contextGauge
+        }
+    }
+
+    /// Context fill of the OPEN session — a hairline bar with "25K/262K"
+    /// under the role's name. Numbers come from `run.completed` (the real
+    /// prompt size, not an estimate); amber past 70%, red past 85%, where
+    /// the gateway starts compacting on its own.
+    @ViewBuilder
+    private var contextGauge: some View {
+        if let sessionID = HermesSettings.shared.activeSession(roleID: role.id),
+           !sessionID.isEmpty,
+           let used = HermesSettings.shared.contextTokens(forSession: sessionID),
+           HermesSettings.shared.contextLimitTokens > 0 {
+            let limit = HermesSettings.shared.contextLimitTokens
+            let fraction = min(1, Double(used) / Double(limit))
+            let tint: Color = fraction > 0.85 ? .red
+                : (fraction > 0.7 ? .orange : palette.secondaryText)
+            Button {
+                // The gateway's own /compact (alias of /compress) — it folds
+                // the middle of the conversation into a summary in place.
+                NotificationCenter.default.post(name: .hermesCompactContext, object: nil)
+            } label: {
+                HStack(spacing: 6) {
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(palette.secondaryText.opacity(0.18))
+                            .frame(height: 4)
+                        GeometryReader { geo in
+                            Capsule().fill(tint.opacity(0.85))
+                                .frame(width: max(2, geo.size.width * fraction), height: 4)
+                        }
+                        .frame(height: 4)
+                    }
+                    Text("\(HermesSidebarView.tokensLabel(used))/\(HermesSidebarView.tokensLabel(limit))")
+                        .font(.system(size: 10))
+                        .foregroundColor(tint)
+                        .fixedSize()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help(HL("hermes.composer.context.help"))
+        }
+    }
+
+    /// 262144 → "262K".
+    static func tokensLabel(_ tokens: Int) -> String {
+        tokens >= 1000 ? "\(tokens / 1000)K" : "\(tokens)"
+    }
+
+    private var headerRow: some View {
         HStack(spacing: 6) {
             ProviderGlyph(name: role.addonID, fallbackLetter: String(role.icon.prefix(1)), size: 14)
             Text(role.displayName)
@@ -307,6 +360,9 @@ struct HermesSidebarView: View {
     private func startNewSession() {
         Task {
             guard let info = try? await addon.transport().createSession(title: "Cuate — \(role.displayName)") else { return }
+            // Placeholder name: the first message in this thread renames it
+            // (a button has no text to name the session after).
+            HermesSettings.shared.markAwaitingTitle(info.id)
             if let pair = await addon.resolveLockPair() {
                 try? await addon.transport().lockModel(sessionID: info.id, provider: pair.provider, model: pair.model)
             }
@@ -330,7 +386,18 @@ struct HermesSidebarView: View {
 
     private func deleteSession(_ session: HermesSessionInfo) {
         Task {
-            try? await addon.transport().deleteSession(id: session.id)
+            // NOT try? — a silently failed DELETE left the session alive on
+            // the gateway while this list dropped it: every other surface
+            // (the phone) kept showing "deleted" sessions and the user
+            // blamed their sync (e2e 2026-07-27). On failure the row stays
+            // and the reason lands in diagnostics.
+            do {
+                try await addon.transport().deleteSession(id: session.id)
+            } catch {
+                Diagnostics.log("hermes", "session.delete.fail id=\(session.id) \(String(error.localizedDescription.prefix(120)))")
+                await loadSessions()
+                return
+            }
             settings.forgetSessionMarks(session.id)
             // Unbind every thread pointing at the deleted session (default
             // thread and the session's own conversation) so the next send

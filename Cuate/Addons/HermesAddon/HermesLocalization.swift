@@ -209,6 +209,21 @@ enum HermesAddonStrings {
         "hermes.slash.cuate": [.english: "Cuate (local)", .spanish: "Cuate (local)", .russian: "Cuate (локально)"],
         "hermes.composer.effort": [.english: "Effort", .spanish: "Esfuerzo", .russian: "Усилие"],
         "hermes.composer.effort.default": [.english: "Agent default", .spanish: "Predeterminado", .russian: "Как у агента"],
+        "hermes.vps.open": [
+            .english: "VPS setup guide",
+            .spanish: "Guía de instalación en VPS",
+            .russian: "Гайд по установке на VPS"
+        ],
+        "hermes.vps.caption": [
+            .english: "Full walkthrough: your own agent on a VPS over HTTPS, reachable from any network without a VPN — 4 steps, two paste-blocks. Self-sufficient: read it here, or copy and hand it to any capable LLM to be walked through.",
+            .spanish: "Guía completa: tu propio agente en un VPS por HTTPS, accesible desde cualquier red sin VPN — 4 pasos, dos bloques para pegar. Autosuficiente: léela aquí, o cópiala y dásela a cualquier LLM capaz para que te acompañe.",
+            .russian: "Полный проход: свой агент на VPS по HTTPS, доступен из любой сети без VPN — 4 шага, две вставки. Самодостаточный текст: читайте здесь или скопируйте и отдайте любой нейронке — она проведёт по шагам."
+        ],
+        "hermes.composer.context.help": [
+            .english: "How full this session's context is (tokens of the last turn). Click to compact it now — the gateway also compacts on its own near the limit.",
+            .spanish: "Cuán lleno está el contexto de esta sesión (tokens del último turno). Clic para compactarlo ahora — el gateway también compacta solo cerca del límite.",
+            .russian: "Насколько заполнен контекст этой сессии (токены последнего хода). Клик — сжать сейчас; у предела гейтвей сжимает и сам."
+        ],
         "hermes.composer.model.help": [
             .english: "Model for THIS session (switches the gateway's session lock)",
             .spanish: "Modelo para ESTA sesión (cambia el bloqueo de sesión del gateway)",

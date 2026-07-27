@@ -83,6 +83,14 @@ struct AgentInlineImageView: View {
            let key = APIKeyStore.key(aux: .hermes) {
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
+        // The DASHBOARD host serves the files the courier uploaded — that is
+        // how an image sent from another device renders here (the gateway
+        // keeps no pixels). Its own token, same never-leak rule.
+        if let dashHost = HermesSettings.shared.dashboardBaseURL?.host,
+           url.host == dashHost,
+           let token = APIKeyStore.key(aux: .hermesDashboard) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0

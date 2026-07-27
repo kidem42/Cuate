@@ -111,6 +111,9 @@ final class TranscriptEngineView: NSScrollView {
     private var lastReportedFits = true
     private var lastReportedWidth: CGFloat = 0
     private var lastBackfillRequest = Date.distantPast
+    /// Distinguishes viewport resizes from user scrolls in
+    /// `clipBoundsChanged` — only origin moves classify the pin.
+    private var lastViewportSize = NSSize.zero
 
     // MARK: Init
 
@@ -308,8 +311,20 @@ final class TranscriptEngineView: NSScrollView {
             return
         }
         stack.layoutSubtreeIfNeeded()
-        isPinnedToBottom = false
         let target = max(0, min(row.host.frame.minY - 24, bottomOriginY))
+        if target >= bottomOriginY - Self.repinDistance {
+            // The pinned row IS the newest content — the jump stays at the
+            // bottom, so the pin (and the hidden jump-to-latest button)
+            // keep their state.
+            isPinnedToBottom = true
+        } else {
+            isPinnedToBottom = false
+            // Programmatic move: clipBoundsChanged won't classify it — the
+            // report must be explicit, or the jump-to-latest button never
+            // appears after a pinned-message jump and the only way back
+            // down is the wheel (e2e 2026-07-27).
+            reportNearBottom(false)
+        }
         guard animated else {
             setOriginY(target)
             return
@@ -360,8 +375,15 @@ final class TranscriptEngineView: NSScrollView {
     /// next flush can re-assert the bottom, so streaming never overrides the
     /// user's hand. (The old SwiftUI transcript needed a global NSEvent
     /// monitor for this; owning the scroll view makes it one override.)
+    ///
+    /// Momentum-tail events are NOT that gesture: the inertia after a flick
+    /// down and the elastic bounce at the bottom both deliver stray positive
+    /// deltas. If those unpinned, auto-follow died silently right after the
+    /// user parked at the bottom — the document grows before the 8pt repin
+    /// window can catch, so the pin never came back.
     override func scrollWheel(with event: NSEvent) {
-        if event.scrollingDeltaY > 0, documentHeight > viewportHeight, isPinnedToBottom {
+        if event.scrollingDeltaY > 0, event.momentumPhase == [],
+           documentHeight > viewportHeight, isPinnedToBottom {
             isPinnedToBottom = false
             reportNearBottom(false)
         }
@@ -372,6 +394,18 @@ final class TranscriptEngineView: NSScrollView {
     /// else is the user, and the pin state follows their position with
     /// hysteresis.
     @objc private func clipBoundsChanged(_ note: Notification) {
+        // A bounds SIZE change is geometry, not scrolling: the composer grew
+        // (file pills, slash suggestions, recording bar), the pinned bar
+        // toggled, the window resized. Re-assert the pin instead of
+        // classifying it — a viewport shrink used to read as "the user moved
+        // 44pt away" and silently killed auto-follow.
+        let viewportSize = contentView.bounds.size
+        if viewportSize != lastViewportSize {
+            lastViewportSize = viewportSize
+            if isPinnedToBottom { scrollToBottomInstant() }
+            reportContentFits()
+            return
+        }
         guard programmaticScrollDepth == 0 else { return }
         if isPinnedToBottom {
             if distanceFromBottom > Self.unpinDistance {

@@ -267,9 +267,10 @@ extension LLMImage {
     /// Wire image for cloud providers: downscaled to fit `maxModelDimension`
     /// and re-encoded (JPEG for opaque images, PNG when alpha is present).
     /// Small-enough images, non-images, GIFs (animation would be flattened)
-    /// and anything undecodable pass through unchanged. Hermes does NOT go
-    /// through here — the addon ships original attachments over its own
-    /// transport, where the gateway owns any preprocessing.
+    /// and anything undecodable pass through unchanged. The Hermes addon
+    /// goes through here too (since 4.4): original-size screenshots blew
+    /// through reverse-proxy body limits as opaque 413s, and the gateway's
+    /// model downscales to the same ceiling server-side anyway.
     static func forModel(mimeType: String, base64: String) -> LLMImage {
         let original = LLMImage(mimeType: mimeType, base64: base64)
         guard mimeType.hasPrefix("image"), mimeType != "image/gif",

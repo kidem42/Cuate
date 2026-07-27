@@ -186,6 +186,56 @@ final class HermesSettings: ObservableObject {
         sessionModelLocks[sessionID] = "\(provider)|\(model)"
     }
 
+    // MARK: - Sessions still carrying the placeholder title
+    //
+    // A session created by a BUTTON (sidebar / settings) has no first message
+    // to name it after, so it gets "Cuate — <role>" and lands here; the first
+    // real turn renames it from its text and clears the mark. Without this
+    // every button-made session stayed identically named (e2e 2026-07-27).
+
+    @Published private(set) var sessionsAwaitingTitle: [String] {
+        didSet { defaults.set(sessionsAwaitingTitle, forKey: "hermes.sessionsAwaitingTitle") }
+    }
+
+    func markAwaitingTitle(_ sessionID: String) {
+        guard !sessionsAwaitingTitle.contains(sessionID) else { return }
+        // Bounded: this is a hint, not a ledger.
+        sessionsAwaitingTitle = Array((sessionsAwaitingTitle + [sessionID]).suffix(50))
+    }
+
+    /// True exactly once per session — the caller renames it.
+    func consumeAwaitingTitle(_ sessionID: String) -> Bool {
+        guard sessionsAwaitingTitle.contains(sessionID) else { return false }
+        sessionsAwaitingTitle.removeAll { $0 == sessionID }
+        return true
+    }
+
+    // MARK: - Context fill (composer gauge)
+    //
+    // sessionID → tokens the last run's prompt+completion occupied. Hermes
+    // reports them in `run.completed`; the next turn starts from roughly the
+    // same number, so it reads as "how full this session's context is".
+
+    @Published private(set) var sessionContextTokens: [String: Int] {
+        didSet { defaults.set(sessionContextTokens, forKey: "hermes.sessionContextTokens") }
+    }
+
+    func recordContextTokens(_ tokens: Int, forSession sessionID: String) {
+        guard tokens > 0 else { return }
+        sessionContextTokens[sessionID] = tokens
+    }
+
+    func contextTokens(forSession sessionID: String) -> Int? {
+        sessionContextTokens[sessionID]
+    }
+
+    /// Context window the gauge measures against. The gateway exposes no
+    /// per-model limit over the API (0.19.0), so this is a setting — the
+    /// default matches what the Hermes CLI shows for the portal's models.
+    @Published var contextLimitTokens: Int {
+        didSet { defaults.set(contextLimitTokens, forKey: "hermes.contextLimitTokens") }
+    }
+
     // MARK: - Pinned messages (Telegram-style, agent chats)
     //
     // conversationKey → pinned message UUIDs, in pin order. Local metadata:
@@ -335,6 +385,9 @@ final class HermesSettings: ObservableObject {
         sessionReadCounts = (defaults.dictionary(forKey: "hermes.sessionReadCounts") as? [String: Int]) ?? [:]
         pinnedMessagesByConversation = (defaults.dictionary(forKey: "hermes.pinnedMessages") as? [String: [String]]) ?? [:]
         sessionModelLocks = (defaults.dictionary(forKey: "hermes.sessionModelLocks") as? [String: String]) ?? [:]
+        sessionContextTokens = (defaults.dictionary(forKey: "hermes.sessionContextTokens") as? [String: Int]) ?? [:]
+        sessionsAwaitingTitle = defaults.stringArray(forKey: "hermes.sessionsAwaitingTitle") ?? []
+        contextLimitTokens = defaults.object(forKey: "hermes.contextLimitTokens") as? Int ?? 262_144
         pinnedSessions = defaults.stringArray(forKey: "hermes.pinnedSessions") ?? []
         sessionColors = (defaults.dictionary(forKey: "hermes.sessionColors") as? [String: String]) ?? [:]
         sidebarCollapsed = (defaults.dictionary(forKey: "hermes.sidebarCollapsed") as? [String: Bool]) ?? [:]

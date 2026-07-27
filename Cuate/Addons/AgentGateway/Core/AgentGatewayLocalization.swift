@@ -163,6 +163,16 @@ enum AgentGatewayStrings {
             .spanish: "El archivo está en el host del agente — clic para copiar la ruta: %@",
             .russian: "Файл на машине агента — клик копирует путь: %@"
         ],
+        "agent.file.fetch": [
+            .english: "Download from the agent's machine to ~/Downloads: %@",
+            .spanish: "Descargar de la máquina del agente a ~/Downloads: %@",
+            .russian: "Скачать с машины агента в ~/Downloads: %@"
+        ],
+        "agent.file.fetchFailed": [
+            .english: "Download failed — the path was copied instead",
+            .spanish: "No se pudo descargar — se copió la ruta",
+            .russian: "Скачать не удалось — путь скопирован в буфер"
+        ],
         "agent.image.failed": [
             .english: "Image from the agent could not be loaded",
             .spanish: "No se pudo cargar la imagen del agente",

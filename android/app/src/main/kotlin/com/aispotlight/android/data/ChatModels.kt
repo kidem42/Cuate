@@ -24,6 +24,12 @@ data class ChatMessage(
     val attachments: List<ChatAttachment> = emptyList(),
     /** Relative path of a voice recording (messageType == VOICE). */
     val audioPath: String? = null,
+    /** Agent replies: compact tool-step journal (see MessageEntity.agentSteps). */
+    val agentSteps: String? = null,
+    /** Pinned by the user (pin bar above the transcript). */
+    val pinned: Boolean = false,
+    /** When it was pinned — the bar cycles in pin order. */
+    val pinnedAt: Long = 0,
 ) {
     enum class Type(val raw: String) {
         TEXT("text"), VOICE("voice"), SYSTEM("system");
@@ -43,7 +49,13 @@ data class Conversation(
     val updatedAt: Long = System.currentTimeMillis(),
     val summary: String? = null,
     val summaryCoversCount: Int = 0,
-)
+    /** Non-null = mirrors a Hermes Agent gateway session with that id. */
+    val hermesSessionId: String? = null,
+    /** Gateway-transcript watermark (see ConversationEntity.hermesSyncedSeq). */
+    val hermesSyncedSeq: Int = 0,
+) {
+    val isHermes: Boolean get() = hermesSessionId != null
+}
 
 fun MessageEntity.toDomain(attachments: List<ChatAttachment> = emptyList()) = ChatMessage(
     id = id,
@@ -55,6 +67,9 @@ fun MessageEntity.toDomain(attachments: List<ChatAttachment> = emptyList()) = Ch
     isError = isError,
     attachments = attachments,
     audioPath = audioPath,
+    agentSteps = agentSteps,
+    pinned = pinned,
+    pinnedAt = pinnedAt,
 )
 
 fun AttachmentEntity.toDomain() = ChatAttachment(
@@ -84,6 +99,9 @@ fun ChatMessage.toEntity(conversationId: String) = MessageEntity(
     audioPath = audioPath,
     toolContext = toolContext,
     isError = isError,
+    agentSteps = agentSteps,
+    pinned = pinned,
+    pinnedAt = pinnedAt,
 )
 
 fun ConversationEntity.toDomain() = Conversation(
@@ -94,6 +112,8 @@ fun ConversationEntity.toDomain() = Conversation(
     updatedAt = updatedAt,
     summary = summary,
     summaryCoversCount = summaryCoversCount,
+    hermesSessionId = hermesSessionId,
+    hermesSyncedSeq = hermesSyncedSeq,
 )
 
 fun Conversation.toEntity() = ConversationEntity(
@@ -104,4 +124,6 @@ fun Conversation.toEntity() = ConversationEntity(
     updatedAt = updatedAt,
     summary = summary,
     summaryCoversCount = summaryCoversCount,
+    hermesSessionId = hermesSessionId,
+    hermesSyncedSeq = hermesSyncedSeq,
 )

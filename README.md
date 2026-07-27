@@ -69,6 +69,77 @@ On first run the onboarding walks you through the essentials:
 - **Permissions** — macOS will ask for Microphone (voice input), Screen Recording (screenshots) and Accessibility (dictation typing, inserting commands into Terminal) when the corresponding feature is first used; the "Run immediately" mode for terminal commands additionally asks for Automation (controlling Terminal) once
 - Optional: a [Brave Search API](https://brave.com/search/api/) key for web search
 
+## Hermes Agent on a VPS (battle-tested recipe)
+
+A self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) on a
+VPS makes the same agent reachable from the desktop and the Android app from any
+network — no VPN. This recipe was debugged end-to-end on a real server (Ubuntu
+24.04 with a dockerized `jwilder/nginx-proxy` + letsencrypt-companion already
+serving other apps); every trap below cost real time. It is written to be
+self-sufficient: **paste it into any capable LLM and it will walk you through**.
+
+```bash
+# 1) Install + configure (interactive wizard: Quick Setup / Nous Portal;
+#    terminal backend: Docker; egress firewall: N — see traps)
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+source ~/.bashrc && hermes
+
+# 2) API server (chat) — loopback-invisible from the internet, proxied later
+cat >> ~/.hermes/.env <<EOF
+API_SERVER_ENABLED=true
+API_SERVER_PORT=8642
+API_SERVER_HOST=0.0.0.0
+API_SERVER_KEY=$(openssl rand -hex 24)
+EOF
+hermes gateway install          # systemd service, survives reboots
+ufw allow from 172.16.0.0/12 to any port 8642 proto tcp   # docker nets only
+
+# 3) Dashboard (file uploads) — systemd unit by hand (no `install` subcommand);
+#    ONE token everywhere: nginx gate + dashboard + the apps
+DASHTOKEN=$(openssl rand -hex 24)
+echo "HERMES_DASHBOARD_SESSION_TOKEN=$DASHTOKEN" >> ~/.hermes/.env
+# unit: ExecStart=$(which hermes) dashboard --no-open  → enable --now
+# socat relay 0.0.0.0:9120 → 127.0.0.1:9119 (ufw: docker nets only)
+
+# 4) Expose through the existing proxy: per host `agent.` and `dash.` —
+#    an alpine/socat bridge container with VIRTUAL_HOST/LETSENCRYPT_HOST,
+#    plus a vhost.d/<host>_location file (see traps)
+
+# 5) Sandbox must see uploads (config.yaml):
+#    terminal:
+#      docker_volumes:
+#        - "/root/cuate-uploads:/root/cuate-uploads"
+```
+
+**The traps** (each one produced a live failure):
+
+- `HERMES_DASHBOARD_SESSION_TOKEN` is the ONLY way external Bearer clients can
+  call the dashboard files API — without it a random token is generated per
+  restart and every upload gets `401` even on loopback (`web_server.py`,
+  `auth_middleware` guards all `/api/*`).
+- The **egress firewall** wizard option breaks the sandbox terminal entirely
+  when the agent authenticates via Nous Portal OAuth (no provider keys in env →
+  nothing to mint proxy tokens from). Answer `N`, or fix later with
+  `proxy.enabled: false` in `~/.hermes/config.yaml` + gateway restart.
+- The dashboard rejects foreign `Host` headers (DNS-rebinding guard, `400`) —
+  the proxy must send `proxy_set_header Host "127.0.0.1:9119";`.
+- Auth-gate `if (...) return 401;` goes into `vhost.d/<host>_location`, NOT the
+  server-level file — otherwise it also blocks the ACME challenge and the
+  certificate is never issued.
+- SSE needs `proxy_buffering off;` and `proxy_read_timeout 3600s;` on the
+  `agent.` host; `client_max_body_size 64m;` is needed on **BOTH** hosts —
+  `dash.` for file uploads AND `agent.` for inline (pasted) images, which
+  travel base64 in the chat request body and blow through nginx's default
+  1 MB limit (surfaces as an opaque `AgentDiagnostic` turn error).
+- With the Docker terminal backend the agent CANNOT see host files — mount
+  `~/cuate-uploads` into the sandbox via `terminal.docker_volumes` (same path
+  on both sides so courier notes stay valid).
+- Check the server's IPv4 with `curl -4 ifconfig.me` — plain `ifconfig.me` may
+  return IPv6 and DNS A-records will point at the wrong thing.
+
+Then in the apps (Settings → Hermes Agent): gateway `https://agent.<domain>` +
+`API_SERVER_KEY`; dashboard `https://dash.<domain>` + `DASHTOKEN`.
+
 ## Building from source
 
 Requirements: Xcode 26+ (for the macOS 26 SDK); the app itself runs on macOS 14+.

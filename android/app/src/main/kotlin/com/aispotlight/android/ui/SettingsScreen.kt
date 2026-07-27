@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -95,7 +96,7 @@ private sealed class KeyState {
     data class Failed(val reason: String) : KeyState()
 }
 
-private enum class SettingsTab { CHAT, KEYS, VOICE, IMAGES, APPEARANCE, PROMPTS, COSTS }
+private enum class SettingsTab { CHAT, KEYS, VOICE, IMAGES, HERMES, APPEARANCE, PROMPTS, COSTS }
 
 private val SettingsTab.icon: ImageVector
     get() = when (this) {
@@ -106,6 +107,7 @@ private val SettingsTab.icon: ImageVector
         SettingsTab.APPEARANCE -> Icons.Outlined.Palette
         SettingsTab.PROMPTS -> Icons.Outlined.Description
         SettingsTab.COSTS -> Icons.Outlined.BarChart
+        SettingsTab.HERMES -> Icons.Outlined.SmartToy
     }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -179,6 +181,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     SettingsTab.APPEARANCE -> AppearanceTab(settings)
                     SettingsTab.PROMPTS -> PromptsTab(settings)
                     SettingsTab.COSTS -> CostsTab(settings)
+                    SettingsTab.HERMES -> HermesSection(settings)
                 }
             }
         }
@@ -195,6 +198,7 @@ private fun tabTitle(tab: SettingsTab): String = when (tab) {
     SettingsTab.APPEARANCE -> stringResource(R.string.tab_appearance)
     SettingsTab.PROMPTS -> stringResource(R.string.tab_prompts)
     SettingsTab.COSTS -> stringResource(R.string.tab_costs)
+    SettingsTab.HERMES -> stringResource(R.string.hermes_section)
 }
 
 // MARK: - Home (category list with live value summaries)
@@ -265,6 +269,34 @@ private fun SettingsHome(settings: AppSettings, onOpen: (SettingsTab) -> Unit) {
             ) { onOpen(SettingsTab.COSTS) }
         }
     }
+    // The agent addon gets its own top-level category (its section used to
+    // hide at the bottom of the Chat subpage — undiscoverable).
+    SettingsGroup {
+        item {
+            val hermesEndpoint by settings.hermesEndpoint.collectAsState()
+            SettingsNavRow(
+                SettingsTab.HERMES.icon, tabTitle(SettingsTab.HERMES),
+                hermesEndpoint.ifEmpty { stringResource(R.string.hermes_not_configured) },
+            ) { onOpen(SettingsTab.HERMES) }
+        }
+    }
+    // App version, visible right on the settings home (it used to hide at
+    // the bottom of the Chat subpage).
+    val context = LocalContext.current
+    val packageInfo = remember {
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }
+    val versionCode = remember(packageInfo) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
+    }
+    SettingsFootnote(
+        stringResource(R.string.settings_version, packageInfo.versionName ?: "?", versionCode)
+    )
 }
 
 // MARK: - Chat tab (provider, model, parameters)
@@ -391,6 +423,7 @@ private fun ChatTab(settings: AppSettings) {
     }
 
     Column {
+        val maxToolIterations by settings.maxToolIterations.collectAsState()
         SettingsGroup(stringResource(R.string.settings_web_search)) {
             item {
                 SettingsSwitchRow(
@@ -398,6 +431,35 @@ private fun ChatTab(settings: AppSettings) {
                     checked = webSearchEnabled,
                     onCheckedChange = { settings.setWebSearchEnabled(it) },
                 )
+            }
+            // Tool budget (desktop 3.20): rounds of tool calls one reply may
+            // spend before the model must write its final answer.
+            item {
+                Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            stringResource(R.string.settings_tool_budget),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "$maxToolIterations",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                    }
+                    androidx.compose.material3.Slider(
+                        value = maxToolIterations.toFloat(),
+                        onValueChange = { settings.setMaxToolIterations(it.toInt()) },
+                        valueRange = 1f..12f,
+                        steps = 10,
+                    )
+                    Text(
+                        stringResource(R.string.settings_tool_budget_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         if (!ApiKeyStore.hasAuxKey(ApiKeyStore.AuxKey.BRAVE)) {
@@ -1310,5 +1372,240 @@ private fun ModelDropdown(models: List<String>, selected: String?, onSelect: (St
                 )
             }
         }
+    }
+}
+
+// MARK: - Hermes Agent addon section
+
+/**
+ * Settings for the Hermes agent role: gateway endpoint + API_SERVER_KEY,
+ * connection check (health → capabilities → model options), model lock for
+ * new sessions, dashboard courier (file uploads) and the SSH setup commands
+ * — the Android adaptation of HermesSettingsView (no local one-click setup:
+ * from a phone every gateway is remote).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HermesSection(settings: AppSettings) {
+    val scope = rememberCoroutineScope()
+    val endpoint by settings.hermesEndpoint.collectAsState()
+    val dashboardUrl by settings.hermesDashboardUrl.collectAsState()
+    val modelLock by settings.hermesModelLock.collectAsState()
+    var endpointDraft by rememberSaveable { mutableStateOf(settings.hermesEndpoint.value) }
+    var keyDraft by rememberSaveable { mutableStateOf("") }
+    var dashboardDraft by rememberSaveable { mutableStateOf(settings.hermesDashboardUrl.value) }
+    var dashboardTokenDraft by rememberSaveable { mutableStateOf("") }
+    var status by remember { mutableStateOf<String?>(null) }
+    var statusOk by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+    var modelOptions by remember {
+        mutableStateOf<com.aispotlight.android.hermes.HermesModelOptions?>(null)
+    }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    Column {
+        SettingsGroup(stringResource(R.string.hermes_section)) {
+            // Gateway endpoint.
+            item {
+                OutlinedTextField(
+                    value = endpointDraft,
+                    onValueChange = { endpointDraft = it },
+                    label = { Text(stringResource(R.string.hermes_endpoint)) },
+                    placeholder = { Text("http://100.x.y.z:8642") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = eclipseFieldColors(),
+                )
+            }
+            // API_SERVER_KEY (Keystore-backed).
+            item {
+                OutlinedTextField(
+                    value = keyDraft,
+                    onValueChange = { keyDraft = it },
+                    label = {
+                        Text(
+                            if (ApiKeyStore.hasAuxKey(ApiKeyStore.AuxKey.HERMES))
+                                stringResource(R.string.hermes_key_saved)
+                            else stringResource(R.string.hermes_key)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    colors = eclipseFieldColors(),
+                )
+            }
+            // Check & save: persists endpoint/key, probes health +
+            // capabilities, loads the model-lock options.
+            item {
+                EclipseTextButton(
+                    if (checking) stringResource(R.string.settings_validating)
+                    else stringResource(R.string.keys_check_save),
+                    enabled = !checking && endpointDraft.isNotBlank(),
+                    onClick = {
+                        checking = true
+                        status = null
+                        settings.setHermesEndpoint(endpointDraft)
+                        if (keyDraft.isNotBlank()) {
+                            ApiKeyStore.setAuxKey(ApiKeyStore.AuxKey.HERMES, keyDraft.trim())
+                            keyDraft = ""
+                        }
+                        scope.launch {
+                            try {
+                                val transport = com.aispotlight.android.hermes.HermesChatService.transport(settings)
+                                val health = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    transport.health()
+                                }
+                                val caps = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    transport.capabilities()
+                                }
+                                modelOptions = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    try { transport.modelOptions() } catch (_: Exception) { null }
+                                }
+                                statusOk = true
+                                status = "✓ $health · ${caps.platform}"
+                            } catch (e: Exception) {
+                                statusOk = false
+                                status = e.message?.take(160) ?: "Connection failed"
+                            }
+                            checking = false
+                        }
+                    },
+                )
+            }
+            item {
+                status?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (statusOk) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            // Model lock for new sessions: agent default, or an explicit
+            // provider/model pair from /api/model/options.
+            item {
+                val options = modelOptions
+                if (options != null && options.providers.isNotEmpty()) {
+                    var lockMenuOpen by remember { mutableStateOf(false) }
+                    val currentLabel = modelLock.split("|").let {
+                        if (it.size == 2 && it[0].isNotEmpty()) "${it[0]} · ${it[1]}"
+                        else stringResource(R.string.hermes_model_agent_default)
+                    }
+                    Column {
+                        Text(
+                            stringResource(R.string.hermes_model_lock),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Box {
+                            EclipseTextButton(currentLabel, onClick = { lockMenuOpen = true })
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = lockMenuOpen,
+                                onDismissRequest = { lockMenuOpen = false },
+                            ) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.hermes_model_agent_default)) },
+                                    onClick = {
+                                        lockMenuOpen = false
+                                        settings.setHermesModelLock("")
+                                    },
+                                )
+                                for (provider in options.providers) {
+                                    for (model in provider.models) {
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = { Text("${provider.slug} · $model") },
+                                            onClick = {
+                                                lockMenuOpen = false
+                                                settings.setHermesModelLock("${provider.slug}|$model")
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        SettingsFootnote(stringResource(R.string.hermes_endpoint_hint))
+    }
+
+    // Dashboard courier: file uploads to the agent's host need the Hermes
+    // dashboard server (its own URL + session token).
+    Column {
+        SettingsGroup(stringResource(R.string.hermes_dashboard)) {
+            item {
+                OutlinedTextField(
+                    value = dashboardDraft,
+                    onValueChange = {
+                        dashboardDraft = it
+                        settings.setHermesDashboardUrl(it)
+                    },
+                    label = { Text(stringResource(R.string.hermes_dashboard_url)) },
+                    placeholder = { Text("http://100.x.y.z:8080") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = eclipseFieldColors(),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = dashboardTokenDraft,
+                    onValueChange = { dashboardTokenDraft = it },
+                    label = {
+                        Text(
+                            if (ApiKeyStore.hasAuxKey(ApiKeyStore.AuxKey.HERMES_DASHBOARD))
+                                stringResource(R.string.hermes_key_saved)
+                            else stringResource(R.string.hermes_dashboard_token)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    colors = eclipseFieldColors(),
+                )
+            }
+            item {
+                EclipseTextButton(
+                    stringResource(R.string.action_save),
+                    enabled = dashboardTokenDraft.isNotBlank(),
+                    onClick = {
+                        ApiKeyStore.setAuxKey(ApiKeyStore.AuxKey.HERMES_DASHBOARD, dashboardTokenDraft.trim())
+                        dashboardTokenDraft = ""
+                    },
+                )
+            }
+        }
+        SettingsFootnote(stringResource(R.string.hermes_dashboard_hint))
+    }
+
+    // SSH setup block for the remote host (VPS, cloud, a Mac at home) —
+    // verbatim the desktop commands; API_SERVER_HOST=0.0.0.0 is mandatory.
+    Column {
+        SettingsGroup(stringResource(R.string.hermes_setup)) {
+            item {
+                val commands = "ssh USER@HOST 'echo API_SERVER_ENABLED=true >> ~/.hermes/.env; \\\n" +
+                    "  echo API_SERVER_HOST=0.0.0.0 >> ~/.hermes/.env; \\\n" +
+                    "  echo API_SERVER_KEY=$(openssl rand -hex 24) >> ~/.hermes/.env; \\\n" +
+                    "  hermes gateway install; hermes gateway restart'\n" +
+                    "ssh USER@HOST \"grep '^API_SERVER_KEY=' ~/.hermes/.env\""
+                Column {
+                    Text(
+                        commands,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    )
+                    EclipseTextButton(
+                        stringResource(R.string.action_copy),
+                        onClick = {
+                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(commands))
+                        },
+                    )
+                }
+            }
+        }
+        SettingsFootnote(stringResource(R.string.hermes_setup_hint))
     }
 }

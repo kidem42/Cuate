@@ -22,14 +22,21 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aispotlight.android.chat.ChatViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: ChatViewModel by viewModels()
@@ -65,7 +73,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         consumeIntent(intent)
         setContent {
-            AISpotlightTheme {
+            CuateTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     AppRoot(viewModel, sharedText)
                 }
@@ -76,6 +84,19 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         consumeIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        com.aispotlight.android.NotificationService.appVisible = true
+        // Returning to the app refreshes the agent mirror — runs finished
+        // while we were away surface as unread badges.
+        viewModel.syncHermesSessions()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        com.aispotlight.android.NotificationService.appVisible = false
     }
 
     private fun consumeIntent(intent: Intent?) {
@@ -141,6 +162,51 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
         settings.switcherPresets(activePresetName)
     }
 
+    // Hermes agent role: active thread state, session rows for the pill
+    // menu, unread badges and the files dialog.
+    val isHermesActive by viewModel.isHermesActive.collectAsStateWithLifecycle()
+    val hermesUnread by viewModel.hermesUnread.collectAsStateWithLifecycle()
+    val hermesEndpoint by settings.hermesEndpoint.collectAsStateWithLifecycle()
+    val hermesConfigured = hermesEndpoint.isNotEmpty()
+    val hermesThreads = remember(conversations) { conversations.filter { it.isHermes } }
+    val chatFiles by viewModel.chatFiles.collectAsStateWithLifecycle()
+    val hermesSkillsList by viewModel.hermesSkills.collectAsStateWithLifecycle()
+    val pinnedMessages by viewModel.pinnedMessages.collectAsStateWithLifecycle()
+    val hermesModelOptions by viewModel.hermesModelOptions.collectAsStateWithLifecycle()
+    val hermesPinnedSessions by settings.hermesPinnedSessions.collectAsStateWithLifecycle()
+    val hermesSessionColors by settings.hermesSessionColors.collectAsStateWithLifecycle()
+    val hermesSessionModels by settings.hermesSessionModels.collectAsStateWithLifecycle()
+    val hermesSessionEfforts by settings.hermesSessionEfforts.collectAsStateWithLifecycle()
+
+    // The Hermes sessions sidebar (desktop 4.0 parity: create / rename /
+    // pin / color / delete / unread) lives in a drawer; the hamburger and
+    // the role row in the switcher open it.
+    val drawerState = androidx.compose.material3.rememberDrawerState(
+        androidx.compose.material3.DrawerValue.Closed
+    )
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    // Opening the sidebar re-syncs the sessions list against the gateway —
+    // sessions created/renamed/DELETED on other surfaces (desktop, CLI)
+    // land here; without this the drawer showed threads deleted elsewhere
+    // until the next role switch (e2e 2026-07-27).
+    androidx.compose.runtime.LaunchedEffect(drawerState.isOpen) {
+        if (drawerState.isOpen && hermesConfigured) viewModel.syncHermesSessions()
+    }
+
+    // Agent banners need POST_NOTIFICATIONS on 13+ — ask once, when the
+    // Hermes role first becomes active.
+    val notifPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { }
+    androidx.compose.runtime.LaunchedEffect(isHermesActive) {
+        if (isHermesActive && android.os.Build.VERSION.SDK_INT >= 33 &&
+            !com.aispotlight.android.NotificationService.canNotify(context)
+        ) {
+            notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val chatPane: @Composable (Modifier) -> Unit = { chatModifier ->
         ChatScreen(
             messages = messages,
@@ -173,9 +239,24 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
             onSelectPreset = { viewModel.setConversationPreset(it) },
             prefillText = sharedText,
             onPrefillConsumed = { sharedTextFlow.value = null },
+            conversationKey = activeId ?: "",
+            isHermes = isHermesActive,
+            hermesSkills = hermesSkillsList,
+            pinnedMessages = pinnedMessages,
+            onTogglePin = { viewModel.togglePin(it) },
+            onLocatePin = { viewModel.locatePin(it) },
+            onStepDetails = { viewModel.hermesStepDetails(it) },
             modifier = chatModifier,
         )
     }
+
+    // Session model + reasoning effort for the ⋮ menu (moved out of the
+    // composer 2026-07-27 — the chips row ate screen height for controls
+    // touched once per session).
+    val hermesModelLabel = viewModel.activeHermesSessionId
+        ?.let { hermesSessionModels[it] }?.replace("|", " · ")
+    val hermesEffort = viewModel.activeHermesSessionId
+        ?.let { hermesSessionEfforts[it] } ?: ""
 
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
@@ -187,6 +268,17 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
         uris.forEach { viewModel.attachImage(it) }
     }
 
+    // SAF document picker (agent chats): ANY files, several at once — the
+    // courier uploads them to the agent's host (desktop 4.2 mechanics).
+    val filePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        uris.forEach { uri ->
+            val mime = context.contentResolver.getType(uri) ?: ""
+            if (mime.startsWith("image/")) viewModel.attachImage(uri) else viewModel.attachFile(uri)
+        }
+    }
+
     if (showSettings) {
         BackHandler { showSettings = false }
         SettingsScreen(onBack = { showSettings = false })
@@ -194,8 +286,13 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     }
 
     // The mac model has no conversation titles — the bar shows the active
-    // preset (its emoji lives on the switcher button next to it).
-    val activeTitle = activePresetName
+    // preset (its emoji lives on the switcher button next to it). An agent
+    // thread shows ITS title (sessions are real named threads).
+    val activeTitle = if (isHermesActive) {
+        conversations.firstOrNull { it.id == activeId }?.title ?: "Hermes"
+    } else {
+        activePresetName
+    }
 
     // No app bar over the chat: the preset picker pill (replacing the old
     // title) and the ⋮ button float over the content, which scrolls beneath
@@ -216,6 +313,24 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
             // Translucent chip backing so the controls read over any content.
             val chipColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
 
+            // Hamburger opens the Hermes sessions sidebar (agent threads).
+            if (isHermesActive) {
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(chipColor)
+                        .clickable { scope.launch { drawerState.open() } },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Menu,
+                        contentDescription = androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_sessions),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+            }
+
             // Preset picker pill — emoji + name + caret, opens the preset menu.
             var presetMenuOpen by remember { mutableStateOf(false) }
             Box {
@@ -227,7 +342,10 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                         .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(switcherPresets.firstOrNull { it.name == activePresetName }?.icon ?: "💬")
+                    Text(
+                        if (isHermesActive) "🪽"
+                        else switcherPresets.firstOrNull { it.name == activePresetName }?.icon ?: "💬"
+                    )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         activeTitle,
@@ -249,7 +367,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                             leadingIcon = { Text(preset.icon) },
                             text = { Text(preset.name) },
                             trailingIcon = {
-                                if (preset.name == activePresetName) {
+                                if (preset.name == activePresetName && !isHermesActive) {
                                     Icon(
                                         Icons.Filled.Check,
                                         contentDescription = null,
@@ -263,20 +381,53 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                             },
                         )
                     }
+                    // Hermes agent role: one row in the switcher (desktop:
+                    // the role button); its SESSIONS live in the sidebar
+                    // drawer, which this row also opens.
+                    if (hermesConfigured) {
+                        androidx.compose.material3.HorizontalDivider()
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Text("🪽") },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_role)) },
+                            trailingIcon = {
+                                when {
+                                    isHermesActive -> Icon(
+                                        Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                    hermesUnread.isNotEmpty() -> Box(
+                                        Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                            },
+                            onClick = {
+                                presetMenuOpen = false
+                                viewModel.openHermes()
+                                scope.launch { drawerState.open() }
+                            },
+                        )
+                    }
                 }
             }
 
             Spacer(Modifier.weight(1f))
 
             // Overflow menu (⋮): attach, new chat, share and settings.
+            // Agent chats add nested pages for the session model and the
+            // reasoning effort (moved here from the composer chips row).
             var menuOpen by remember { mutableStateOf(false) }
+            var menuPage by remember { mutableStateOf("main") }
             Box {
                 Box(
                     Modifier
                         .size(40.dp)
                         .clip(CircleShape)
                         .background(chipColor)
-                        .clickable { menuOpen = true },
+                        .clickable { menuPage = "main"; menuOpen = true },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -288,6 +439,63 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                     expanded = menuOpen,
                     onDismissRequest = { menuOpen = false },
                 ) {
+                    when (menuPage) {
+                    "model" -> {
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_menu_model)) },
+                            onClick = { menuPage = "main" },
+                        )
+                        androidx.compose.material3.HorizontalDivider()
+                        val providers = hermesModelOptions?.providers.orEmpty()
+                        for (provider in providers) {
+                            for (model in provider.models) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("${provider.slug} · $model") },
+                                    trailingIcon = {
+                                        if (hermesModelLabel == "${provider.slug} · $model") {
+                                            Icon(Icons.Filled.Check, contentDescription = null)
+                                        }
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        viewModel.setActiveSessionModel(provider.slug, model)
+                                    },
+                                )
+                            }
+                        }
+                        if (providers.isEmpty()) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_model_agent_default)) },
+                                onClick = { menuOpen = false },
+                            )
+                        }
+                    }
+                    "effort" -> {
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_menu_effort)) },
+                            onClick = { menuPage = "main" },
+                        )
+                        androidx.compose.material3.HorizontalDivider()
+                        for (level in settings.hermesEffortLevels) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = {
+                                    Text(level.ifEmpty {
+                                        androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_effort_default)
+                                    })
+                                },
+                                trailingIcon = {
+                                    if (level == hermesEffort) Icon(Icons.Filled.Check, contentDescription = null)
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    viewModel.setActiveSessionEffort(level)
+                                },
+                            )
+                        }
+                    }
+                    else -> {
                     // Attach images (the paperclip moved out of the composer).
                     androidx.compose.material3.DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null) },
@@ -301,6 +509,76 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                             )
                         },
                     )
+                    if (isHermesActive) {
+                        // ANY files to the agent (SAF picker; images still go
+                        // through the photo picker item above).
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_attach_file)) },
+                            onClick = {
+                                menuOpen = false
+                                filePicker.launch(arrayOf("*/*"))
+                            },
+                        )
+                        // Agent threads: the gateway owns the history — the
+                        // clear action becomes new session / delete session.
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_new_session)) },
+                            onClick = {
+                                menuOpen = false
+                                viewModel.newHermesSession()
+                            },
+                        )
+                        // Every file of the chat: agent-side paths + yours.
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_files)) },
+                            onClick = {
+                                menuOpen = false
+                                viewModel.loadChatFiles()
+                            },
+                        )
+                        // Session model + reasoning effort (nested pages) —
+                        // moved out of the composer chips row.
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Outlined.Psychology, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_menu_model)) },
+                            trailingIcon = {
+                                Text(
+                                    hermesModelLabel ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 120.dp),
+                                )
+                            },
+                            onClick = { menuPage = "model" },
+                        )
+                        if (settings.hermesEffortLevels.isNotEmpty()) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Filled.Tune, contentDescription = null) },
+                                text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_menu_effort)) },
+                                trailingIcon = {
+                                    Text(
+                                        hermesEffort.ifEmpty {
+                                            androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_effort_default)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                },
+                                onClick = { menuPage = "effort" },
+                            )
+                        }
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_delete_session)) },
+                            onClick = {
+                                menuOpen = false
+                                confirmClear = true
+                            },
+                        )
+                    } else {
                     // Clear the conversation (the mac "new chat" semantics).
                     androidx.compose.material3.DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Filled.CleaningServices, contentDescription = null) },
@@ -310,6 +588,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                             confirmClear = true
                         },
                     )
+                    }
                     // Share the conversation as a markdown transcript.
                     androidx.compose.material3.DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
@@ -333,6 +612,8 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                             showSettings = true
                         },
                     )
+                    }
+                    }
                 }
             }
         }
@@ -341,27 +622,140 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
 
     // One layout on every form factor: the chat fills the screen and simply
     // gets more room on tablets/unfolded foldables. The old docked preset
-    // rail on wide screens duplicated the header's preset picker and read as
-    // a foreign element — presets are a pill menu, not a navigation pane.
-    Box(Modifier.fillMaxSize()) {
-        chatPane(Modifier.fillMaxSize())
-        floatingHeader()
+    // rail was removed (presets are a pill menu) — but the HERMES sessions
+    // sidebar is a real navigation surface (desktop 4.0), so it returns as
+    // a drawer: swipe from the left edge in an agent thread, the hamburger,
+    // or the role row in the switcher.
+    androidx.compose.material3.ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = hermesConfigured && (isHermesActive || drawerState.isOpen),
+        drawerContent = {
+            HermesSidebar(
+                threads = hermesThreads,
+                activeId = activeId,
+                unreadIds = hermesUnread,
+                pinnedSessionIds = hermesPinnedSessions,
+                sessionColors = hermesSessionColors,
+                onOpen = {
+                    scope.launch { drawerState.close() }
+                    viewModel.openHermesConversation(it)
+                },
+                onNewSession = {
+                    scope.launch { drawerState.close() }
+                    viewModel.newHermesSession()
+                },
+                onRename = { id, title -> viewModel.renameHermesConversation(id, title) },
+                onTogglePin = { settings.toggleHermesSessionPin(it) },
+                onSetColor = { id, hex -> settings.setHermesSessionColor(id, hex) },
+                onDelete = { viewModel.deleteHermesConversation(it) },
+            )
+        },
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            chatPane(Modifier.fillMaxSize())
+            floatingHeader()
+        }
     }
 
     if (confirmClear) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_clear_title)) },
-            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_clear_message)) },
+            title = {
+                Text(androidx.compose.ui.res.stringResource(
+                    if (isHermesActive) com.aispotlight.android.R.string.hermes_delete_title
+                    else com.aispotlight.android.R.string.chat_clear_title
+                ))
+            },
+            text = {
+                Text(androidx.compose.ui.res.stringResource(
+                    if (isHermesActive) com.aispotlight.android.R.string.hermes_delete_message
+                    else com.aispotlight.android.R.string.chat_clear_message
+                ))
+            },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     confirmClear = false
-                    viewModel.clearChat()
-                }) { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_new)) }
+                    if (isHermesActive) viewModel.deleteHermesConversation() else viewModel.clearChat()
+                }) {
+                    Text(androidx.compose.ui.res.stringResource(
+                        if (isHermesActive) com.aispotlight.android.R.string.action_delete
+                        else com.aispotlight.android.R.string.chat_new
+                    ))
+                }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmClear = false }) {
                     Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.action_cancel))
+                }
+            },
+        )
+    }
+
+    // Files of the agent chat: agent-side paths (tap = copy) and the
+    // attachments the user sent, in their own group (desktop 4.2 grouping).
+    chatFiles?.let { files ->
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { viewModel.dismissChatFiles() },
+            title = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_files)) },
+            text = {
+                androidx.compose.foundation.lazy.LazyColumn {
+                    if (files.agentPaths.isEmpty() && files.sentByYou.isEmpty()) {
+                        item {
+                            Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_files_empty))
+                        }
+                    }
+                    items(files.agentPaths.size) { index ->
+                        val path = files.agentPaths[index]
+                        // Desktop row anatomy: filename + the full path in
+                        // small mono. Tap = copy (the remote-host branch).
+                        androidx.compose.foundation.layout.Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(path))
+                                }
+                                .padding(vertical = 6.dp),
+                        ) {
+                            Text(
+                                path.substringAfterLast('/'),
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                path,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (files.sentByYou.isNotEmpty()) {
+                        item {
+                            Text(
+                                androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_files_sent),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                            )
+                        }
+                        items(files.sentByYou.size) { index ->
+                            Text(
+                                files.sentByYou[index],
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel.dismissChatFiles() }) {
+                    Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.action_close))
                 }
             },
         )

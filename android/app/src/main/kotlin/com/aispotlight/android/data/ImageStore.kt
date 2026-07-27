@@ -23,6 +23,54 @@ object ImageStore {
      * most 2048px on the long side, re-encodes as JPEG and persists it as a
      * file. Returns the attachment row, or null when the Uri can't be decoded.
      */
+    /**
+     * Imports an arbitrary (non-image) file verbatim for the agent courier:
+     * copied into the files dir, no decoding, real mime from the resolver.
+     * Bounded at 64 MB — matches the dashboard route's proxy body limit.
+     */
+    fun importFile(context: Context, uri: Uri): ChatAttachment? {
+        return try {
+            val resolver = context.contentResolver
+            val mime = resolver.getType(uri) ?: "application/octet-stream"
+            var name: String? = null
+            resolver.query(uri, null, null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) name = cursor.getString(index)
+            }
+            val displayName = (name ?: uri.lastPathSegment ?: "file").substringAfterLast('/')
+            val id = UUID.randomUUID().toString()
+            // Keep the REAL filename in the stored name — the remote path the
+            // agent sees is ~/cuate-uploads/<filename>.
+            val relativePath = "$DIR/$id-$displayName"
+            val target = File(context.filesDir, relativePath)
+            target.parentFile?.mkdirs()
+            var total = 0L
+            resolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > 64L * 1024 * 1024) {
+                            target.delete()
+                            return null
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
+            } ?: return null
+            ChatAttachment(
+                id = id,
+                filename = displayName,
+                mimeType = mime,
+                filePath = relativePath,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun importImage(context: Context, uri: Uri, filename: String? = null): ChatAttachment? {
         return try {
         val resolver = context.contentResolver

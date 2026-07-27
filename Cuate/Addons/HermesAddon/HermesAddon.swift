@@ -177,8 +177,11 @@ final class HermesAddon: ObservableObject {
     /// current count; sessions never seen before seed silently (their whole
     /// history is not "unread"). Everything else accrues badge counts.
     func updateReadWatermarks(sessions: [HermesSessionInfo]) {
-        let openKey = (FloatingPanelWindow.chatPanel?.isVisible == true)
-            ? ChatWindowBridge.chatStore?.conversation.storageKey : nil
+        // "Looking at it" = the panel is up OR the app is frontmost: the
+        // panel-only check left badges stuck on the conversation the user
+        // was reading in a normal window (e2e 2026-07-27).
+        let watching = FloatingPanelWindow.chatPanel?.isVisible == true || NSApp.isActive
+        let openKey = watching ? ChatWindowBridge.chatStore?.conversation.storageKey : nil
         let openSession = openKey.flatMap { settings.sessionID(forConversationKey: $0) }
         for session in sessions {
             if session.id == openSession || settings.readCount(for: session.id) == nil {

@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The Cuate mark (design/brand/cuate-menubar-18.svg): two identical halves
+     of one disc slid past each other along a -38° cut. Serves as the
+     monochrome layer for Android 13+ themed icons and as the Quick Settings
+     tile icon — both are tinted by the system via alpha, so the fill color
+     only matters as full opacity. Scaled from the 18-unit master into the
+     center ~52dp of the 108dp adaptive-icon viewport (safe-zone fit). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Four-point sparkle, echoing the macOS app's spotlight motif. -->
-    <path
-        android:fillColor="#7FB4FF"
-        android:pathData="M54,26 C56.5,40 60,43.5 74,46 C60,48.5 56.5,52 54,66 C51.5,52 48,48.5 34,46 C48,43.5 51.5,40 54,26 Z" />
-    <path
-        android:fillColor="#CFE3FF"
-        android:pathData="M70,60 C71.2,66.6 72.9,68.3 79.5,69.5 C72.9,70.7 71.2,72.4 70,79 C68.8,72.4 67.1,70.7 60.5,69.5 C67.1,68.3 68.8,66.6 70,60 Z" />
+    <group
+        android:scaleX="2.8889"
+        android:scaleY="2.8889"
+        android:translateX="28"
+        android:translateY="28">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M 16.545,4.12 A 7.35,7.35 0 0 1 4.961,13.17 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M 13.039,4.83 A 7.35,7.35 0 0 0 1.455,13.88 Z" />
+    </group>
 </vector>

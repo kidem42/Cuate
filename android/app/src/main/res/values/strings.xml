@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AISpotlight</string>
+    <string name="app_name">Cuate</string>
 
     <string name="chat_placeholder">Ask anything…</string>
     <string name="chat_load_earlier">Load earlier messages</string>
@@ -11,6 +11,7 @@
     <string name="chat_recording">Recording… tap ■ to finish</string>
     <string name="chat_stop_recording">Finish recording</string>
     <string name="chat_transcribing">Transcribing…</string>
+    <string name="chat_jump_latest">Jump to latest</string>
 
     <string name="chats_title">Chats</string>
     <string name="chat_new">New chat</string>
@@ -50,6 +51,8 @@
     <string name="settings_recent_images_hint">Re-sends photos from the last three exchanges to the model as images, so follow-up questions about a photo still see it. Slightly increases the cost of each reply while a photo is recent. Off: only the newest message\'s photos go as images; older ones travel as extracted text.</string>
     <string name="settings_web_search">Web search (Brave)</string>
     <string name="settings_web_search_enable">Allow web access (search &amp; page reading)</string>
+    <string name="settings_tool_budget">Tool calls per reply</string>
+    <string name="settings_tool_budget_hint">How many rounds of tool calls (web search, page reads) one reply may spend. When the budget runs out, the model must write its final answer from what it has gathered. Higher values help data-hungry asks (stats, tables) but cost more tokens.</string>
     <string name="settings_brave_key">Brave Search API key</string>
     <string name="settings_brave_key_saved">Brave key saved ✓</string>
     <string name="settings_stt">Voice input (speech-to-text)</string>
@@ -172,6 +175,43 @@
     <string name="image_extract_text">Extract text (OCR)</string>
     <string name="ocr_done">Text extracted and copied to the clipboard.</string>
     <string name="action_clear_chat">Clear chat</string>
+    <string name="action_pin">Pin</string>
+    <string name="action_unpin">Unpin</string>
+
+    <!-- Hermes Agent addon -->
+    <string name="hermes_role">Hermes Agent</string>
+    <string name="hermes_new_session">New session</string>
+    <string name="hermes_attach_file">Attach file…</string>
+    <string name="hermes_sessions">Sessions</string>
+    <string name="hermes_rename">Rename session</string>
+    <string name="hermes_pin_session">Pin session</string>
+    <string name="hermes_unpin_session">Unpin session</string>
+    <string name="hermes_effort_default">effort: auto</string>
+    <string name="hermes_menu_model">Session model</string>
+    <string name="hermes_menu_effort">Thinking level</string>
+    <string name="hermes_file_saved">Saved: %1$s</string>
+    <string name="hermes_file_download_failed">Download failed — path copied</string>
+    <string name="hermes_delete_session">Delete session</string>
+    <string name="hermes_delete_title">Delete session?</string>
+    <string name="hermes_delete_message">The session will be deleted on the gateway and this thread removed.</string>
+    <string name="hermes_files">Files of this chat</string>
+    <string name="hermes_files_empty">No files yet.</string>
+    <string name="hermes_files_sent">Sent by you</string>
+    <string name="hermes_steps">%1$d steps</string>
+    <string name="hermes_section">Hermes Agent</string>
+    <string name="hermes_not_configured">not connected — set the gateway address</string>
+    <string name="hermes_endpoint">Gateway address</string>
+    <string name="hermes_endpoint_hint">A self-hosted Hermes Agent joins the chat as its own role: sessions, skills, terminal and files live on its host. Set the gateway address as http://HOST:8642 — a Tailscale/WireGuard address is safer than exposing the port to the internet.</string>
+    <string name="hermes_key">API_SERVER_KEY from the gateway\'s .env</string>
+    <string name="hermes_key_saved">Key saved ✓</string>
+    <string name="hermes_model_lock">Model for new sessions</string>
+    <string name="hermes_model_agent_default">As configured in the agent</string>
+    <string name="hermes_dashboard">Hermes dashboard (file uploads)</string>
+    <string name="hermes_dashboard_url">Dashboard URL</string>
+    <string name="hermes_dashboard_token">Dashboard token</string>
+    <string name="hermes_dashboard_hint">Attached non-image files reach the agent\'s host through the Hermes dashboard files API (its own URL and token). Images always travel inline, no dashboard needed.</string>
+    <string name="hermes_setup">Remote gateway setup (SSH)</string>
+    <string name="hermes_setup_hint">Run on the agent\'s machine (VPS, cloud, a Mac at home), then paste the printed API_SERVER_KEY above. API_SERVER_HOST=0.0.0.0 is required — by default the server listens on loopback only.</string>
 
     <!-- Costs (spend analytics) -->
     <string name="tab_costs">Costs</string>

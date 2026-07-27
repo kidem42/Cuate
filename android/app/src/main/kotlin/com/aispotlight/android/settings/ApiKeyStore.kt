@@ -18,6 +18,9 @@ import javax.crypto.spec.GCMParameterSpec
  * The Android analog of the macOS Keychain bundle in `APIKeyStore.swift`.
  */
 object ApiKeyStore {
+    // Legacy alias from before the Cuate rename — MUST stay: a new alias
+    // means a new Keystore key, and every stored ciphertext becomes
+    // undecryptable (users would lose all their API keys).
     private const val KEYSTORE_ALIAS = "aispotlight-api-keys"
     private const val PREFS_NAME = "api_keys_encrypted"
 
@@ -25,7 +28,11 @@ object ApiKeyStore {
     enum class AuxKey(val id: String) {
         DEEPGRAM("deepgram"),
         BRAVE("brave"),
-        FAL("fal");
+        FAL("fal"),
+        /** Hermes gateway API_SERVER_KEY (the agent addon). */
+        HERMES("hermes"),
+        /** Hermes dashboard session token (file uploads to the agent's host). */
+        HERMES_DASHBOARD("hermesDashboard");
     }
 
     private lateinit var prefs: SharedPreferences

@@ -16,7 +16,7 @@ import androidx.compose.ui.platform.UriHandler
  * light/dark scheme.
  *
  * Provided app-wide as [androidx.compose.ui.platform.LocalUriHandler] from
- * `AISpotlightTheme`, so every `LinkAnnotation.Url` in markdown goes through
+ * `CuateTheme`, so every `LinkAnnotation.Url` in markdown goes through
  * here without per-call-site wiring. Non-web schemes (mailto:, tel:, …) and
  * devices without any browser fall back to the platform handler.
  */

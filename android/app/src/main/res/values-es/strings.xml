@@ -9,6 +9,7 @@
     <string name="chat_recording">Grabando… toca ■ para terminar</string>
     <string name="chat_stop_recording">Terminar grabación</string>
     <string name="chat_transcribing">Transcribiendo…</string>
+    <string name="chat_jump_latest">Ir al último mensaje</string>
 
     <string name="chats_title">Chats</string>
     <string name="chat_new">Nuevo chat</string>
@@ -48,6 +49,8 @@
     <string name="settings_recent_images_hint">Las fotos de los últimos tres intercambios se reenvían al modelo como imágenes, de modo que las preguntas de seguimiento sobre una foto siguen viéndola. Aumenta ligeramente el coste de cada respuesta mientras la foto es reciente. Desactivado: solo las fotos del último mensaje van como imágenes; las anteriores viajan como texto extraído.</string>
     <string name="settings_web_search">Búsqueda web (Brave)</string>
     <string name="settings_web_search_enable">Permitir acceso web (búsqueda y lectura de páginas)</string>
+    <string name="settings_tool_budget">Llamadas a herramientas por respuesta</string>
+    <string name="settings_tool_budget_hint">Cuántas rondas de herramientas (búsqueda, lectura de páginas) puede gastar una respuesta. Al agotarse, el modelo debe escribir la respuesta final con lo reunido. Valores altos ayudan con datos (estadísticas, tablas) pero cuestan más tokens.</string>
     <string name="settings_brave_key">Clave API de Brave Search</string>
     <string name="settings_brave_key_saved">Clave de Brave guardada ✓</string>
     <string name="settings_stt">Entrada de voz (reconocimiento)</string>
@@ -170,6 +173,43 @@
     <string name="image_extract_text">Extraer texto (OCR)</string>
     <string name="ocr_done">Texto extraído y copiado al portapapeles.</string>
     <string name="action_clear_chat">Limpiar chat</string>
+    <string name="action_pin">Fijar</string>
+    <string name="action_unpin">Soltar</string>
+
+    <!-- Hermes Agent addon -->
+    <string name="hermes_role">Agente Hermes</string>
+    <string name="hermes_new_session">Nueva sesión</string>
+    <string name="hermes_attach_file">Adjuntar archivo…</string>
+    <string name="hermes_sessions">Sesiones</string>
+    <string name="hermes_rename">Renombrar sesión</string>
+    <string name="hermes_pin_session">Fijar sesión</string>
+    <string name="hermes_unpin_session">Soltar sesión</string>
+    <string name="hermes_effort_default">esfuerzo: auto</string>
+    <string name="hermes_menu_model">Modelo de la sesión</string>
+    <string name="hermes_menu_effort">Nivel de razonamiento</string>
+    <string name="hermes_file_saved">Guardado: %1$s</string>
+    <string name="hermes_file_download_failed">No se pudo descargar — ruta copiada</string>
+    <string name="hermes_delete_session">Eliminar sesión</string>
+    <string name="hermes_delete_title">¿Eliminar sesión?</string>
+    <string name="hermes_delete_message">La sesión se eliminará en el gateway y este hilo desaparecerá.</string>
+    <string name="hermes_files">Archivos de este chat</string>
+    <string name="hermes_files_empty">Aún no hay archivos.</string>
+    <string name="hermes_files_sent">Enviados por ti</string>
+    <string name="hermes_steps">%1$d pasos</string>
+    <string name="hermes_section">Agente Hermes</string>
+    <string name="hermes_not_configured">sin conectar — indica la dirección del gateway</string>
+    <string name="hermes_endpoint">Dirección del gateway</string>
+    <string name="hermes_endpoint_hint">Un Agente Hermes autoalojado se une al chat como un rol propio: sesiones, habilidades, terminal y archivos viven en su host. Pon la dirección como http://HOST:8642 — una dirección de Tailscale/WireGuard es más segura que exponer el puerto a internet.</string>
+    <string name="hermes_key">API_SERVER_KEY del .env del gateway</string>
+    <string name="hermes_key_saved">Clave guardada ✓</string>
+    <string name="hermes_model_lock">Modelo para nuevas sesiones</string>
+    <string name="hermes_model_agent_default">Como esté configurado en el agente</string>
+    <string name="hermes_dashboard">Panel de Hermes (subida de archivos)</string>
+    <string name="hermes_dashboard_url">URL del panel</string>
+    <string name="hermes_dashboard_token">Token del panel</string>
+    <string name="hermes_dashboard_hint">Los archivos adjuntos (salvo imágenes) llegan al host del agente por la API de archivos del panel de Hermes (su propia URL y token). Las imágenes siempre viajan inline, sin panel.</string>
+    <string name="hermes_setup">Configurar gateway remoto (SSH)</string>
+    <string name="hermes_setup_hint">Ejecuta en la máquina del agente (VPS, nube, un Mac en casa) y pega arriba la API_SERVER_KEY impresa. API_SERVER_HOST=0.0.0.0 es obligatorio: por defecto el servidor escucha solo en loopback.</string>
 
     <!-- Costs (spend analytics) -->
     <string name="tab_costs">Costes</string>

@@ -153,6 +153,108 @@ class AppSettings private constructor(context: Context) {
         prefs.edit().putBoolean("webSearchEnabled", value).apply()
     }
 
+    // MARK: - Hermes Agent addon
+
+    /** Gateway endpoint, e.g. `http://100.x.y.z:8642` (Tailscale/LAN/VPS). */
+    private val _hermesEndpoint = MutableStateFlow(prefs.getString("hermesEndpoint", "") ?: "")
+    val hermesEndpoint: StateFlow<String> = _hermesEndpoint
+
+    fun setHermesEndpoint(value: String) {
+        _hermesEndpoint.value = value.trim()
+        prefs.edit().putString("hermesEndpoint", value.trim()).apply()
+    }
+
+    /** Hermes dashboard server URL — the file-upload courier's target. */
+    private val _hermesDashboardUrl = MutableStateFlow(prefs.getString("hermesDashboardUrl", "") ?: "")
+    val hermesDashboardUrl: StateFlow<String> = _hermesDashboardUrl
+
+    fun setHermesDashboardUrl(value: String) {
+        _hermesDashboardUrl.value = value.trim()
+        prefs.edit().putString("hermesDashboardUrl", value.trim()).apply()
+    }
+
+    /**
+     * Model-lock pair for new sessions: "provider|model", or empty = the
+     * agent's own current pair (from `/api/model/options` top level).
+     */
+    private val _hermesModelLock = MutableStateFlow(prefs.getString("hermesModelLock", "") ?: "")
+    val hermesModelLock: StateFlow<String> = _hermesModelLock
+
+    fun setHermesModelLock(value: String) {
+        _hermesModelLock.value = value
+        prefs.edit().putString("hermesModelLock", value).apply()
+    }
+
+    /** The Hermes role shows in the switcher only when an endpoint is configured. */
+    val hermesConfigured: Boolean
+        get() = _hermesEndpoint.value.isNotEmpty()
+
+    /**
+     * Hermes effort ladder (their composer's OPTIONS popover; desktop 1:1).
+     * "" = don't send — the agent's own default. Rides per request as
+     * `model_options.reasoning_effort`.
+     */
+    val hermesEffortLevels = listOf("", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+    /** Pinned sessions sort first in the sidebar (desktop hermes.pinnedSessions). */
+    private val _hermesPinnedSessions = MutableStateFlow(
+        prefs.getStringSet("hermesPinnedSessions", emptySet())!!.toSet()
+    )
+    val hermesPinnedSessions: StateFlow<Set<String>> = _hermesPinnedSessions
+
+    fun toggleHermesSessionPin(sessionId: String) {
+        val next = if (sessionId in _hermesPinnedSessions.value)
+            _hermesPinnedSessions.value - sessionId else _hermesPinnedSessions.value + sessionId
+        _hermesPinnedSessions.value = next
+        prefs.edit().putStringSet("hermesPinnedSessions", next).apply()
+    }
+
+    /** Session accent colors, sessionId → hex (desktop hermes.sessionColors). */
+    private val _hermesSessionColors = MutableStateFlow(readStringMap("hermesSessionColors"))
+    val hermesSessionColors: StateFlow<Map<String, String>> = _hermesSessionColors
+
+    fun setHermesSessionColor(sessionId: String, hex: String?) {
+        val next = if (hex == null) _hermesSessionColors.value - sessionId
+            else _hermesSessionColors.value + (sessionId to hex)
+        _hermesSessionColors.value = next
+        writeStringMap("hermesSessionColors", next)
+    }
+
+    /** Per-session reasoning effort ("" = agent default). */
+    private val _hermesSessionEfforts = MutableStateFlow(readStringMap("hermesSessionEfforts"))
+    val hermesSessionEfforts: StateFlow<Map<String, String>> = _hermesSessionEfforts
+
+    fun setHermesSessionEffort(sessionId: String, effort: String) {
+        val next = if (effort.isEmpty()) _hermesSessionEfforts.value - sessionId
+            else _hermesSessionEfforts.value + (sessionId to effort)
+        _hermesSessionEfforts.value = next
+        writeStringMap("hermesSessionEfforts", next)
+    }
+
+    /** Last model lock applied to a session, "provider|model" (display state). */
+    private val _hermesSessionModels = MutableStateFlow(readStringMap("hermesSessionModels"))
+    val hermesSessionModels: StateFlow<Map<String, String>> = _hermesSessionModels
+
+    fun setHermesSessionModel(sessionId: String, pair: String) {
+        val next = _hermesSessionModels.value + (sessionId to pair)
+        _hermesSessionModels.value = next
+        writeStringMap("hermesSessionModels", next)
+    }
+
+    /**
+     * Tool-call rounds one reply may spend (the desktop 3.20 "tool budget",
+     * same 1–12 range and default). When it runs out the model is forced to
+     * write its final answer from what it has gathered.
+     */
+    private val _maxToolIterations = MutableStateFlow(prefs.getInt("maxToolIterations", 4))
+    val maxToolIterations: StateFlow<Int> = _maxToolIterations
+
+    fun setMaxToolIterations(value: Int) {
+        val clamped = value.coerceIn(1, 12)
+        _maxToolIterations.value = clamped
+        prefs.edit().putInt("maxToolIterations", clamped).apply()
+    }
+
     /**
      * Keep photos from the last few messages in the request as pixels (not
      * just the newest one) so follow-up questions about an image still see it.

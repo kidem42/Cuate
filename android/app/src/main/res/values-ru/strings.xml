@@ -9,6 +9,7 @@
     <string name="chat_recording">Запись… нажмите ■ для завершения</string>
     <string name="chat_stop_recording">Завершить запись</string>
     <string name="chat_transcribing">Распознавание…</string>
+    <string name="chat_jump_latest">К последнему сообщению</string>
 
     <string name="chats_title">Чаты</string>
     <string name="chat_new">Новый чат</string>
@@ -48,6 +49,8 @@
     <string name="settings_recent_images_hint">Фото из последних трёх обменов повторно отправляются модели как изображения — уточняющие вопросы про фото продолжают его «видеть». Немного увеличивает стоимость ответа, пока фото свежее. Выкл: как изображение уходят только фото из последнего сообщения, старые — как извлечённый текст.</string>
     <string name="settings_web_search">Веб-поиск (Brave)</string>
     <string name="settings_web_search_enable">Разрешить доступ в интернет (поиск и чтение страниц)</string>
+    <string name="settings_tool_budget">Вызовов инструментов на ответ</string>
+    <string name="settings_tool_budget_hint">Сколько раундов инструментов (веб-поиск, чтение страниц) может потратить один ответ. Когда бюджет исчерпан, модель обязана написать финальный ответ из собранного. Больше — лучше для запросов данных (статистика, таблицы), но дороже по токенам.</string>
     <string name="settings_brave_key">API-ключ Brave Search</string>
     <string name="settings_brave_key_saved">Ключ Brave сохранён ✓</string>
     <string name="settings_stt">Голосовой ввод (распознавание речи)</string>
@@ -170,6 +173,43 @@
     <string name="image_extract_text">Извлечь текст (OCR)</string>
     <string name="ocr_done">Текст извлечён и скопирован в буфер обмена.</string>
     <string name="action_clear_chat">Очистить чат</string>
+    <string name="action_pin">Закрепить</string>
+    <string name="action_unpin">Открепить</string>
+
+    <!-- Hermes Agent addon -->
+    <string name="hermes_role">Hermes-агент</string>
+    <string name="hermes_new_session">Новая сессия</string>
+    <string name="hermes_attach_file">Прикрепить файл…</string>
+    <string name="hermes_sessions">Сессии</string>
+    <string name="hermes_rename">Переименовать сессию</string>
+    <string name="hermes_pin_session">Закрепить сессию</string>
+    <string name="hermes_unpin_session">Открепить сессию</string>
+    <string name="hermes_effort_default">усилие: авто</string>
+    <string name="hermes_menu_model">Модель сессии</string>
+    <string name="hermes_menu_effort">Уровень размышлений</string>
+    <string name="hermes_file_saved">Сохранено: %1$s</string>
+    <string name="hermes_file_download_failed">Не удалось скачать — путь скопирован</string>
+    <string name="hermes_delete_session">Удалить сессию</string>
+    <string name="hermes_delete_title">Удалить сессию?</string>
+    <string name="hermes_delete_message">Сессия будет удалена на гейтвее, а этот тред — из списка.</string>
+    <string name="hermes_files">Файлы этого чата</string>
+    <string name="hermes_files_empty">Файлов пока нет.</string>
+    <string name="hermes_files_sent">Отправленные вами</string>
+    <string name="hermes_steps">Шагов: %1$d</string>
+    <string name="hermes_section">Hermes-агент</string>
+    <string name="hermes_not_configured">не подключён — укажите адрес гейтвея</string>
+    <string name="hermes_endpoint">Адрес гейтвея</string>
+    <string name="hermes_endpoint_hint">Self-hosted Hermes-агент подключается к чату отдельной ролью: сессии, скиллы, терминал и файлы живут на его хосте. Укажите адрес гейтвея как http://ХОСТ:8642 — адрес Tailscale/WireGuard безопаснее открытого в интернет порта.</string>
+    <string name="hermes_key">API_SERVER_KEY из .env гейтвея</string>
+    <string name="hermes_key_saved">Ключ сохранён ✓</string>
+    <string name="hermes_model_lock">Модель для новых сессий</string>
+    <string name="hermes_model_agent_default">Как настроено у агента</string>
+    <string name="hermes_dashboard">Дашборд Hermes (загрузка файлов)</string>
+    <string name="hermes_dashboard_url">URL дашборда</string>
+    <string name="hermes_dashboard_token">Токен дашборда</string>
+    <string name="hermes_dashboard_hint">Прикреплённые файлы (кроме изображений) попадают на хост агента через файловый API дашборда Hermes (свой URL и токен). Изображения всегда уходят инлайн, дашборд не нужен.</string>
+    <string name="hermes_setup">Настройка удалённого гейтвея (SSH)</string>
+    <string name="hermes_setup_hint">Выполните на машине агента (VPS, облако, Mac дома), затем вставьте выведенный API_SERVER_KEY выше. API_SERVER_HOST=0.0.0.0 обязателен — по умолчанию сервер слушает только loopback.</string>
 
     <!-- Costs (spend analytics) -->
     <string name="tab_costs">Расходы</string>

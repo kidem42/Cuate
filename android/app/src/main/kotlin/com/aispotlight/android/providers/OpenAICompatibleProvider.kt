@@ -47,7 +47,7 @@ class OpenAICompatibleProvider(
             .url("$baseURL/$path")
             .header("Authorization", "Bearer $apiKey")
         if (providerID == ProviderID.OPENROUTER) {
-            builder.header("X-Title", "AISpotlight")
+            builder.header("X-Title", "Cuate")
         }
         return builder
     }
@@ -435,7 +435,7 @@ class OpenAICompatibleProvider(
     suspend fun fetchModelCatalog(apiKey: String?): List<ModelInfo> {
         val builder = Request.Builder().url("$baseURL/models")
         if (apiKey != null) builder.header("Authorization", "Bearer $apiKey")
-        if (providerID == ProviderID.OPENROUTER) builder.header("X-Title", "AISpotlight")
+        if (providerID == ProviderID.OPENROUTER) builder.header("X-Title", "Cuate")
 
         val data = HttpClient.json(builder.build())
         val items = try {

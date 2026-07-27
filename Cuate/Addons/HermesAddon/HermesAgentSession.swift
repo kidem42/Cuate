@@ -36,16 +36,38 @@ final class HermesAgentSession: AgentSession {
     /// The title comes from the FIRST message (Hermes' own auto-titler
     /// skips API-created sessions — probed live 2026-07-26 — so a static
     /// name would make every our session look identical in the list).
-    func ensureSession(firstText: String = "") async throws -> String {
-        if let existing = boundSessionID { return existing }
-        let transport = addon.transport()
-        let excerpt = firstText
+    /// Excerpt of a first message used as a session title (shared by the
+    /// create and the late-rename paths).
+    static func titleExcerpt(_ text: String) -> String? {
+        let excerpt = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\n", with: " ")
-        let title = excerpt.isEmpty
-            ? "Cuate — \(role.displayName)"
-            : String(excerpt.prefix(48)) + (excerpt.count > 48 ? "…" : "")
+        guard !excerpt.isEmpty else { return nil }
+        return String(excerpt.prefix(48)) + (excerpt.count > 48 ? "…" : "")
+    }
+
+    func ensureSession(firstText: String = "") async throws -> String {
+        if let existing = boundSessionID {
+            // A session created by a button carries the placeholder title —
+            // the first real turn names it (Telegram/CLI-made ones aren't
+            // marked, so their own titles are never overwritten).
+            if let title = Self.titleExcerpt(firstText),
+               settings.consumeAwaitingTitle(existing) {
+                Task { [addon] in
+                    try? await addon.transport().renameSession(id: existing, title: title)
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
+                    }
+                }
+            }
+            return existing
+        }
+        let transport = addon.transport()
+        let title = Self.titleExcerpt(firstText) ?? "Cuate — \(role.displayName)"
         let info = try await transport.createSession(title: title)
+        if Self.titleExcerpt(firstText) == nil {
+            settings.markAwaitingTitle(info.id)
+        }
         if let pair = await addon.resolveLockPair() {
             // Best effort: an old gateway without the lock endpoint should
             // not block chatting (the turn itself may still route fine).
@@ -69,10 +91,25 @@ final class HermesAgentSession: AgentSession {
                     let transport = addon.transport()
                     // Images ride as OpenAI-style content parts (probed live;
                     // a flat "images" field is silently ignored by Hermes).
-                    let images = attachments
-                        .filter { $0.mimeType.hasPrefix("image") }
-                        .map { (mimeType: $0.mimeType, base64: $0.contentBase64) }
+                    // Downscaled to the model ceiling like every provider path
+                    // (a raw retina PNG is 10+ MB of base64 — it blew through
+                    // reverse-proxy body limits as an opaque 413, and the
+                    // gateway's model would downscale it server-side anyway).
+                    let imageAttachments = attachments.filter { $0.mimeType.hasPrefix("image") }
+                    let images = imageAttachments
+                        .map { attachment -> (mimeType: String, base64: String) in
+                            let wire = LLMImage.forModel(
+                                mimeType: attachment.mimeType,
+                                base64: attachment.contentBase64
+                            )
+                            return (wire.mimeType, wire.base64)
+                        }
                         .filter { !$0.base64.isEmpty }
+
+                    // The courier upload that makes these images visible on
+                    // OTHER surfaces happens in the send path (ChatWindow),
+                    // so its note is part of the local message too — doing it
+                    // here left our bubble and the gateway's row different.
                     let input = HermesTransport.inputPayload(text: text, images: images)
                     // Reasoning effort from the composer control ("" = the
                     // agent's own default, nothing is sent).
@@ -122,6 +159,14 @@ final class HermesAgentSession: AgentSession {
                         case .runCompleted(let usage):
                             if !usage.isEmpty {
                                 continuation.yield(.usage(usage))
+                                // Context fill of THIS session: the prompt the
+                                // gateway just sent plus what it generated is
+                                // what the next turn's prompt starts from.
+                                // Cached reads count — they are context too.
+                                self.settings.recordContextTokens(
+                                    usage.inputTokens + usage.cacheReadTokens + usage.outputTokens,
+                                    forSession: sessionID
+                                )
                             }
                         case .done:
                             break

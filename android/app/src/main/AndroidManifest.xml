@@ -6,6 +6,8 @@
          camera app (TakePicture) and the gallery through the system Photo
          Picker — neither needs a permission of its own. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Agent-run completion banners (Hermes addon); requested at runtime on 13+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -18,7 +20,7 @@
         android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:allowBackup="false"
-        android:theme="@style/Theme.AISpotlight">
+        android:theme="@style/Theme.Cuate">
 
         <activity
             android:name=".ui.MainActivity"
@@ -44,7 +46,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>
-            <!-- "AISpotlight" entry in the system text-selection menu. -->
+            <!-- "Cuate" entry in the system text-selection menu. -->
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />

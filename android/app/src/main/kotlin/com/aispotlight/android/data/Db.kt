@@ -33,6 +33,18 @@ data class ConversationEntity(
     val summary: String?,
     /** How many leading messages of the conversation the summary covers. */
     val summaryCoversCount: Int,
+    /**
+     * Non-null = this conversation mirrors a Hermes Agent gateway session
+     * with that id; sends route through HermesChatService and history syncs
+     * from the gateway transcript.
+     */
+    @ColumnInfo(defaultValue = "NULL") val hermesSessionId: String? = null,
+    /**
+     * Watermark of the gateway transcript (max row id already reflected
+     * locally — by our own turn or an import). The mirror sync only imports
+     * rows above it, so our own turns never come back as duplicates.
+     */
+    @ColumnInfo(defaultValue = "0") val hermesSyncedSeq: Int = 0,
 )
 
 @Entity(
@@ -62,6 +74,17 @@ data class MessageEntity(
     val toolContext: String?,
     /** Whether the reply hit an error mid-stream (rendered dimmed). */
     @ColumnInfo(defaultValue = "0") val isError: Boolean = false,
+    /**
+     * Agent replies: compact tool-step journal, one line per step
+     * ("tool · status · 1.2s · preview") — the collapsible journal renders
+     * from this after a restart; full detail is fetched lazily from the
+     * gateway transcript.
+     */
+    @ColumnInfo(defaultValue = "NULL") val agentSteps: String? = null,
+    /** Pinned by the user (the Telegram-style pin bar above the transcript). */
+    @ColumnInfo(defaultValue = "0") val pinned: Boolean = false,
+    /** When it was pinned — the bar cycles in PIN order (desktop semantics). */
+    @ColumnInfo(defaultValue = "0") val pinnedAt: Long = 0,
 )
 
 @Entity(
@@ -133,6 +156,28 @@ interface ChatDao {
     @Query("UPDATE messages SET text = :text, isError = :isError WHERE id = :id")
     suspend fun setMessageText(id: String, text: String, isError: Boolean)
 
+    @Query("UPDATE messages SET pinned = :pinned, pinnedAt = :pinnedAt WHERE id = :id")
+    suspend fun setPinned(id: String, pinned: Boolean, pinnedAt: Long)
+
+    /** Pinned messages of a conversation in PIN order (the bar's cycle order). */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND pinned = 1 ORDER BY pinnedAt ASC, rowid ASC")
+    suspend fun pinnedMessages(conversationId: String): List<MessageEntity>
+
+    /** Conversation mirroring a Hermes session, if any. */
+    @Query("SELECT * FROM conversations WHERE hermesSessionId = :sessionId LIMIT 1")
+    suspend fun conversationForHermesSession(sessionId: String): ConversationEntity?
+
+    @Query("UPDATE conversations SET hermesSyncedSeq = :seq WHERE id = :id AND hermesSyncedSeq < :seq")
+    suspend fun advanceHermesSyncedSeq(id: String, seq: Int)
+
+    /** All Hermes-mirror conversations (the agent thread list). */
+    @Query("SELECT * FROM conversations WHERE hermesSessionId IS NOT NULL")
+    suspend fun hermesConversations(): List<ConversationEntity>
+
+    /** Full transcript of a conversation, oldest first (files scan / search). */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC, rowid ASC")
+    suspend fun allMessages(conversationId: String): List<MessageEntity>
+
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteMessage(id: String)
 
@@ -162,7 +207,7 @@ interface ChatDao {
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, AttachmentEntity::class, SpendRecordEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -193,12 +238,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 3→4: the Hermes agent addon columns. Hand-written for the same
+         * reason as 2→3 — chat history must survive the upgrade.
+         */
+        private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `conversations` ADD COLUMN `hermesSessionId` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `conversations` ADD COLUMN `hermesSyncedSeq` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `agentSteps` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `pinnedAt` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
+                    // Legacy filename from before the Cuate rename — MUST
+                    // stay, or existing installs open an empty database.
                     context.applicationContext, AppDatabase::class.java, "aispotlight.db"
                 )
-                    .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                     // Pre-1.0 schema churn: rebuild rather than hand-written
                     // migrations — EXCEPT hops covered by explicit migrations
                     // above, which preserve user data.

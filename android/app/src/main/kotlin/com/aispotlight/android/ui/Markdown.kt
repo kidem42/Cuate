@@ -39,6 +39,10 @@ import androidx.compose.ui.unit.sp
  * The Compose analog of `MarkdownBlocksView.swift`.
  */
 
+// @Immutable so a block is a skippable composable parameter: a re-parse
+// produces value-equal instances, and rows whose block didn't change are
+// skipped instead of rebuilding their AnnotatedStrings on every chunk.
+@androidx.compose.runtime.Immutable
 private sealed class MdBlock {
     data class Paragraph(val text: String) : MdBlock()
     data class Heading(val level: Int, val text: String) : MdBlock()
@@ -48,6 +52,51 @@ private sealed class MdBlock {
     data class ListItem(val marker: String, val text: String, val indent: Int) : MdBlock()
     data class Table(val rows: List<List<String>>) : MdBlock()
     object Divider : MdBlock()
+}
+
+/**
+ * Incremental parse for the streaming reply (the light-weight analog of the
+ * desktop StreamingReplyModel): everything before the last SAFE boundary —
+ * a blank line with no code fence left open — is parsed once and cached;
+ * only the live tail re-parses on each chunk. Long answers stop getting
+ * heavier as they grow: the tail is the current paragraph or open fence,
+ * not the whole message.
+ */
+private class StreamingParseCache {
+    private var stableEnd = 0
+    private var stableBlocks = mutableListOf<MdBlock>()
+    private var fullText = ""
+
+    fun blocksFor(text: String): List<MdBlock> {
+        // A rewrite (retry, error replacement) invalidates the cache: the new
+        // text no longer extends the stable prefix.
+        if (stableEnd > text.length || !text.regionMatches(0, fullText, 0, stableEnd)) {
+            stableEnd = 0
+            stableBlocks = mutableListOf()
+        }
+        fullText = text
+
+        // Advance the stable frontier over COMPLETE lines only (the last line
+        // is still streaming): a blank line is a boundary, unless a ``` fence
+        // is open across it — fences swallow blank lines, so the frontier
+        // waits for the fence to close.
+        var boundary = stableEnd
+        var scan = stableEnd
+        var fenceOpen = false
+        while (true) {
+            val nl = text.indexOf('\n', scan)
+            if (nl < 0) break
+            val line = text.substring(scan, nl).trim()
+            if (line.startsWith("```")) fenceOpen = !fenceOpen
+            if (line.isEmpty() && !fenceOpen) boundary = nl + 1
+            scan = nl + 1
+        }
+        if (boundary > stableEnd) {
+            stableBlocks.addAll(parseBlocks(text.substring(stableEnd, boundary)))
+            stableEnd = boundary
+        }
+        return stableBlocks + parseBlocks(text.substring(stableEnd))
+    }
 }
 
 private fun parseBlocks(markdown: String): List<MdBlock> {
@@ -155,6 +204,15 @@ private val rawUrlRegex = Regex("""(https?://|www\.)[^\s<>()\[\]{}"'`]+""")
 
 private fun trimUrlEnd(url: String): String = url.trimEnd('.', ',', ';', ':', '!', '?')
 
+/**
+ * Agent-file mentions in prose (desktop 4.4): the same root prefixes the
+ * chip extractor recognizes, matched inline so the path becomes a tap
+ * target instead of dead text.
+ */
+private val agentPathRegex = Regex(
+    """(?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)/[A-Za-z0-9._\-/~]+"""
+)
+
 /** Inline markdown → AnnotatedString: **bold**, *italic*, `code`, [links](url), raw URLs. */
 fun inlineMarkdown(
     text: String,
@@ -162,6 +220,8 @@ fun inlineMarkdown(
     codeBackground: Color,
     codeColor: Color = Color.Unspecified,
     onCodeTap: ((String) -> Unit)? = null,
+    /** Agent chats: taps on file paths route to the reverse courier. */
+    onPathTap: ((String) -> Unit)? = null,
 ): AnnotatedString =
     buildAnnotatedString {
         var i = 0
@@ -171,7 +231,7 @@ fun inlineMarkdown(
                     val end = text.indexOf("**", i + 2)
                     if (end > 0) {
                         pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                        append(inlineMarkdown(text.substring(i + 2, end), linkColor, codeBackground, codeColor, onCodeTap))
+                        append(inlineMarkdown(text.substring(i + 2, end), linkColor, codeBackground, codeColor, onCodeTap, onPathTap))
                         pop()
                         i = end + 2
                     } else { append(text[i]); i++ }
@@ -226,6 +286,27 @@ fun inlineMarkdown(
                         i = closeParen + 1
                     } else { append(text[i]); i++ }
                 }
+                onPathTap != null && (text[i] == '/' || text[i] == '~') &&
+                    (i == 0 || text[i - 1].isWhitespace() || text[i - 1] in "`'\"([") -> {
+                    val match = agentPathRegex.matchAt(text, i)
+                    if (match != null) {
+                        var visible = match.value
+                        while (visible.isNotEmpty() && visible.last() in ".,;:!?)") visible = visible.dropLast(1)
+                        val path = visible
+                        pushLink(LinkAnnotation.Clickable("agent-file",
+                            linkInteractionListener = { onPathTap(path) }))
+                        pushStyle(SpanStyle(
+                            fontFamily = FontFamily.Monospace,
+                            color = linkColor,
+                            textDecoration = TextDecoration.Underline,
+                            fontSize = 13.sp,
+                        ))
+                        append(visible)
+                        pop()
+                        pop()
+                        i += visible.length
+                    } else { append(text[i]); i++ }
+                }
                 text.startsWith("*", i) && !text.startsWith("**", i) -> {
                     val end = text.indexOf("*", i + 1)
                     if (end > 0 && end > i + 1) {
@@ -247,8 +328,14 @@ fun MarkdownText(
     baseStyle: TextStyle = MaterialTheme.typography.bodyLarge,
     /** The reply is still streaming in — an open ```mermaid fence then means "drawing". */
     isStreaming: Boolean = false,
+    /** Agent chats: taps on in-text file paths route to the reverse courier. */
+    onPathTap: ((String) -> Unit)? = null,
 ) {
-    val blocks = remember(markdown) { parseBlocks(markdown) }
+    // Streaming replies parse incrementally (stable prefix cached, live tail
+    // re-parsed); settled messages parse once per text as before.
+    val streamingCache = remember { StreamingParseCache() }
+    val blocks = if (isStreaming) streamingCache.blocksFor(markdown)
+        else remember(markdown) { parseBlocks(markdown) }
     val palette = LocalChatPalette.current
     val themed = !palette.isDynamic
     // Palette-driven roles (mac MarkdownBlocksView): the theme's ink accent
@@ -266,24 +353,33 @@ fun MarkdownText(
     // system clipboard overlay is unreliable on OEM skins — toast ourselves.
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val context = androidx.compose.ui.platform.LocalContext.current
-    val onCodeTap: (String) -> Unit = { code ->
-        clipboard.setText(AnnotatedString(code))
-        android.widget.Toast.makeText(
-            context,
-            context.getString(com.aispotlight.android.R.string.artifact_copied),
-            android.widget.Toast.LENGTH_SHORT,
-        ).show()
+    // remember-ed so the lambda reference is stable across recompositions —
+    // an unstable callback would defeat per-block skipping below.
+    val onCodeTap: (String) -> Unit = remember(clipboard, context) {
+        { code ->
+            clipboard.setText(AnnotatedString(code))
+            android.widget.Toast.makeText(
+                context,
+                context.getString(com.aispotlight.android.R.string.artifact_copied),
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
     }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (block in blocks) {
+        // key(index): stable-prefix blocks keep their position while the
+        // stream grows, so their rows recompose only if their block changed
+        // (value equality via @Immutable data classes) — per-chunk work is
+        // the live tail, not the whole message.
+        blocks.forEachIndexed { index, block ->
+            androidx.compose.runtime.key(index) {
             when (block) {
                 is MdBlock.Paragraph -> Text(
-                    inlineMarkdown(block.text, linkColor, codeBg, inlineCodeColor, onCodeTap),
+                    inlineMarkdown(block.text, linkColor, codeBg, inlineCodeColor, onCodeTap, onPathTap),
                     style = baseStyle,
                 )
                 is MdBlock.Heading -> Text(
-                    inlineMarkdown(block.text, linkColor, codeBg, inlineCodeColor, onCodeTap),
+                    inlineMarkdown(block.text, linkColor, codeBg, inlineCodeColor, onCodeTap, onPathTap),
                     style = when (block.level) {
                         1 -> MaterialTheme.typography.headlineSmall
                         2 -> MaterialTheme.typography.titleLarge
@@ -310,7 +406,7 @@ fun MarkdownText(
                             .padding(vertical = 2.dp)
                     )
                     Text(
-                        inlineMarkdown(block.lines.joinToString("\n"), linkColor, codeBg, inlineCodeColor, onCodeTap),
+                        inlineMarkdown(block.lines.joinToString("\n"), linkColor, codeBg, inlineCodeColor, onCodeTap, onPathTap),
                         style = baseStyle.copy(fontStyle = FontStyle.Italic),
                         color = secondary,
                         modifier = Modifier.padding(start = 10.dp),
@@ -324,12 +420,13 @@ fun MarkdownText(
                         else -> palette.bulletGlyph.takeIf { themed } ?: "•"
                     }
                     Text(bullet, style = baseStyle, color = bulletColor, modifier = Modifier.padding(end = 8.dp))
-                    Text(inlineMarkdown(block.text, linkColor, codeBg, inlineCodeColor, onCodeTap), style = baseStyle)
+                    Text(inlineMarkdown(block.text, linkColor, codeBg, inlineCodeColor, onCodeTap, onPathTap), style = baseStyle)
                 }
                 is MdBlock.Table -> MarkdownTable(block.rows, linkColor, codeBg, inlineCodeColor, baseStyle, onCodeTap)
                 MdBlock.Divider -> HorizontalDivider(
                     color = if (themed) palette.ink.copy(alpha = 0.18f) else androidx.compose.material3.DividerDefaults.color,
                 )
+            }
             }
         }
     }

@@ -955,6 +955,13 @@ struct ChatWindow: View {
         }
         // ▶ menu "run at the agent": the command goes over as a normal turn
         // and passes the gateway's own policy — never auto-run (§7.3).
+        // Context gauge clicked in the sidebar: the gateway's own /compact
+        // runs as an ordinary turn (there is no compaction endpoint), so it
+        // shows up in the transcript and its result is visible.
+        .onReceive(NotificationCenter.default.publisher(for: .hermesCompactContext)) { _ in
+            guard settings.activeAgentRole != nil, !chatStore.isLoading else { return }
+            performSend(text: "/compact", attachments: [])
+        }
         .onReceive(NotificationCenter.default.publisher(for: .agentRunCommandRemotely)) { note in
             guard let command = note.object as? String,
                   settings.activeAgentRole != nil, !chatStore.isLoading else { return }
@@ -1862,17 +1869,47 @@ struct ChatWindow: View {
         // local gateway keeps them as-is, a REMOTE one gets the files
         // uploaded through the dashboard API and the note lists the remote
         // paths (Hermes' API server itself takes no file inputs).
-        if settings.activeAgentRole != nil, !pendingAgentFilePaths.isEmpty {
+        // Images go the same way (since 4.4): the gateway keeps no pixels, so
+        // a photo sent here reaches the OTHER surfaces as a bare
+        // "[screenshot]" unless a real file lands on the agent's host. The
+        // note must be part of the LOCAL message too — appending it deeper in
+        // the send made our bubble and the gateway's row differ, and the
+        // mirror inserted the gateway's copy as a duplicate (e2e 2026-07-27).
+        let hasAgentImages = settings.activeAgentRole != nil
+            && HermesSettings.shared.isRemoteGateway
+            && HermesSettings.shared.dashboardBaseURL != nil
+            && pendingAttachments.contains { $0.mimeType.hasPrefix("image") }
+        if settings.activeAgentRole != nil, !pendingAgentFilePaths.isEmpty || hasAgentImages {
             let paths = pendingAgentFilePaths
             pendingAgentFilePaths = []
             let baseText = text
             let attachments = pendingAttachments
             Task { @MainActor in
-                let delivery = await HermesFileCourier.deliver(paths: paths)
-                if let warning = delivery.warning {
-                    chatStore.addMessage(text: warning, isUser: false, messageType: .system)
+                var noteBlocks: [String] = []
+                if !paths.isEmpty {
+                    let delivery = await HermesFileCourier.deliver(paths: paths)
+                    noteBlocks.append(delivery.note)
+                    if let warning = delivery.warning {
+                        chatStore.addMessage(text: warning, isUser: false, messageType: .system)
+                    }
                 }
-                let full = baseText.isEmpty ? delivery.note : baseText + "\n\n" + delivery.note
+                // Uploads run off the pixels we already hold; a failure is
+                // silent by design — the image still reaches the model inline.
+                var imagePaths: [String] = []
+                for attachment in attachments where attachment.mimeType.hasPrefix("image") {
+                    guard let data = Data(base64Encoded: attachment.contentBase64) else { continue }
+                    if let remote = await HermesFileCourier.uploadBytes(
+                        data, filename: attachment.filename
+                    ) {
+                        imagePaths.append(remote)
+                    }
+                }
+                if !imagePaths.isEmpty {
+                    noteBlocks.append(HermesFileCourier.note(for: imagePaths))
+                }
+                let full = ([baseText] + noteBlocks)
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n\n")
                 performSend(text: full, attachments: attachments)
             }
             return

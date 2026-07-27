@@ -24,6 +24,12 @@ enum HermesMirrorSync {
         // here is noise, not "offline" (the apiKeysDidChange probe re-syncs
         // moments later).
         guard APIKeyStore.isWarm else { return true }
+        // A turn in flight owns this conversation: its reply lives in the
+        // LIVE bubble, not in the store yet, so the gateway's row for it has
+        // nothing to claim and would be inserted as a second copy (e2e
+        // 2026-07-27 — duplicates appeared mid-run, while tools were still
+        // running). The post-turn sync picks everything up moments later.
+        guard !store.isLoading else { return true }
         let conversationID = store.conversation
         guard conversationID.isAgent,
               let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationID.storageKey) else {
@@ -66,12 +72,36 @@ enum HermesMirrorSync {
         // step summary attached to the NEXT content-bearing assistant row —
         // without this, a mirror rebuild (app restart) lost the whole tool
         // trail of a turn (e2e 2026-07-25).
-        let gwRows = gateway.filter {
+        let contentRows = gateway.filter {
             ($0.role == "user" || $0.role == "assistant")
                 && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        guard !gwRows.isEmpty else { return (local, false) }
-        let stepsByRowID = stepSummaries(gateway: gateway)
+        guard !contentRows.isEmpty else { return (local, false) }
+        var stepsByRowID = stepSummaries(gateway: gateway)
+
+        // Collapse consecutive assistant rows into ONE row joined by blank
+        // lines — the live UI glues a run's interim assistant messages into
+        // a single bubble the same way, and the mirror must compare against
+        // that shape: without this every interim segment came back as its
+        // own duplicate bubble (e2e 2026-07-27). The run keeps the HEAD
+        // segment's identity; follow-up segments' step trails fold into it.
+        var gwRows: [HermesTranscriptMessage] = []
+        for row in contentRows {
+            if row.role == "assistant", let last = gwRows.last, last.role == "assistant" {
+                if let extra = stepsByRowID.removeValue(forKey: row.id) {
+                    stepsByRowID[last.id] = [stepsByRowID[last.id], extra]
+                        .compactMap { $0 }.joined(separator: "\n")
+                }
+                gwRows[gwRows.count - 1] = HermesTranscriptMessage(
+                    id: last.id, role: "assistant",
+                    content: last.content + "\n\n" + row.content,
+                    toolName: nil, toolCallID: nil, toolCallArguments: [],
+                    timestamp: last.timestamp
+                )
+                continue
+            }
+            gwRows.append(row)
+        }
 
         var localRows = local
         var changed = false
@@ -101,18 +131,35 @@ enum HermesMirrorSync {
             var scan = textScanStart
             while scan < localRows.count {
                 let candidate = localRows[scan]
-                // Text match — OR the gateway's image placeholder against
-                // our attachment-only send: Hermes keeps no pixels, its
-                // transcript says "[screenshot]"/"[image]" where we hold the
-                // real attachment; without this rule the placeholder came
-                // back as a duplicate text bubble (e2e 2026-07-25).
+                // Text match — OR the gateway's media placeholders against
+                // our attachment send: Hermes keeps no pixels, its transcript
+                // says "проверь еще [screenshot]" where we hold "проверь еще"
+                // + the real attachment. Bracketed tokens are stripped before
+                // comparing, which covers attachment-only sends ("" left) AND
+                // text+image sends — the latter came back as a duplicate
+                // text bubble (e2e 2026-07-27).
                 let candidateMatches: (ChatMessage) -> Bool = { candidate in
                     let localText = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if localText == gwText { return true }
-                    return isUser
-                        && !candidate.attachments.isEmpty
-                        && localText.isEmpty
-                        && gwText.hasPrefix("[") && gwText.hasSuffix("]")
+                    // Assistant turns: the live bubble glues a run's interim
+                    // segments as they arrive, the transcript stores them as
+                    // separate rows — a partial overlap is the SAME turn, not
+                    // a new one. Without containment matching the run came
+                    // back as a second bubble holding the other half of the
+                    // text (e2e 2026-07-27). Bounded by length so two short
+                    // "ок" turns can't claim each other.
+                    if !isUser, !localText.isEmpty, !gwText.isEmpty,
+                       min(localText.count, gwText.count) >= 40,
+                       localText.contains(gwText) || gwText.contains(localText) {
+                        return true
+                    }
+                    guard isUser, !candidate.attachments.isEmpty else { return false }
+                    let stripped = gwText
+                        .replacingOccurrences(
+                            of: #"\[[^\]\n]{1,40}\]"#, with: "",
+                            options: .regularExpression)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return stripped == localText
                 }
                 if !claimedLocal.contains(scan),
                    candidate.externalID == nil,
@@ -123,6 +170,13 @@ enum HermesMirrorSync {
                     // rebuilt step trail when the live one was lost).
                     localRows[scan].externalID = externalID
                     localRows[scan].seq = gwRow.id
+                    // Claimed by containment → the gateway holds the whole
+                    // turn, our bubble only part of it: adopt its text so the
+                    // chat shows the full answer instead of half of it.
+                    if !isUser, !gwText.isEmpty,
+                       localRows[scan].text.trimmingCharacters(in: .whitespacesAndNewlines) != gwText {
+                        localRows[scan].text = gwText
+                    }
                     if localRows[scan].agentSteps == nil, let steps = stepsByRowID[gwRow.id] {
                         localRows[scan].agentSteps = steps
                     }

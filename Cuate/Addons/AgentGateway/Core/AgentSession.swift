@@ -72,6 +72,13 @@ struct AgentDiagnostic: Error {
     var probeStatus: GatewayProbe.Status?
 }
 
+// Without this, the chat and the diagnostics log both rendered the useless
+// "Cuate.AgentDiagnostic error 1." while the real cause sat in `message`
+// (live debugging 2026-07-27: an nginx 413 was undiagnosable from the UI).
+extension AgentDiagnostic: LocalizedError {
+    var errorDescription: String? { message }
+}
+
 /// Coarse connection state for the role chip's status dot.
 enum AgentConnectionState: Equatable {
     case unknown

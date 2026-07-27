@@ -52,12 +52,16 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,9 +79,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -94,8 +100,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import com.aispotlight.android.R
 import com.aispotlight.android.data.ChatAttachment
 import com.aispotlight.android.data.ChatMessage
@@ -158,6 +166,16 @@ fun ChatScreen(
     onSelectPreset: (String) -> Unit = {},
     prefillText: String? = null,
     onPrefillConsumed: () -> Unit = {},
+    /** Identity of the conversation on screen — the bottom-landing anchor. */
+    conversationKey: String = "",
+    /** Agent (Hermes) chat plumbing: skills autocomplete, pins, step details. */
+    isHermes: Boolean = false,
+    hermesSkills: List<com.aispotlight.android.hermes.HermesSkill> = emptyList(),
+    pinnedMessages: List<ChatMessage> = emptyList(),
+    onTogglePin: ((ChatMessage) -> Unit)? = null,
+    /** Pages the pin into the window; returns its index in the list (or -1). */
+    onLocatePin: suspend (String) -> Int = { -1 },
+    onStepDetails: (suspend (String) -> List<com.aispotlight.android.hermes.HermesChatService.StepDetail>)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -209,25 +227,53 @@ fun ChatScreen(
         }
     }
 
-    // Follow the stream: keep the newest message in view — keyed on the LAST
-    // message (id + streamed length), not the list size, so prepending an
-    // older page never yanks the view down. The FIRST fill of a conversation
-    // (cold start, chat switch) LANDS on the last message instantly — the old
-    // animate-from-the-top scrolled the whole history past the eyes.
+    // Pin-to-bottom is an INVARIANT, not an animation (the desktop 3.20
+    // contract): the list follows the stream only while the user is at the
+    // bottom. "At the bottom" = the last item is still on screen — a growing
+    // streamed bubble keeps that true while its own bottom runs past the
+    // viewport, so following continues; scrolling up past the last bubble
+    // detaches. There is no flag to clear: the derived check re-attaches the
+    // moment the user returns (or taps the jump-to-latest button).
+    val pinnedToBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            lastVisible == null || lastVisible.index >= info.totalItemsCount - 1
+        }
+    }
+
+    // Follow the stream — keyed on the LAST message (id + streamed length),
+    // not the list size, so prepending an older page never yanks the view
+    // down. The FIRST fill of a conversation (cold start, chat switch) LANDS
+    // on the last message instantly — the old animate-from-the-top scrolled
+    // the whole history past the eyes. Scroll targets use the LAYOUT index
+    // (totalItemsCount - 1), not messages.size - 1: the load-older row and
+    // the thinking indicator are list items too.
     val lastMessage = messages.lastOrNull()
-    var anchored by remember { mutableStateOf(false) }
-    LaunchedEffect(lastMessage?.id, lastMessage?.text?.length) {
+    // Anchored PER CONVERSATION, not once per screen: a thread switch swaps
+    // the message list without an empty gap, so a plain boolean never reset
+    // and an opened Hermes session landed wherever the old scroll offset
+    // was — the top (e2e 2026-07-27). A changed key = a fresh landing on
+    // the newest message, instantly.
+    var anchoredKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(conversationKey, lastMessage?.id, lastMessage?.text?.length) {
         if (lastMessage == null) {
             // Conversation switch in flight: the list was reset — the next
             // fill is a fresh landing, not a new-message follow.
-            anchored = false
+            anchoredKey = null
             return@LaunchedEffect
         }
-        if (anchored) {
-            listState.animateScrollToItem(messages.size - 1)
-        } else {
-            listState.scrollToItem(messages.size - 1)
-            anchored = true
+        val lastIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+        when {
+            anchoredKey != conversationKey -> {
+                listState.scrollToItem(lastIndex)
+                anchoredKey = conversationKey
+            }
+            // The user's own send always returns to the bottom; a streaming
+            // reply follows only while the reader stays pinned — it never
+            // yanks back someone who scrolled up to reread.
+            lastMessage.isUser || pinnedToBottom ->
+                listState.animateScrollToItem(lastIndex)
         }
     }
 
@@ -352,9 +398,10 @@ fun ChatScreen(
                 .systemBarsPadding()
                 .imePadding()
         ) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 start = 12.dp, end = 12.dp, bottom = 12.dp, top = 12.dp + 48.dp,
             ),
@@ -378,7 +425,13 @@ fun ChatScreen(
                     // from "stream ended with the fence never closed".
                     isStreamingReply = isLoading && !message.isUser && message.id == messages.lastOrNull()?.id,
                     voicePlayback = voicePlayback,
-                    onOpenArtifact = { openArtifact = it },
+                    // HTML opens like a normal link — the real browser
+                    // (the in-app WebView starved CDN pages); Markdown
+                    // keeps the in-app preview.
+                    onOpenArtifact = {
+                        if (it.kind == Artifact.Kind.HTML) openInBrowser(context, it)
+                        else openArtifact = it
+                    },
                     onImageTool = { attachment, function, prompt ->
                         onImageTool(attachment, function, prompt, null)
                     },
@@ -386,6 +439,9 @@ fun ChatScreen(
                     onSaveToGallery = onSaveToGallery,
                     onExtractText = onExtractText,
                     onOpenImage = { viewerTarget = it },
+                    isHermes = isHermes,
+                    onTogglePin = onTogglePin,
+                    onStepDetails = onStepDetails,
                     // Smooth appearance/reorder — the mac panel's insert animation.
                     modifier = Modifier.animateItem(),
                 )
@@ -393,6 +449,126 @@ fun ChatScreen(
             if (statusText != null) {
                 item(key = "thinking") { ThinkingIndicator(statusText) }
             }
+        }
+
+        // Pinned-messages bar (Telegram semantics, the desktop 4.2 bar): the
+        // snippet of the target pin + k/n under the floating header. Tap
+        // mechanics mirror the desktop exactly: if the shown pin is
+        // off-screen the first tap brings you TO it; cycling to the next pin
+        // only starts once the current target is in view. ✕ unpins the shown
+        // one. Pins outside the loaded window page themselves in.
+        if (pinnedMessages.isNotEmpty()) {
+            var pinCursor by remember(pinnedMessages.size) { mutableStateOf(0) }
+            val cursorIndex = pinCursor % pinnedMessages.size
+            val currentPin = pinnedMessages[cursorIndex]
+            val pinScope = rememberCoroutineScope()
+            Surface(
+                onClick = {
+                    pinScope.launch {
+                        val index = onLocatePin(currentPin.id)
+                        if (index < 0) return@launch
+                        val layoutIndex = index + if (hasOlderMessages) 1 else 0
+                        val visible = listState.layoutInfo.visibleItemsInfo
+                            .any { it.index == layoutIndex }
+                        if (visible && pinnedMessages.size > 1) {
+                            val next = (cursorIndex + 1) % pinnedMessages.size
+                            val nextIndex = onLocatePin(pinnedMessages[next].id)
+                            if (nextIndex >= 0) {
+                                listState.animateScrollToItem(
+                                    nextIndex + if (hasOlderMessages) 1 else 0
+                                )
+                            }
+                            pinCursor = next
+                        } else {
+                            listState.animateScrollToItem(layoutIndex)
+                            pinCursor = cursorIndex
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                shadowElevation = 2.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 54.dp, start = 12.dp, end = 12.dp)
+                    .fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.PushPin,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        currentPin.text.replace("\n", " ").take(80),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (pinnedMessages.size > 1) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "${cursorIndex + 1}/${pinnedMessages.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // ✕ unpins the SHOWN pin and resets the cycle (desktop).
+                    onTogglePin?.let { toggle ->
+                        IconButton(
+                            onClick = {
+                                toggle(currentPin)
+                                pinCursor = 0
+                            },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = stringResource(R.string.action_unpin),
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Jump-to-latest: the way back after detaching from the bottom mid-
+        // stream (the desktop 3.20 affordance). Sits above the composer edge;
+        // tapping re-pins, and the derived pinnedToBottom hides it again.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = anchoredKey == conversationKey && !pinnedToBottom,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp),
+        ) {
+            val scope = rememberCoroutineScope()
+            Surface(
+                onClick = {
+                    scope.launch {
+                        val lastIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+                        listState.animateScrollToItem(lastIndex)
+                    }
+                },
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shadowElevation = 4.dp,
+            ) {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = stringResource(R.string.chat_jump_latest),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(8.dp).size(24.dp),
+                )
+            }
+        }
         }
 
         // Error banner: transcription/attach/image-tool failures used to land
@@ -482,6 +658,51 @@ fun ChatScreen(
                 }
             }
         }
+
+        // `/` skills autocomplete (agent chats, desktop 4.0): prefix-filtered
+        // agent skills with descriptions; a tap completes the command.
+        if (isHermes && input.startsWith("/") && !input.contains(' ') && hermesSkills.isNotEmpty()) {
+            val query = input.drop(1)
+            val matches = hermesSkills
+                .filter { it.name.startsWith(query, ignoreCase = true) }
+                .take(6)
+            if (matches.isNotEmpty()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    for (skill in matches) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { input = "/${skill.name} " }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                "/${skill.name}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            )
+                            if (skill.description.isNotEmpty()) {
+                                Text(
+                                    skill.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Session model + reasoning effort moved to the top-bar ⋮ menu
+        // (2026-07-27): the composer chips ate a whole row of screen for
+        // controls touched once per session.
 
         // Composer top divider — themed (dashed Blueprint, dotted Día).
         ThemedComposerDivider(palette, Modifier.padding(horizontal = 8.dp))
@@ -764,7 +985,10 @@ private fun PendingAttachmentChip(
     onRemove: () -> Unit,
 ) {
     val context = LocalContext.current
-    val bitmap = remember(attachment.id) { ImageStore.thumbnail(context, attachment, targetPx = 128) }
+    val isImage = attachment.mimeType.startsWith("image")
+    val bitmap = remember(attachment.id) {
+        if (isImage) ImageStore.thumbnail(context, attachment, targetPx = 128) else null
+    }
     Box {
         if (bitmap != null) {
             Image(
@@ -775,6 +999,31 @@ private fun PendingAttachmentChip(
                     .size(64.dp)
                     .clip(RoundedCornerShape(10.dp)),
             )
+        } else {
+            // Non-image file staged for the agent courier: a filename pill
+            // (desktop 4.2 "пилюли над композером").
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(start = 10.dp, end = 26.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.AttachFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    attachment.filename,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 140.dp),
+                )
+            }
         }
         IconButton(
             onClick = onRemove,
@@ -953,6 +1202,10 @@ private fun MessageBubble(
     onSaveToGallery: (ChatAttachment) -> Unit,
     onExtractText: (ChatAttachment) -> Unit = {},
     onOpenImage: (ChatAttachment) -> Unit = {},
+    /** Agent chats: reply paths become chips, the step journal renders. */
+    isHermes: Boolean = false,
+    onTogglePin: ((ChatMessage) -> Unit)? = null,
+    onStepDetails: (suspend (String) -> List<com.aispotlight.android.hermes.HermesChatService.StepDetail>)? = null,
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.isUser
@@ -1161,13 +1414,31 @@ private fun MessageBubble(
                     }
                 } else {
                     val parsed = remember(message.text) { parseArtifacts(message.text) }
+                    // In-text file paths tap through to the reverse courier
+                    // (agent replies only — ordinary chats keep plain text).
+                    val agentPathOpener = rememberAgentPathOpener(onOpenArtifact)
                     val body = @Composable {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Collapsible tool-step journal (agent replies):
+                            // what the agent ran before answering; rows expand
+                            // into command/output/exit code fetched lazily.
+                            message.agentSteps?.let { steps ->
+                                AgentStepJournalView(message.id, steps, onStepDetails)
+                            }
                             if (parsed.plainText.isNotEmpty()) {
-                                MarkdownText(parsed.plainText, isStreaming = isStreamingReply)
+                                MarkdownText(
+                                    parsed.plainText,
+                                    isStreaming = isStreamingReply,
+                                    onPathTap = if (isHermes) agentPathOpener else null,
+                                )
                             }
                             for (artifact in parsed.artifacts) {
                                 ArtifactCard(artifact, isStreaming = isStreamingReply, onOpen = { onOpenArtifact(artifact) })
+                            }
+                            // Files the agent mentioned by path → chips /
+                            // preview cards (reverse courier, desktop 4.4).
+                            if (isHermes && !isStreamingReply && message.text.isNotEmpty()) {
+                                AgentPathChips(message.text, message.timestamp, onOpenArtifact)
                             }
                         }
                     }
@@ -1204,6 +1475,22 @@ private fun MessageBubble(
                     showSelectText = true
                 },
             )
+            // Pin/unpin (Telegram semantics): the bar above the transcript
+            // shows the pins and cycles through them.
+            if (onTogglePin != null) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = {
+                        Text(stringResource(
+                            if (message.pinned) R.string.action_unpin else R.string.action_pin
+                        ))
+                    },
+                    leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
+                    onClick = {
+                        showMenu = false
+                        onTogglePin(message)
+                    },
+                )
+            }
             androidx.compose.material3.DropdownMenuItem(
                 text = { Text(stringResource(R.string.action_share)) },
                 leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
@@ -1381,6 +1668,32 @@ private fun AttachmentThumbnail(
                     },
                 )
             }
+        }
+    } else if (!attachment.mimeType.startsWith("image")) {
+        // Non-image file the user sent to the agent — a filename pill (the
+        // desktop AgentAttachPillsView look; the bytes went via the courier).
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.AttachFile,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                attachment.filename,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 220.dp),
+            )
         }
     }
 }
@@ -1562,6 +1875,376 @@ private fun ThemedSendButton(palette: ChatPalette, onClick: () -> Unit) {
                     contentDescription = description,
                     tint = palette.sendGlyph,
                     modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Collapsible tool-step journal of an agent reply (desktop 4.0/4.2): the
+ * header shows the step count; expanding lists "tool · status · duration";
+ * expanding a ROW lazily fetches its command, output and exit code from the
+ * gateway transcript (the summary alone is persisted).
+ */
+@Composable
+private fun AgentStepJournalView(
+    messageId: String,
+    summary: String,
+    onStepDetails: (suspend (String) -> List<com.aispotlight.android.hermes.HermesChatService.StepDetail>)?,
+) {
+    val steps = remember(summary) { com.aispotlight.android.hermes.HermesChatService.parseSteps(summary) }
+    if (steps.isEmpty()) return
+    var expanded by rememberSaveable(messageId) { mutableStateOf(false) }
+    var details by remember(messageId) {
+        mutableStateOf<List<com.aispotlight.android.hermes.HermesChatService.StepDetail>?>(null)
+    }
+    var expandedStep by remember(messageId) { mutableStateOf(-1) }
+    val scope = rememberCoroutineScope()
+    val chrome = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = chrome,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                stringResource(R.string.hermes_steps, steps.size),
+                style = MaterialTheme.typography.labelMedium,
+                color = chrome,
+            )
+        }
+        if (expanded) {
+            steps.forEachIndexed { index, (tool, status, detail) ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            if (expandedStep == index) {
+                                expandedStep = -1
+                            } else {
+                                expandedStep = index
+                                if (details == null && onStepDetails != null) {
+                                    scope.launch { details = onStepDetails(messageId) }
+                                }
+                            }
+                        }
+                        .padding(vertical = 4.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (status == "running") "●" else "✓",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (status == "running") MaterialTheme.colorScheme.primary else chrome,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            tool,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                        )
+                        detail?.let {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = chrome,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (expandedStep == index) {
+                        val stepDetail = details?.getOrNull(index)
+                        when {
+                            onStepDetails == null -> { }
+                            stepDetail == null -> CircularProgressIndicator(
+                                modifier = Modifier.padding(6.dp).size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            else -> Column(Modifier.padding(start = 14.dp, top = 4.dp)) {
+                                stepDetail.command?.takeIf { it.isNotEmpty() }?.let { command ->
+                                    Text(
+                                        command,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    )
+                                }
+                                stepDetail.output?.takeIf { it.isNotEmpty() }?.let { output ->
+                                    Text(
+                                        output.take(2000),
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        color = chrome,
+                                        maxLines = 14,
+                                        modifier = Modifier
+                                            .padding(top = 2.dp)
+                                            .horizontalScroll(rememberScrollState()),
+                                    )
+                                }
+                                stepDetail.exitCode?.let { code ->
+                                    Text(
+                                        "exit $code",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (code == 0) chrome else MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.padding(top = 2.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Opens a reverse-courier copy the way the desktop does: HTML/Markdown in
+ * the artifact viewer (same card/viewer as fenced deliverables), anything
+ * else exported to Downloads with a toast.
+ */
+private fun openAgentCopy(
+    context: android.content.Context,
+    file: java.io.File,
+    path: String,
+    onOpenArtifact: (Artifact) -> Unit,
+) {
+    val courier = com.aispotlight.android.hermes.HermesFileCourier
+    val name = path.substringAfterLast("/").ifEmpty { file.name }
+    val ext = name.substringAfterLast('.', "").lowercase()
+    if (ext in courier.artifactExtensions && file.length() <= 4 * 1024 * 1024) {
+        onOpenArtifact(
+            Artifact(
+                kind = if (ext == "md" || ext == "markdown") Artifact.Kind.MARKDOWN else Artifact.Kind.HTML,
+                content = file.readText(),
+                title = name,
+            )
+        )
+    } else {
+        val saved = courier.exportToDownloads(context, file, name)
+        android.widget.Toast.makeText(
+            context,
+            if (saved != null) context.getString(R.string.hermes_file_saved, saved)
+            else context.getString(R.string.hermes_file_download_failed),
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
+}
+
+/**
+ * Tap handler for IN-TEXT agent file paths (Markdown onPathTap) — the chip
+ * action minus the chrome: open the fetched copy, download it first when
+ * the courier is configured, or copy the path as the last resort.
+ */
+@Composable
+private fun rememberAgentPathOpener(onOpenArtifact: (Artifact) -> Unit): (String) -> Unit {
+    val context = LocalContext.current
+    val settings = remember(context) { com.aispotlight.android.settings.AppSettings.shared(context) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    val openArtifactState = androidx.compose.runtime.rememberUpdatedState(onOpenArtifact)
+    return remember(context, settings, scope) {
+        { path: String ->
+            val courier = com.aispotlight.android.hermes.HermesFileCourier
+            when {
+                // Fresh-first: re-download even over a cached copy (the
+                // agent may have edited the file); cache = offline fallback.
+                // Directories are copy-only — nothing to fetch.
+                courier.canFetchRemote(settings) &&
+                    com.aispotlight.android.hermes.HermesFilePaths.isListableFile(path) -> {
+                    scope.launch {
+                        val fetched = courier.fetchRemote(context, settings, path)
+                            ?: courier.fetchedCopy(path)
+                        if (fetched != null) {
+                            openAgentCopy(context, fetched, path, openArtifactState.value)
+                        } else {
+                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(path))
+                            android.widget.Toast.makeText(
+                                context, context.getString(R.string.hermes_file_download_failed),
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                    Unit
+                }
+                courier.fetchedCopy(path) != null ->
+                    openAgentCopy(context, courier.fetchedCopy(path)!!, path, openArtifactState.value)
+                else -> {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(path))
+                    android.widget.Toast.makeText(
+                        context, context.getString(R.string.artifact_copied),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * File paths the agent mentioned in its reply → chips (desktop
+ * AgentFileChipsView, 4.4 reverse-courier parity). With the dashboard
+ * courier configured a chip DOWNLOADS the file: HTML/Markdown open in the
+ * artifact viewer (and auto-fetch themselves into a preview card without a
+ * tap), everything else is saved to Downloads. Without the courier the chip
+ * copies the path — the old consolation prize.
+ */
+@Composable
+private fun AgentPathChips(
+    text: String,
+    /** The mentioning message's timestamp — freshness the cache must satisfy. */
+    messageTimestamp: Long,
+    onOpenArtifact: (Artifact) -> Unit,
+) {
+    // Directories are dropped outright: the gateway is always remote from a
+    // phone — nothing to fetch, nothing to open, the chip was pure noise.
+    val paths = remember(text) {
+        com.aispotlight.android.hermes.HermesFilePaths.extract(text)
+            .filter { com.aispotlight.android.hermes.HermesFilePaths.isListableFile(it) }
+    }
+    if (paths.isEmpty()) return
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val context = LocalContext.current
+    val settings = remember(context) { com.aispotlight.android.settings.AppSettings.shared(context) }
+    val courier = com.aispotlight.android.hermes.HermesFileCourier
+    val scope = rememberCoroutineScope()
+    var fetchingPath by remember { mutableStateOf<String?>(null) }
+    // Bumped when a silent auto-fetch lands: the chip graduates to a card.
+    var fetchTick by remember { mutableStateOf(0) }
+
+    val copyPath: (String) -> Unit = { path ->
+        clipboard.setText(androidx.compose.ui.text.AnnotatedString(path))
+        android.widget.Toast.makeText(
+            context, context.getString(R.string.artifact_copied),
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /** Open a local copy: artifact viewer for HTML/Markdown, Downloads export otherwise. */
+    val openCopy: (java.io.File, String) -> Unit = { file, path ->
+        openAgentCopy(context, file, path, onOpenArtifact)
+    }
+
+    // Silent auto-fetch (desktop 4.4): remote HTML/Markdown pull themselves
+    // into the app cache so the preview card appears without a tap. The
+    // courier refreshes copies OLDER than this message — the agent edited
+    // the file and a new reply mentions it again.
+    LaunchedEffect(text, fetchTick) {
+        var landed = false
+        for (path in paths) {
+            val ext = path.substringAfterLast('.', "").lowercase()
+            if (ext !in courier.artifactExtensions) continue
+            if (courier.hasFreshCopy(path, messageTimestamp)) continue
+            if (courier.autoFetchArtifact(context, settings, path, messageTimestamp) != null) landed = true
+        }
+        if (landed) fetchTick++
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Fetched HTML/Markdown render as full artifact preview cards —
+        // identical to fenced deliverables (one visual language).
+        val cardPaths = paths.filter { path ->
+            fetchTick >= 0 &&
+                path.substringAfterLast('.', "").lowercase() in courier.artifactExtensions &&
+                courier.fetchedCopy(path) != null
+        }
+        for (path in cardPaths) {
+            val copy = courier.fetchedCopy(path) ?: continue
+            // lastModified in the key: a refresh overwrites the copy in
+            // place — same file, new bytes — and the card must re-read.
+            val artifact = remember(path, fetchTick, copy.lastModified()) {
+                val name = path.substringAfterLast("/")
+                val ext = name.substringAfterLast('.', "").lowercase()
+                if (copy.length() <= 4 * 1024 * 1024) Artifact(
+                    kind = if (ext == "md" || ext == "markdown") Artifact.Kind.MARKDOWN else Artifact.Kind.HTML,
+                    content = copy.readText(),
+                    title = name,
+                ) else null
+            }
+            if (artifact != null) {
+                ArtifactCard(artifact, onOpen = { onOpenArtifact(artifact) })
+            }
+        }
+        val chipPaths = paths.filterNot { it in cardPaths }
+        if (chipPaths.isNotEmpty()) Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            for (path in chipPaths) {
+                // Directories get no download affordance — nothing to fetch
+                // through the files API; the chip honestly copies the path.
+                val canFetch = courier.canFetchRemote(settings) &&
+                    com.aispotlight.android.hermes.HermesFilePaths.isListableFile(path)
+                androidx.compose.material3.AssistChip(
+                    enabled = fetchingPath != path,
+                    onClick = {
+                        when {
+                            // Fresh-first even with a cached copy: the agent
+                            // may have edited the file since — the stale
+                            // copy is only the offline fallback.
+                            canFetch && fetchingPath == null -> {
+                                fetchingPath = path
+                                scope.launch {
+                                    val fetched = courier.fetchRemote(context, settings, path)
+                                        ?: courier.fetchedCopy(path)
+                                    fetchingPath = null
+                                    if (fetched != null) {
+                                        fetchTick++
+                                        openCopy(fetched, path)
+                                    } else {
+                                        copyPath(path)
+                                        android.widget.Toast.makeText(
+                                            context, context.getString(R.string.hermes_file_download_failed),
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            }
+                            courier.fetchedCopy(path) != null ->
+                                openCopy(courier.fetchedCopy(path)!!, path)
+                            else -> copyPath(path)
+                        }
+                    },
+                    leadingIcon = {
+                        when {
+                            fetchingPath == path -> androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp,
+                            )
+                            courier.fetchedCopy(path) != null -> Icon(
+                                Icons.Filled.Description, contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            canFetch -> Icon(
+                                Icons.Filled.Download, contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            else -> Icon(
+                                Icons.Filled.ContentCopy, contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    },
+                    label = {
+                        Text(
+                            path.substringAfterLast("/").ifEmpty { path },
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    },
                 )
             }
         }

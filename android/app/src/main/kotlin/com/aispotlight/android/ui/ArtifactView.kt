@@ -281,14 +281,27 @@ fun ArtifactViewer(artifact: Artifact, onDismiss: () -> Unit) {
                             WebView(ctx).apply {
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
-                                loadDataWithBaseURL(null, artifact.content, "text/html", "utf-8", null)
+                                // CDN-driven pages (Leaflet maps, chart libs)
+                                // need a real page geometry to lay out on.
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                settings.mixedContentMode =
+                                    android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                                // A real https base origin — with baseURL null
+                                // the page runs from origin "null": fetch/XHR
+                                // to https endpoints gets rejected and
+                                // protocol-relative //cdn URLs resolve to
+                                // nowhere, so a CDN-based page rendered its
+                                // text and nothing else (e2e 2026-07-27;
+                                // mobile Chrome showed the same file fine).
+                                loadDataWithBaseURL(ARTIFACT_BASE_URL, artifact.content, "text/html", "utf-8", null)
                             }
                         },
                         update = { webView ->
                             // Re-load only when the content actually changed.
                             if (webView.tag != artifact.content) {
                                 webView.tag = artifact.content
-                                webView.loadDataWithBaseURL(null, artifact.content, "text/html", "utf-8", null)
+                                webView.loadDataWithBaseURL(ARTIFACT_BASE_URL, artifact.content, "text/html", "utf-8", null)
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
@@ -305,6 +318,13 @@ fun ArtifactViewer(artifact: Artifact, onDismiss: () -> Unit) {
         }
     }
 }
+
+/**
+ * Base origin the HTML preview loads under. Never actually fetched — it
+ * exists so the page runs from a secure https origin instead of "null"
+ * (see the WebView comment above).
+ */
+private const val ARTIFACT_BASE_URL = "https://artifact.cuate.local/"
 
 private val Artifact.fileExtension: String
     get() = if (kind == Artifact.Kind.HTML) "html" else "md"
@@ -326,13 +346,24 @@ private fun writeToCache(context: Context, artifact: Artifact): android.net.Uri 
     )
 }
 
-/** Writes the page to cache and opens it in the user's browser (FileProvider). */
-private fun openInBrowser(context: Context, artifact: Artifact) {
+/**
+ * Writes the page to cache and opens it in the browser (FileProvider) —
+ * like a normal link: the DEFAULT browser directly, the chooser only when
+ * nothing claims text/html. Since 2026-07-27 this is where every HTML
+ * artifact tap lands: the in-app WebView starved CDN pages (Leaflet maps
+ * rendered blank) while the same file was fine in Chrome — so HTML goes to
+ * the real browser, and the in-app preview stays for Markdown.
+ */
+internal fun openInBrowser(context: Context, artifact: Artifact) {
     try {
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(writeToCache(context, artifact), "text/html")
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        context.startActivity(Intent.createChooser(intent, artifact.title))
+        try {
+            context.startActivity(intent)
+        } catch (_: android.content.ActivityNotFoundException) {
+            context.startActivity(Intent.createChooser(intent, artifact.title))
+        }
     } catch (e: Exception) {
         Toast.makeText(context, e.message, Toast.LENGTH_SHORT).show()
     }

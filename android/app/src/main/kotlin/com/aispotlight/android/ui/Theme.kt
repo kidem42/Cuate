@@ -39,7 +39,7 @@ private val LightColors = lightColorScheme(
 )
 
 @Composable
-fun AISpotlightTheme(content: @Composable () -> Unit) {
+fun CuateTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val settings = AppSettings.shared(context)
     val appearance by settings.appearanceMode.collectAsState()
