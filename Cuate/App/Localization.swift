@@ -341,7 +341,7 @@ enum Localization {
         "menu.quit": [.english: "Quit Cuate", .spanish: "Salir de Cuate", .russian: "Выйти из Cuate"],
 
         // MARK: Chat panel
-        "panel.typeMessage": [.english: "Type your message...", .spanish: "Escribe tu mensaje...", .russian: "Введите сообщение..."],
+        "panel.typeMessage": [.english: "Type something here...", .spanish: "Escribe algo aquí...", .russian: "Напиши что-нибудь здесь..."],
         "panel.newChat": [.english: "New chat", .spanish: "Nuevo chat", .russian: "Новый чат"],
         "panel.presetHelp": [.english: "System prompt preset (applies to the next message)", .spanish: "Preajuste de prompt (se aplica al próximo mensaje)", .russian: "Пресет промпта (применится к следующему сообщению)"],
         "panel.providerHelp": [.english: "Chat provider (only providers with a key are shown)", .spanish: "Proveedor de chat (solo se muestran los que tienen clave)", .russian: "Провайдер чата (показаны только те, у кого есть ключ)"],

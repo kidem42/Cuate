@@ -836,7 +836,12 @@ struct ChatWindow: View {
                         ZStack(alignment: .topLeading) {
                             if messageText.isEmpty, quotedText == nil {
                                 HStack(spacing: 3) {
-                                    Text(palette.isGlass ? L("panel.typeMessage") : (palette.placeholderText ?? L("panel.typeMessage")))
+                                    // ONE localized placeholder for every theme. The old
+                                    // per-theme flavor strings were hardcoded in a single
+                                    // language each (Sakura greeted English users in
+                                    // Russian) — theme flavor stays in colors and the
+                                    // Terminal caret, not in copy.
+                                    Text(L("panel.typeMessage"))
                                         .font(.system(size: 13, design: palette.fontDesign))
                                         .foregroundColor(palette.isGlass ? .secondary.opacity(0.5) : palette.placeholderColor)
                                     // Terminal's blinking block caret after the "$ …" prompt.
