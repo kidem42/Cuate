@@ -369,6 +369,7 @@ nonisolated enum APIKeyStore {
         case fal // ImageAddon (Addons/ImageAddon)
         case hermes // HermesAddon gateway token (Addons/HermesAddon)
         case hermesDashboard // HermesAddon dashboard session token (remote files)
+        case plaud // PlaudAddon OAuth token set, one JSON blob (Addons/PlaudAddon)
 
         var displayName: String {
             switch self {
@@ -377,6 +378,7 @@ nonisolated enum APIKeyStore {
             case .fal: return "fal.ai"
             case .hermes: return "Hermes Agent"
             case .hermesDashboard: return "Hermes Dashboard"
+            case .plaud: return "Plaud"
             }
         }
     }

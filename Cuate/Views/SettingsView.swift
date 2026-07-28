@@ -12,6 +12,7 @@ enum SettingsTab: String, Hashable {
     case calendarAddon // CalendarAddon (Addons/CalendarAddon)
     case worldTime // WorldTimeAddon (Addons/WorldTimeAddon)
     case hermes // HermesAddon (Addons/HermesAddon)
+    case plaudAddon // PlaudAddon (Addons/PlaudAddon)
 }
 
 struct SettingsView: View {
@@ -21,6 +22,7 @@ struct SettingsView: View {
     @ObservedObject private var calendarAddon = CalendarSettings.shared // addon: gates its tab
     @ObservedObject private var worldTime = WorldTimeSettings.shared // addon: gates its tab
     @ObservedObject private var hermes = HermesSettings.shared // addon: gates its tab
+    @ObservedObject private var plaudAddon = PlaudSettings.shared // addon: gates its tab
 
     enum KeyTestState: Equatable {
         case testing
@@ -94,6 +96,9 @@ struct SettingsView: View {
         .onChange(of: imageAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .imageAddon { selectedTab = .general }
         }
+        .onChange(of: plaudAddon.enabled) { _, enabled in
+            if !enabled && selectedTab == .plaudAddon { selectedTab = .general }
+        }
         .onChange(of: calendarAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .calendarAddon { selectedTab = .general }
         }
@@ -163,7 +168,7 @@ struct SettingsView: View {
 
             // Addon rows appear only while the addon is enabled
             // (master switches live in the General section).
-            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled || hermes.enabled {
+            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled || hermes.enabled || plaudAddon.enabled {
                 Section(L("sidebar.addons")) {
                     if layoutFix.enabled {
                         sidebarRow(LFL("lf.tab"), systemImage: "keyboard.fill", color: .indigo)
@@ -197,6 +202,16 @@ struct SettingsView: View {
                                 .background(RoundedRectangle(cornerRadius: 5.5).fill(Color.teal.gradient))
                         }
                         .tag(SettingsTab.hermes)
+                    }
+                    if plaudAddon.enabled {
+                        // Plaud's own "Λ·" glyph in their original livery —
+                        // black on a white square, like their favicon.
+                        Label {
+                            Text(PLL("plaud.tab"))
+                        } icon: {
+                            PlaudBadge(size: 21)
+                        }
+                        .tag(SettingsTab.plaudAddon)
                     }
                 }
             }
@@ -235,6 +250,7 @@ struct SettingsView: View {
             case .calendarAddon: CalendarSettingsView() // brings its own Form
             case .worldTime: WorldTimeSettingsView()   // brings its own Form
             case .hermes: HermesSettingsView()         // brings its own Form
+            case .plaudAddon: PlaudSettingsView()      // brings its own Form
             }
         }
         // The "glass" part: hide the forms' opaque scroll background (the
@@ -1089,6 +1105,12 @@ struct SettingsView: View {
             }
             featureRow(asset: "Provider-hermes", .teal) {
                 HermesEnableToggle() // HermesAddon master switch (Addons/HermesAddon)
+            }
+            HStack(spacing: 10) {
+                // Original Plaud livery (black-on-white), not the tinted
+                // featureRow square the other addons use.
+                PlaudBadge(size: 24)
+                PlaudEnableToggle() // PlaudAddon master switch (Addons/PlaudAddon)
             }
         }
     }

@@ -14,6 +14,10 @@ enum ChatService {
         /// digest of the results, to be stored on the reply message so
         /// follow-up turns keep their grounding (see ChatMessage.toolContext).
         case toolContext(String)
+        /// File-backed attachments a tool produced mid-turn (Plaud note
+        /// chips) — appended to the reply message so the bubble grows
+        /// clickable previews.
+        case attachments([ChatAttachment])
         /// Agent turns (AgentGateway): the authoritative full reply text.
         /// Replaces everything streamed so far — Hermes deltas and the final
         /// `assistant.completed` text differ in whitespace, and a turn with
@@ -114,6 +118,27 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
             if !calendarTools.isEmpty {
                 options.tools += calendarTools
                 systemPrompt += "\n\n" + CalendarToolService.systemPromptHint()
+            }
+        }
+
+        // Plaud addon tools: same gate as the calendar (addon available +
+        // tool-capable model), plus the addon's own exposure setting — in
+        // "/plaud only" mode the notes stay invisible until the user opens
+        // the turn with the /plaud command, which also pins the answer to
+        // the notes.
+        let plaudInvoked = (history.last(where: \.isUser)?.text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased().hasPrefix("/plaud")) ?? false
+        if PlaudAddon.shared.isAvailable,
+           PlaudSettings.shared.alwaysAvailable || plaudInvoked,
+           settings.modelSupportsTools(provider: providerID, model: model) {
+            let plaudTools = PlaudToolService.toolSpecs()
+            if !plaudTools.isEmpty {
+                options.tools += plaudTools
+                systemPrompt += "\n\n" + PlaudToolService.systemPromptHint()
+                if plaudInvoked {
+                    systemPrompt += "\n" + PlaudToolService.invokedPromptHint()
+                }
             }
         }
 
@@ -234,6 +259,15 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                                 // the digest is web grounding for follow-ups;
                                 // schedule data goes stale by design.
                                 result = await CalendarToolService.run(call)
+                            } else if PlaudToolService.canHandle(call.name) {
+                                continuation.yield(.status(PlaudToolService.statusLine(for: call)))
+                                // Not in toolDigest either: note/transcript
+                                // payloads are huge and re-fetchable by ID.
+                                result = await PlaudToolService.run(call)
+                                let chips = PlaudToolService.takePendingAttachments()
+                                if !chips.isEmpty {
+                                    continuation.yield(.attachments(chips))
+                                }
                             } else {
                                 result = "Unknown tool: \(call.name)"
                             }

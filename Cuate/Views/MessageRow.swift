@@ -728,6 +728,10 @@ private struct AttachmentPreviewBubble: View {
                     .task(id: attachment.id) {
                         decodedImage = await AttachmentImageCache.image(for: attachment)
                     }
+            } else if PlaudNoteChipView.matches(attachment) {
+                // Plaud note/transcript chip — branded, previews in the
+                // artifact window instead of a raw file open.
+                PlaudNoteChipView(attachment: attachment)
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.fill")
@@ -753,7 +757,7 @@ private struct AttachmentPreviewBubble: View {
     }
 }
 
-private enum AttachmentOpener {
+enum AttachmentOpener {
     private static var trackedTemporaryFiles = Set<URL>()
     private static var cleanupRegistered = false
 

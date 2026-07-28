@@ -1210,12 +1210,15 @@ struct ChatWindow: View {
     }
 
     /// The "/query" being typed, when the composer is in slash-prefix state
-    /// (agent mode, single line, no space after the command yet).
+    /// (single line, no space after the command yet). Agent mode always has
+    /// commands; ordinary chats only when a local addon offers one (/plaud).
     private var slashQuery: String? {
-        guard settings.activeAgentRole != nil,
-              messageText.hasPrefix("/"),
+        guard messageText.hasPrefix("/"),
               !messageText.contains("\n"),
               !messageText.dropFirst().contains(" ") else { return nil }
+        if settings.activeAgentRole == nil {
+            guard PlaudAddon.shared.isAvailable else { return nil }
+        }
         return String(messageText.dropFirst()).lowercased()
     }
 
@@ -1224,6 +1227,13 @@ struct ChatWindow: View {
     private func slashSuggestionItems() -> [(command: String, description: String?)] {
         guard let query = slashQuery, messageText != slashDismissedText else { return [] }
         var items: [(String, String?)] = []
+        // Ordinary chats: /plaud pins the turn to the user's Plaud notes.
+        // Agent sessions: skipped — the agent runs its own tools on its
+        // host; our client-side Plaud tools don't mix in.
+        if settings.activeAgentRole == nil, PlaudAddon.shared.isAvailable,
+           query.isEmpty || "plaud".contains(query) {
+            items.append(("/plaud", PLL("plaud.slash.description")))
+        }
         if ImageAddonSettings.shared.enabled, imageFeaturesAllowed {
             items += ["/upscale", "/bg", "/cleanup"]
                 .filter { query.isEmpty || $0.dropFirst().contains(query) }
@@ -1449,8 +1459,10 @@ struct ChatWindow: View {
         } else if availableProviders.count <= 1 {
             // No switcher to show — the pin still needs its corner.
             pinButton
+            localFilesButton
         } else {
             pinButton
+            localFilesButton
             Menu {
                 ForEach(availableProviders) { provider in
                     Button {
@@ -1480,6 +1492,26 @@ struct ChatWindow: View {
             .buttonStyle(PlainButtonStyle())
             .fixedSize()
             .help(L("panel.providerHelp"))
+        }
+    }
+
+    /// Ordinary chats' counterpart to the agent's CHAT FILES folder: every
+    /// file exchanged with the model in this conversation (attachments,
+    /// artifact documents, Plaud recordings).
+    private var localFilesButton: some View {
+        Button {
+            showAgentFiles.toggle()
+        } label: {
+            Image(systemName: "folder")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(height: 20)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .help(L("chatfiles.help"))
+        .popover(isPresented: $showAgentFiles, arrowEdge: .bottom) {
+            LocalChatFilesView.collect(from: chatStore.messages)
+                .environment(\.themePalette, palette)
         }
     }
 
@@ -2184,6 +2216,10 @@ struct ChatWindow: View {
             var pendingText = ""
             var lastFlush = ContinuousClock.now
             var lastCheckpoint = ContinuousClock.now
+            // Tool-produced chips (Plaud notes) buffered until delivery —
+            // they arrive mid-turn, usually BEFORE any reply text exists to
+            // hang them on.
+            var pendingChipAttachments: [ChatAttachment] = []
 
             // Persistence checkpoint: the partial reply lands in the store
             // (whose debounced save persists it) about once a second, so a
@@ -2225,6 +2261,11 @@ struct ChatWindow: View {
                         // API context see it) and the live row that renders.
                         liveReplyStub = first
                         chatStore.appendNow(first)
+                    } else {
+                        // Telemetry for the "bubble freezes then pops" hunt:
+                        // an unarmed live row renders at ~1 Hz checkpoint
+                        // cadence instead of streaming.
+                        Diagnostics.log("chat", "live.unarmed isLive=\(isLive) historyLoaded=\(chatStore.isHistoryLoaded) sameModel=\(liveReply === live)")
                     }
                 }
                 // Mid-stream return: the reply may have materialized while
@@ -2311,6 +2352,17 @@ struct ChatWindow: View {
                             current.toolContext = String(merged.suffix(6000))
                             reply = current
                         }
+                    case .attachments(let list):
+                        // Tool-produced chips (Plaud notes). Buffered, not
+                        // attached: the reply bubble may not exist yet (tools
+                        // run before the answer text). Deduped by payload
+                        // path — the model re-reading the same note must not
+                        // double the chip row. Merged into the reply at
+                        // delivery below.
+                        let existing = Set(pendingChipAttachments.compactMap(\.fileURLString))
+                        pendingChipAttachments += list.filter {
+                            $0.fileURLString.map { !existing.contains($0) } ?? true
+                        }
                     case .replaceText(let full):
                         // Agent turns: the authoritative full text — replaces
                         // whatever streamed (deltas differ in whitespace, or
@@ -2391,6 +2443,14 @@ struct ChatWindow: View {
                         // A marker that survived (continuation budget spent)
                         // must not reach the stored message.
                         finished.text = Self.strippingContinueMarker(finished.text).text
+                        // Tool chips buffered during the turn land on the
+                        // finished reply (deduped against redeliveries).
+                        if !pendingChipAttachments.isEmpty {
+                            let existing = Set(finished.attachments.compactMap(\.fileURLString))
+                            finished.attachments += pendingChipAttachments.filter {
+                                $0.fileURLString.map { !existing.contains($0) } ?? true
+                            }
+                        }
                         reply = finished
                         // No-op when live and already synced; routes the reply
                         // into the origin chat's file when detached.
