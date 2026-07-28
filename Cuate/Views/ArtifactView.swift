@@ -263,6 +263,10 @@ enum ArtifactPreview {
             newWindow.isReleasedWhenClosed = false
             place(newWindow)
             newWindow.level = .floating
+            // Same space/fullscreen behavior as the chat panel: the preview
+            // must appear on WHATEVER screen/space the user summoned it from
+            // — without this it opens invisibly on the desktop space.
+            newWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window = newWindow
             newWindow.makeKeyAndOrderFront(nil)
         }

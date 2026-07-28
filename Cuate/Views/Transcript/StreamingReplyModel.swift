@@ -58,7 +58,15 @@ final class StreamingReplyModel: ObservableObject {
     /// Moves the largest safe prefix of the tail into a frozen segment.
     private func freezeIfPossible() {
         guard tail.utf8.count > Self.freezeThreshold else { return }
-        var searchRange = tail.startIndex..<tail.endIndex
+        // A cut can only succeed BEFORE the first fence that never closes —
+        // clamp the boundary search there. Without the clamp, a streaming
+        // artifact (an 11 KB HTML fence full of blank lines) made this loop
+        // probe EVERY blank line × rescan the whole tail, on EVERY flush:
+        // O(n²) on the main thread — the live bubble froze until the stream
+        // ended ("плашка исчезает, потом резко готовый бабл", 2026-07-28).
+        let limit = firstUnclosedFenceStart() ?? tail.endIndex
+        guard limit > tail.startIndex else { return }
+        var searchRange = tail.startIndex..<limit
         while let boundary = tail.range(of: "\n\n", options: .backwards, range: searchRange) {
             let candidate = String(tail[..<boundary.upperBound])
             if hasNoOpenFence(candidate) {
@@ -70,6 +78,30 @@ final class StreamingReplyModel: ObservableObject {
             // The boundary sits inside an open ``` fence — try an earlier one.
             searchRange = tail.startIndex..<boundary.lowerBound
         }
+    }
+
+    /// Start index of the first fence that stays open to the end of the
+    /// tail, or nil when every fence is closed. One linear pass.
+    private func firstUnclosedFenceStart() -> String.Index? {
+        var openTicks = 0
+        var openStart: String.Index?
+        var lineStart = tail.startIndex
+        while lineStart < tail.endIndex {
+            let lineEnd = tail[lineStart...].firstIndex(of: "\n") ?? tail.endIndex
+            let trimmed = tail[lineStart..<lineEnd].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                let ticks = trimmed.prefix(while: { $0 == "`" }).count
+                if openTicks == 0 {
+                    openTicks = ticks
+                    openStart = lineStart
+                } else if ticks >= openTicks, trimmed.drop(while: { $0 == "`" }).isEmpty {
+                    openTicks = 0
+                    openStart = nil
+                }
+            }
+            lineStart = lineEnd < tail.endIndex ? tail.index(after: lineEnd) : tail.endIndex
+        }
+        return openTicks > 0 ? openStart : nil
     }
 
     /// True when every ``` fence opened in `text` is closed again — the
