@@ -303,10 +303,19 @@ final class TranscriptEngineView: NSScrollView {
         return Row(id: item.id, revision: item.revision, host: host)
     }
 
-    /// Parks a detached row for likely reuse (LRU-capped).
+    /// Parks a detached row for likely reuse (LRU-capped). Detachment is
+    /// idempotent ON PURPOSE: reconcile's removal loop has usually detached
+    /// the row already, and NSStackView RAISES on removing a non-arranged
+    /// view — that exception, thrown mid-update, is exactly what wedged the
+    /// whole window before the apply was deferred (frozen panel after the
+    /// first message; crash report 2026-07-28-122750 once it could surface).
     private func retire(_ row: Row) {
-        stack.removeArrangedSubview(row.host)
-        row.host.removeFromSuperview()
+        if row.host.superview != nil {
+            if stack.arrangedSubviews.contains(row.host) {
+                stack.removeArrangedSubview(row.host)
+            }
+            row.host.removeFromSuperview()
+        }
         if retiredRows.updateValue(row, forKey: row.id) == nil {
             retiredOrder.append(row.id)
         }

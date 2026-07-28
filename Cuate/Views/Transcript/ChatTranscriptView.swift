@@ -24,6 +24,10 @@ struct ChatTranscriptView: NSViewRepresentable {
         var onViewportWidthChange: (CGFloat) -> Void = { _ in }
         var onNeedOlder: () -> Void = {}
         var onNeedNewer: () -> Void = {}
+        // Latest row set waiting for the deferred apply (see updateNSView).
+        var pendingItems: [TranscriptItem] = []
+        var pendingResetToken = ""
+        var applyScheduled = false
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -61,6 +65,25 @@ struct ChatTranscriptView: NSViewRepresentable {
         coordinator.onViewportWidthChange = onViewportWidthChange
         coordinator.onNeedOlder = onNeedOlder
         coordinator.onNeedNewer = onNeedNewer
-        engine.apply(items: items, resetToken: resetToken)
+        // Apply OUTSIDE the SwiftUI update transaction. `apply` builds
+        // hosting views and forces their layout, which evaluates row bodies
+        // right here inside updateNSView — and anything they touch that
+        // publishes fires SwiftUI's "Publishing changes from within view
+        // updates is not allowed" fault (148× in one session's unified log).
+        // On macOS 26 that undefined behavior escalated to the window's
+        // whole update cycle wedging: frozen composer layers, dead controls
+        // (e2e 2026-07-28). Deferring one runloop tick keeps every apply in
+        // its own clean transaction; back-to-back updates coalesce to the
+        // newest row set.
+        coordinator.pendingItems = items
+        coordinator.pendingResetToken = resetToken
+        guard !coordinator.applyScheduled else { return }
+        coordinator.applyScheduled = true
+        DispatchQueue.main.async { [weak engine] in
+            coordinator.applyScheduled = false
+            guard let engine else { return }
+            engine.apply(items: coordinator.pendingItems,
+                         resetToken: coordinator.pendingResetToken)
+        }
     }
 }

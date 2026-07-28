@@ -1229,20 +1229,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // escape hatch the World Time panel has.
         guard !AppSettings.shared.panelPinned else { return }
         guard let window = chatWindow, window.isVisible else { return }
-        // Keep the panel visible while the user works in Settings
-        if let settingsWindow, settingsWindow.isKeyWindow { return }
-        // Clicking between the panel and its docked agent column moves key
-        // status WITHIN the panel family — the user never left. Key status
-        // may not have settled at resign time, so the click's own window is
-        // checked too.
-        if let sidebar = agentSidebarWindow, sidebar.isVisible,
-           sidebar.isKeyWindow || NSApp.currentEvent?.window === sidebar { return }
-        if window.isKeyWindow || NSApp.currentEvent?.window === window { return }
-        // A system dialog (Open/Save) presented as the panel's sheet takes
-        // key status — that must not count as "the user left the panel".
-        if window.attachedSheet != nil { return }
-        Diagnostics.log("ui", "panel.hide")
-        window.orderOut(nil)
+        // Deferred ONE tick: at resign time the next key window has not
+        // settled yet, so "did key stay within the panel family?" cannot be
+        // answered here. (Checking NSApp.currentEvent instead was a bug: it
+        // returns the last event OUR app processed, so a click into another
+        // app still pointed at the panel — auto-hide died and the panel
+        // lingered as an inactive zombie; e2e 2026-07-28.)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.chatWindow, window.isVisible else { return }
+            guard !AppSettings.shared.panelPinned else { return }
+            // Key stayed in the family: the panel itself, its docked agent
+            // column, or Settings — the user never left.
+            if window.isKeyWindow { return }
+            if let sidebar = self.agentSidebarWindow, sidebar.isVisible, sidebar.isKeyWindow { return }
+            if let settingsWindow = self.settingsWindow, settingsWindow.isKeyWindow { return }
+            // A system dialog (Open/Save) presented as the panel's sheet
+            // takes key status — not "the user left the panel".
+            if window.attachedSheet != nil { return }
+            Diagnostics.log("ui", "panel.hide")
+            window.orderOut(nil)
+        }
     }
 
     /// Same dismissal rules as the chat panel, with one extra escape hatch:

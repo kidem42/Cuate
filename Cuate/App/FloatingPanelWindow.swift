@@ -19,6 +19,31 @@ final class FloatingPanelWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    /// Click-to-revive. A visible floating panel of an INACTIVE accessory
+    /// app is a zombie: cooperative activation (macOS 14+) can silently
+    /// deny the summon-time activate (log: `panel.shown active=false
+    /// key=false`), and then every click dies in the "first mouse" attempt
+    /// — the window never becomes key and no control ever fires, while
+    /// rendering and streams continue (e2e 2026-07-28: the "frozen" panel).
+    /// Any click while the app is inactive forces the legacy activation
+    /// path and takes key status directly.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            // Breadcrumb for the frozen-panel class of bugs: proves whether
+            // clicks reach the app at all, and in what activation state.
+            Diagnostics.log("ui", "click role=\(role) key=\(isKeyWindow) active=\(NSApp.isActive)")
+            if !NSApp.isActive {
+                NSRunningApplication.current.activate()
+                if !NSApp.isActive {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                makeKeyAndOrderFront(nil)
+                Diagnostics.log("ui", "click.revive key=\(isKeyWindow) active=\(NSApp.isActive)")
+            }
+        }
+        super.sendEvent(event)
+    }
+
     /// The chat panel, whatever else is on screen.
     static var chatPanel: FloatingPanelWindow? {
         NSApp.windows.lazy.compactMap { $0 as? FloatingPanelWindow }.first { $0.role == .chat }
