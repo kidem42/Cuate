@@ -47,11 +47,49 @@ struct MarkdownBlocksView: View {
 
     private var isDocument: Bool { style == .document }
 
+    /// A run of consecutive PROSE blocks (paragraphs, headings, lists) is
+    /// rendered as ONE Text — SwiftUI selection cannot cross view borders,
+    /// so per-block Texts limited a drag to a single paragraph ("выделяется
+    /// странными блоками", 2026-07-28). Interactive blocks (code cards,
+    /// tables, artifacts, quotes with their tap-to-copy) stay their own
+    /// views between runs.
+    enum Segment {
+        case prose([Block])
+        case other(Block)
+    }
+
+    static func isProse(_ block: Block) -> Bool {
+        switch block {
+        case .paragraph, .heading, .bullets, .numbered, .tasks: return true
+        default: return false
+        }
+    }
+
+    static func segment(_ blocks: [Block]) -> [Segment] {
+        var segments: [Segment] = []
+        var run: [Block] = []
+        for block in blocks {
+            if isProse(block) {
+                run.append(block)
+            } else {
+                if !run.isEmpty { segments.append(.prose(run)); run = [] }
+                segments.append(.other(block))
+            }
+        }
+        if !run.isEmpty { segments.append(.prose(run)) }
+        return segments
+    }
+
     var body: some View {
-        let blocks = Self.parse(text)
+        let segments = Self.segment(Self.parse(text))
         VStack(alignment: .leading, spacing: isDocument ? 10 : 6) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                render(block)
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .prose(let run):
+                    ProseRunText(run: run, linkColor: linkColor, isDocument: isDocument)
+                case .other(let block):
+                    render(block)
+                }
             }
         }
         .font(isDocument ? .system(size: 14) : nil)
@@ -920,5 +958,147 @@ struct MarkdownBlocksView: View {
             of: #"`([^`]+)`"#,
             with: "<code>$1</code>", options: .regularExpression)
         return s
+    }
+}
+
+/// One `Text` for a whole run of prose blocks. SwiftUI selection cannot
+/// cross view borders, so as long as paragraphs/headings/lists were separate
+/// `Text`s a drag stopped at the edge of the block it started in. Merging a
+/// run into a single AttributedString makes selection flow across the whole
+/// prose stretch; interactive blocks (code cards, tables, artifacts, quotes)
+/// remain their own views between runs.
+///
+/// SwiftUI `Text` ignores paragraph styles, so inter-block spacing is a
+/// spacer line: a zero-width space on a tiny font. The build is cached the
+/// same way `MarkdownText` caches its inline render.
+private struct ProseRunText: View {
+    let run: [MarkdownBlocksView.Block]
+    let linkColor: Color
+    let isDocument: Bool
+    @Environment(\.themePalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.agentFileLinksEnabled) private var agentFileLinks
+
+    private final class Box {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+    private static let cache: NSCache<NSString, Box> = {
+        let cache = NSCache<NSString, Box>()
+        cache.countLimit = 256
+        return cache
+    }()
+
+    var body: some View {
+        Text(cached())
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func cached() -> AttributedString {
+        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(isDocument)|\(Self.runKey(run))" as NSString
+        if let boxed = Self.cache.object(forKey: key) { return boxed.value }
+        let built = build()
+        Self.cache.setObject(Box(built), forKey: key)
+        return built
+    }
+
+    /// Stable cache identity of the run's content.
+    private static func runKey(_ run: [MarkdownBlocksView.Block]) -> String {
+        run.map { block -> String in
+            switch block {
+            case .paragraph(let text): return "p:\(text)"
+            case .heading(let level, let text): return "h\(level):\(text)"
+            case .bullets(let items): return "b:\(items.joined(separator: "\u{1}"))"
+            case .numbered(let items): return "n:\(items.joined(separator: "\u{1}"))"
+            case .tasks(let items):
+                return "t:\(items.map { ($0.checked ? "1" : "0") + $0.text }.joined(separator: "\u{1}"))"
+            default: return ""
+            }
+        }.joined(separator: "\u{2}")
+    }
+
+    private func inline(_ text: String) -> AttributedString {
+        MarkdownText.inlineAttributed(text, linkColor: linkColor,
+                                      palette: palette, agentFileLinks: agentFileLinks)
+    }
+
+    private func build() -> AttributedString {
+        var result = AttributedString()
+        for (index, block) in run.enumerated() {
+            if index > 0 { result += Self.blockGap(isDocument: isDocument) }
+            switch block {
+            case .paragraph(let content):
+                result += inline(content)
+
+            case .heading(let level, let content):
+                var heading = inline(content)
+                // Only ranges without their own font (inline code keeps mono).
+                for r in heading.runs where r.font == nil {
+                    heading[r.range].font = headingFont(level)
+                }
+                result += heading
+
+            case .bullets(let items):
+                for (i, item) in items.enumerated() {
+                    if i > 0 { result += AttributedString("\n") }
+                    var glyph = AttributedString(palette.isGlass ? "•" : palette.bulletGlyph)
+                    glyph.font = .system(size: 13)
+                    if !palette.isGlass {
+                        glyph.foregroundColor = palette.bulletColor ?? palette.ink
+                    }
+                    result += glyph + AttributedString(" ") + inline(item)
+                }
+
+            case .numbered(let items):
+                for (i, item) in items.enumerated() {
+                    if i > 0 { result += AttributedString("\n") }
+                    var number = AttributedString("\(i + 1).")
+                    number.font = .system(size: isDocument ? 13.5 : 12.5)
+                    number.foregroundColor = palette.isGlass ? Color.secondary : palette.secondaryText
+                    result += number + AttributedString(" ") + inline(item)
+                }
+
+            case .tasks(let items):
+                for (i, item) in items.enumerated() {
+                    if i > 0 { result += AttributedString("\n") }
+                    var box = AttributedString(item.checked ? "☑" : "☐")
+                    box.foregroundColor = item.checked
+                        ? (palette.isGlass ? Color.accentColor : palette.accent)
+                        : (palette.isGlass ? Color.secondary : palette.secondaryText)
+                    result += box + AttributedString(" ")
+                    var text = inline(item.text)
+                    if item.checked {
+                        text.foregroundColor = palette.isGlass ? Color.secondary : palette.secondaryText
+                    }
+                    result += text
+                }
+
+            default:
+                break
+            }
+        }
+        return result
+    }
+
+    /// Thin spacer line between blocks (≈ the old VStack spacing).
+    private static func blockGap(isDocument: Bool) -> AttributedString {
+        var gap = AttributedString("\n\u{200B}\n")
+        gap.font = .system(size: isDocument ? 7 : 4)
+        return gap
+    }
+
+    private func headingFont(_ level: Int) -> Font {
+        if isDocument {
+            switch level {
+            case 1: return .system(size: 23, weight: .bold)
+            case 2: return .system(size: 18, weight: .bold)
+            default: return .system(size: 15.5, weight: .semibold)
+            }
+        }
+        switch level {
+        case 1: return .system(size: 16, weight: .bold)
+        case 2: return .system(size: 14.5, weight: .bold)
+        default: return .system(size: 13, weight: .semibold)
+        }
     }
 }

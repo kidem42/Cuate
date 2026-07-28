@@ -513,12 +513,18 @@ struct MarkdownText: View {
     private func cachedRender() -> AttributedString {
         let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(text)" as NSString
         if let boxed = Self.renderCache.object(forKey: key) { return boxed.value }
-        let rendered = renderMarkdown()
+        let rendered = Self.inlineAttributed(text, linkColor: linkColor,
+                                             palette: palette, agentFileLinks: agentFileLinks)
         Self.renderCache.setObject(RenderBox(rendered), forKey: key)
         return rendered
     }
 
-    private func renderMarkdown() -> AttributedString {
+    /// The inline pipeline as a reusable function: markdown parse, URL and
+    /// agent-path linkification, inline-code chips, link styling. Static so
+    /// the merged prose renderer (`ProseRunText` — one Text per run of prose
+    /// blocks, for cross-block selection) shares the exact same look.
+    static func inlineAttributed(_ text: String, linkColor: Color,
+                                 palette: ThemePalette, agentFileLinks: Bool) -> AttributedString {
         // Use inline-only parsing that preserves whitespace and newlines
         var attributed: AttributedString
         if let parsed = try? AttributedString(
@@ -539,7 +545,7 @@ struct MarkdownText: View {
         // bubble ("Файл: /root/map.html" was dead text — e2e 2026-07-27).
         // After the URL pass so a path inside a URL is never double-linked.
         if agentFileLinks {
-            attributed = linkifyAgentPaths(in: attributed)
+            attributed = linkifyAgentPaths(in: attributed, linkColor: linkColor)
         }
 
         // Inline monospace → Telegram-style: sits right in the text body and
@@ -584,7 +590,8 @@ struct MarkdownText: View {
     /// they read as "a thing on disk" (the inline-code look) rather than a
     /// web link. Runs that already carry a link (URLs, code copy-links)
     /// are left alone.
-    private func linkifyAgentPaths(in attributed: AttributedString) -> AttributedString {
+    private static func linkifyAgentPaths(in attributed: AttributedString,
+                                          linkColor: Color) -> AttributedString {
         var result = attributed
         let plain = String(result.characters)
         for path in AgentFilePaths.extract(from: plain) {
@@ -604,7 +611,7 @@ struct MarkdownText: View {
         return result
     }
 
-    private func linkifyRawURLs(in attributed: AttributedString) -> AttributedString {
+    private static func linkifyRawURLs(in attributed: AttributedString) -> AttributedString {
         var result = attributed
         let plain = String(result.characters)
         guard let detector = Self.linkDetector else {
