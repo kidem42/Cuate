@@ -338,7 +338,7 @@ enum Localization {
         "menu.followMouse": [.english: "Open on Screen with Cursor", .spanish: "Abrir en la pantalla con el cursor", .russian: "Открывать на экране с курсором"],
         "menu.appearance": [.english: "Appearance", .spanish: "Apariencia", .russian: "Оформление"],
         "menu.settings": [.english: "Settings…", .spanish: "Ajustes…", .russian: "Настройки…"],
-        "menu.quit": [.english: "Quit AI Spotlight", .spanish: "Salir de AI Spotlight", .russian: "Выйти из AI Spotlight"],
+        "menu.quit": [.english: "Quit Cuate", .spanish: "Salir de Cuate", .russian: "Выйти из Cuate"],
 
         // MARK: Chat panel
         "panel.typeMessage": [.english: "Type your message...", .spanish: "Escribe tu mensaje...", .russian: "Введите сообщение..."],

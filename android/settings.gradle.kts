@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AISpotlight"
+rootProject.name = "Cuate"
 include(":app")
