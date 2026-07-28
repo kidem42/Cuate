@@ -17,7 +17,7 @@ A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floatin
 - **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default. Detection is statistical (letter trigrams + word frequencies + the system dictionary), so names, word forms and typos convert too — and a curated tech-terms list handles acronyms the statistics can't (`РЕЬД` → `HTML`, and css/json/png/…)
 - **Image tools addon** — process an attached image in one click. **Background removal** and **upscale** run **on-device for free** by default (Apple Vision / Core Image — no key), with higher-quality cloud models optional (one fal.ai key): upscale (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), background removal (Bria RMBG-2.0 / BiRefNet v2). **Object removal** uses fal.ai (Bria Eraser / Object Removal) via an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; on by default. Transparency is handled end-to-end: transparent inputs are flattened for alpha-blind cloud models (no original background "resurrecting" from under the mask), background-removal results get leftover RGB under transparency scrubbed (nothing of the source leaks in the file), and upscaling a cutout restores its transparency locally from the original alpha mask
 - **Calendar & Reminders addon** — the assistant reads your schedule and creates events and reminders through the macOS Calendar (EventKit): iCloud, Google, Exchange — whatever is already synced into the system, no OAuth and no extra keys. Per-calendar checkboxes decide what the assistant can see (unchecked calendars are invisible to it entirely); data leaves the device only as part of a schedule-related question to your chosen provider. Off by default (Settings → General)
-- **Hermes Agent addon** — connect a self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) (Nous Research) as a role in the chat switcher, right next to your prompt presets. The agent is a black box with its own memory, tools and model keys; Cuate becomes one more surface of the same agent — what you started in Telegram or the CLI continues here and vice versa. Each gateway **session opens as its own conversation** (own history, own streaming isolation), with a management sidebar on the left: sessions (create / rename / pin / color / delete, unread badges), the agent's skills and toolsets, and its runtime passport (model + the host where its commands actually execute). Slash-typing `/` autocompletes the agent's **skills**; a composer control switches the session's **model and reasoning effort**; tool runs show live in the status pill and persist as a collapsible step journal. Files the agent creates arrive as **artifact cards with in-app preview** (HTML/Markdown) or Finder-revealable chips, with a header folder listing every file of the chat. System **notifications** cover finished turns — including runs that completed while the app was closed or the task came from another surface (background gateway watch). Mirror history keeps the gateway as the source of truth with catch-up sync and deduplication. Setup is two copy-paste commands (local or over SSH, instructions built into Settings); the token lives in the Keychain and the endpoint works over loopback, LAN or Tailscale. The app's own image tools and OCR **stay out of agent chats by default** — the agent owns its sessions end-to-end; an opt-in toggle (Settings → Hermes Agent → App features) brings the Upscale / Remove Background / Remove Objects / Extract Text actions into agent sessions too, running on the app's own models and keys, with results kept local to Cuate (invisible to the agent's other surfaces). Off by default (Settings → General)
+- **Hermes Agent addon** — connect a self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) (Nous Research) as a role in the chat switcher, right next to your prompt presets. The agent is a black box with its own memory, tools and model keys; Cuate becomes one more surface of the same agent — what you started in Telegram or the CLI continues here and vice versa. Each gateway **session opens as its own conversation** (own history, own streaming isolation), with a management sidebar on the left: sessions (create / rename / pin / color / delete, unread badges), the agent's skills and toolsets, and its runtime passport (model + the host where its commands actually execute). Slash-typing `/` autocompletes the agent's **skills**; a composer control switches the session's **model and reasoning effort**; tool runs show live in the status pill and persist as a collapsible step journal. Files travel **both ways**: attachments (and pasted images) are couriered onto the agent's host through the dashboard files API, so what you attach on one device is real on every surface — and files the agent creates come back the same way: HTML/Markdown silently auto-download into **artifact cards with in-app preview** (refreshed when a newer reply mentions the same path — the agent's edits show up), other files download on click (to ~/Downloads only on explicit action), file paths are clickable right in the reply text, and a header folder lists every file of the chat. On a local gateway the same chips simply open Finder. System **notifications** cover finished turns — including runs that completed while the app was closed or the task came from another surface (background gateway watch). Mirror history keeps the gateway as the source of truth with catch-up sync and deduplication. Setup is two copy-paste commands (local or over SSH, instructions built into Settings); the token lives in the Keychain and the endpoint works over loopback, LAN or Tailscale. The app's own image tools and OCR **stay out of agent chats by default** — the agent owns its sessions end-to-end; an opt-in toggle (Settings → Hermes Agent → App features) brings the Upscale / Remove Background / Remove Objects / Extract Text actions into agent sessions too, running on the app's own models and keys, with results kept local to Cuate (invisible to the agent's other surfaces). Off by default (Settings → General)
 - **World Time addon** — a timezone comparison grid in a floating glass panel, summoned from the menu bar or with ⌥⇧T: cities as rows, the home city's 24 hours as aligned columns (one vertical slice = one moment everywhere), night/working-hours coloring (**the working-hours band can be switched off** entirely — the grid then reads as plain day and night), a date strip with calendar picker (DST-aware), drag to reorder rows, right-click or double-click to change the home city; every IANA zone **plus ~240 major cities that are not zone names** (San Francisco, Munich, Osaka, Boston…), searchable in **English, Russian and Spanish at once whatever the interface language** — type ↓/↑ and Enter to pick without the mouse. Cities that share a zone stay separate rows under their own names, free and fully on-device. With the Calendar addon enabled the panel also shows a **busy lane** — your day's events as exact colored intervals above the grid — and clicking a half-hour slot in the selected column creates a **30-minute event right there**: the microphone starts immediately (say the title) or type it, and the event lands in your default calendar with an alert
 - **Attach images** — up to **5 images per message**, arriving by any mix of paths: paperclip button (multi-select), ⌘V paste (files, screenshots, browser images), drag & drop, screenshot hotkeys; HEIC/TIFF converted automatically. Staged images sit in a compact card above the input: a **single image keeps the full toolbar** (image tools + Extract Text), **several collapse to thumbnails** with per-image remove — the whole batch goes to the model in one message. Models without vision (e.g. DeepSeek) get each image OCR'd into text automatically. An image can be sent with no text at all — the active preset's prompt drives the handling
 - **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
@@ -140,6 +140,10 @@ echo "HERMES_DASHBOARD_SESSION_TOKEN=$DASHTOKEN" >> ~/.hermes/.env
 Then in the apps (Settings → Hermes Agent): gateway `https://agent.<domain>` +
 `API_SERVER_KEY`; dashboard `https://dash.<domain>` + `DASHTOKEN`.
 
+The same dashboard token also powers the **reverse courier**
+(`/api/files/download`): files the agent creates on the VPS flow back into the
+apps — preview cards, downloads, inline images — with no extra server setup.
+
 ## Building from source
 
 Requirements: Xcode 26+ (for the macOS 26 SDK); the app itself runs on macOS 14+.
@@ -184,15 +188,31 @@ scripts/
 
 ## License
 
-Cuate is licensed under the **[GNU AGPL-3.0](LICENSE)** © 2026 Pavel Kravets.
+Cuate is free and open source, licensed under the **[GNU AGPL-3.0](LICENSE)**
+© 2026 Pavel Kravets.
 
-You may use, study, modify and share it — **including commercially — only if** any
-distributed or network-deployed version is also released as open source under the
-AGPL-3.0, with full corresponding source. This keeps the app and every
-improvement to it open.
+What this means in practice:
 
-- **Contributions** are welcome under the [Contributor License Agreement](CLA.md);
-  see [CONTRIBUTING](CONTRIBUTING.md).
-- **Commercial / proprietary license** — to use Cuate without the AGPL's
-  source-disclosure obligations, a commercial license is available from the
-  author: kravec42@gmail.com.
+- **Use, study, modify, fork** — freely, for any purpose.
+- **Distribute or deploy your version** (including as a network service) — only
+  if it is also released as open source under the AGPL-3.0, with full
+  corresponding source. This keeps the app and every improvement to it open.
+- **Closed-source / commercial license** — to ship Cuate or a derivative
+  without the AGPL's source-disclosure obligations, a separate commercial
+  license is available from the author:
+  **[kravec42@gmail.com](mailto:kravec42@gmail.com)**.
+
+The project follows the standard **dual-licensing** model: one codebase, AGPL
+for the community, commercial terms for everything else. Official builds
+(GitHub Releases, and app stores in the future) are distributed by the author
+under the author's own terms and may include commercial features on top of this
+source.
+
+**Trademark.** The name **"Cuate"** and the app icon are trademarks of Pavel
+Kravets and are **not** covered by the AGPL. Forks and modified versions must
+use a different name and icon; unmodified builds of this repository that
+clearly link back here may keep the name.
+
+**Contributions** are welcome under the [Contributor License Agreement](CLA.md) —
+see [CONTRIBUTING](CONTRIBUTING.md) for how to get started. Bundled third-party
+components are listed in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES.md).

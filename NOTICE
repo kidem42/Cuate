@@ -1,0 +1,20 @@
+Cuate — a Spotlight-style AI assistant for macOS (with an Android companion app)
+Copyright (C) 2026 Pavel Kravets <kravec42@gmail.com>
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details.
+
+A commercial license without the AGPL's source-disclosure obligations is
+available from the copyright holder: kravec42@gmail.com.
+
+The name "Cuate" and the app icon are trademarks of Pavel Kravets and are not
+covered by the AGPL; see the Trademark section in README.md.
+
+Bundled third-party components are listed in THIRD-PARTY-NOTICES.md.

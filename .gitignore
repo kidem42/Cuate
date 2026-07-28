@@ -106,3 +106,6 @@ xcshareddata/
 Cuate_Debug.zip
 *.dmg
 .claude/
+
+# Internal docs — never published
+private/

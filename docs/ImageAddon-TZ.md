@@ -128,7 +128,7 @@ struct ImageResult { let image: Data; let mimeType: String; let costUSD: Double?
 > несколько сворачиваются в ряд миниатюр с по-штучным удалением и уходят в модель
 > одним сообщением (vision-провайдеры — content parts, non-vision — OCR каждого).
 > В агентских беседах (Hermes) тулбар и OCR дополнительно за опт-ином
-> «Функции приложения» (см. AGENT-ADDONS-NOTES.md §12).
+> «Функции приложения» (см. private/AGENT-ADDONS-NOTES.md §12, внутренние заметки).
 
 ### 4.2. Действия над изображением
 
