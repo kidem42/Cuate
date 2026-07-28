@@ -14,6 +14,10 @@ import SwiftUI
 /// theme defines them (Synthwave, Sakura, Día, …), otherwise the accent
 /// (system tint for glass).
 struct ThinkingEqualizer: View {
+    /// Freezes the wave (and its 30 fps invalidation stream). The transcript's
+    /// backfill spinner lives at the TOP of every long chat — without this it
+    /// kept ticking the whole session while parked far off-screen.
+    var paused: Bool = false
     @Environment(\.themePalette) private var palette
 
     private let barCount = 5
@@ -23,7 +27,7 @@ struct ThinkingEqualizer: View {
     private let maxHeight: CGFloat = 15
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { context in
             let now = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 3) {
                 ForEach(0..<barCount, id: \.self) { index in

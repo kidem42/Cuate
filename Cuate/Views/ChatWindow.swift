@@ -251,6 +251,21 @@ struct ChatWindow: View {
         return (stripped, true)
     }
     @State private var visibleCount = ChatWindow.historyPageSize
+    /// Newest rows currently NOT rendered — reading deep history slides the
+    /// window UP the conversation and drops rows off its bottom edge, so the
+    /// count of live hosting views stays capped. Non-zero only while the
+    /// user is far from the newest message; every "back to latest" path
+    /// (jump button, summon, own send, conversation switch) resets it to 0.
+    ///
+    /// Why a cap at all: rows are real NSViews, and AppKit walks the WHOLE
+    /// view tree every display cycle while scrolling (tracking areas,
+    /// layout). Profiled 2026-07-28: an uncapped history scroll spent ~8% of
+    /// the main thread in `updateTrackingAreasWithInvalidCursorRects` alone,
+    /// growing with every backfilled page.
+    @State private var bottomDropCount = 0
+    /// Ceiling for live transcript rows (window slides beyond it). ~10
+    /// viewports of typical rows — deep enough that the slide is invisible.
+    private static let maxLiveRows = 120
     /// Guards against cascading backfills while one is restoring the scroll.
     @State private var isBackfilling = false
 
@@ -271,9 +286,16 @@ struct ChatWindow: View {
         return stored > 0 ? stored : 576 // default 600 pt panel minus padding
     }()
 
-    /// The rendered slice of the conversation (newest `visibleCount`).
+    /// The rendered slice of the conversation: `visibleCount` rows ending
+    /// `bottomDropCount` rows before the newest message. Both edges are
+    /// anchored to the END of the array, so store-side prepends (older pages
+    /// loading in) never shift the window's content, and appends slide it by
+    /// one row — which the engine's anchor compensation absorbs.
     private var visibleMessages: ArraySlice<ChatMessage> {
-        chatStore.messages.suffix(visibleCount)
+        let messages = chatStore.messages
+        let end = max(0, messages.count - bottomDropCount)
+        let start = max(0, end - visibleCount)
+        return messages[start..<end]
     }
 
     /// Resolved theme tokens for the active theme + color scheme. `current`
@@ -333,12 +355,19 @@ struct ChatWindow: View {
             })
         }
 
-        if chatStore.messages.count > visibleCount || chatStore.hasOlderMessages {
-            items.append(TranscriptItem(id: "backfill-spinner", revision: baseRevision) {
+        if chatStore.messages.count - bottomDropCount > visibleCount || chatStore.hasOlderMessages {
+            // Waves only while the user is actually up reading history —
+            // parked at the bottom it is far off-screen, and an always-on
+            // 30 fps TimelineView kept invalidating for nothing.
+            var hasher = Hasher()
+            hasher.combine(baseRevision)
+            hasher.combine(isNearBottom)
+            let paused = isNearBottom
+            items.append(TranscriptItem(id: "backfill-spinner", revision: hasher.finalize()) {
                 AnyView(
                     HStack {
                         Spacer()
-                        ThinkingEqualizer()
+                        ThinkingEqualizer(paused: paused)
                             .scaleEffect(0.8)
                         Spacer()
                     }
@@ -353,7 +382,27 @@ struct ChatWindow: View {
                                      maxBubble: maxBubble, baseRevision: baseRevision))
         }
 
-        if liveStreamOnScreen, let stub = liveReplyStub {
+        // Reading deep history (newest rows dropped off the window's bottom
+        // edge): a bottom spinner marks the ongoing restore, and the rows
+        // that belong AFTER the newest message (live stream, thinking pill)
+        // stay out — they'd otherwise render after some mid-history row.
+        // Approval/confirm cards still join below: they demand action, and
+        // at the fake bottom is exactly where the user is looking.
+        if bottomDropCount > 0 {
+            items.append(TranscriptItem(id: "backfill-spinner-bottom", revision: baseRevision) {
+                AnyView(
+                    HStack {
+                        Spacer()
+                        ThinkingEqualizer()
+                            .scaleEffect(0.8)
+                        Spacer()
+                    }
+                    .frame(width: rowWidth, height: 24)
+                )
+            })
+        }
+
+        if bottomDropCount == 0, liveStreamOnScreen, let stub = liveReplyStub {
             // Constant revision on purpose: the row's CONTENT updates itself
             // through the model — the engine never rebuilds it mid-stream.
             let live = liveReply
@@ -368,7 +417,7 @@ struct ChatWindow: View {
             })
         }
 
-        if showThinkingIndicator {
+        if bottomDropCount == 0, showThinkingIndicator {
             var hasher = Hasher()
             hasher.combine(baseRevision)
             hasher.combine(chatStore.statusText)
@@ -625,13 +674,14 @@ struct ChatWindow: View {
                         controller: transcriptController,
                         onNearBottomChange: { isNearBottom = $0 },
                         onViewportWidthChange: { updateContainerWidth($0) },
-                        onNeedOlder: { loadOlderMessages() }
+                        onNeedOlder: { loadOlderMessages() },
+                        onNeedNewer: { restoreNewerRows() }
                     )
 
                     // Floating "jump to latest" button (Telegram-style)
                     if !isNearBottom {
                         Button {
-                            transcriptController.scrollToBottom(animated: true)
+                            jumpToLatest(animated: true)
                         } label: {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 13, weight: .semibold))
@@ -653,6 +703,7 @@ struct ChatWindow: View {
                         // switch): render only the newest page — the engine
                         // lays it out already pinned to the newest message.
                         visibleCount = Self.historyPageSize
+                        bottomDropCount = 0
                         isBackfilling = false
                     } else if chatStore.messages.last?.isUser == true {
                         // Own messages always jump down (and re-arm
@@ -660,7 +711,7 @@ struct ChatWindow: View {
                         // Incoming rows never yank the view: the engine's
                         // pin state decides, and a backfill PREPEND is
                         // re-anchored by the engine itself.
-                        transcriptController.scrollToBottom(animated: true)
+                        jumpToLatest(animated: true)
                     }
                 }
                 .onChange(of: pendingLocalStart != nil) { _, visible in
@@ -668,7 +719,7 @@ struct ChatWindow: View {
                     // change, so no other trigger fires — and it answers
                     // the user's own send, so it always comes into view.
                     if visible {
-                        transcriptController.scrollToBottom(animated: true)
+                        jumpToLatest(animated: true)
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
@@ -676,10 +727,7 @@ struct ChatWindow: View {
                     // history window back to one page (reading history
                     // widens it and nothing else narrows it again; between
                     // summons there is no viewport to disturb).
-                    if visibleCount > Self.historyPageSize {
-                        visibleCount = Self.historyPageSize
-                    }
-                    transcriptController.scrollToBottom(animated: false)
+                    jumpToLatest(animated: false)
                 }
                 .onChange(of: chatStore.conversation.storageKey) {
                     // Returning to a chat whose reply is still in the
@@ -1764,19 +1812,110 @@ struct ChatWindow: View {
     /// window loaded).
     private func loadOlderMessages() {
         guard !isBackfilling else { return }
-        if chatStore.messages.count > visibleCount {
+        if chatStore.messages.count - bottomDropCount > visibleCount {
             isBackfilling = true
-            visibleCount = min(visibleCount + Self.historyPageSize, chatStore.messages.count)
-            DispatchQueue.main.async { isBackfilling = false }
+            growVisibleWindow(by: Self.historyPageSize)
         } else if chatStore.hasOlderMessages {
             isBackfilling = true
             chatStore.loadOlderPage(Self.historyPageSize) { added in
                 if added > 0 {
-                    visibleCount = min(visibleCount + added, chatStore.messages.count)
+                    growVisibleWindow(by: added)
+                } else {
+                    DispatchQueue.main.async { isBackfilling = false }
                 }
-                DispatchQueue.main.async { isBackfilling = false }
             }
         }
+    }
+
+    /// Rows a single trickle step prepends (see `growVisibleWindow`).
+    private static let backfillChunk = 5
+
+    /// Widens the window a few rows per runloop tick instead of a whole page
+    /// per frame. A 30-row prepend meant 30 fresh hosting views (markdown +
+    /// layout each) plus a full-stack Auto Layout pass inside ONE frame —
+    /// repeatedly while the user kept scrolling up, which read as the
+    /// transcript freezing in agent chats (their rows are the heavy ones).
+    /// The engine re-anchors every prepend, so the trickle is invisible;
+    /// `isBackfilling` stays up until the target lands, keeping `onNeedOlder`
+    /// from stacking a second page mid-trickle. A conversation switch (or a
+    /// summon reset) aborts silently — the new chat starts its own window.
+    ///
+    /// Past `maxLiveRows` the window SLIDES instead of growing: every row
+    /// gained on top retires one off the bottom (`bottomDropCount`), so the
+    /// live-view population stays bounded no matter how deep the scroll.
+    /// Bottom removals sit below the viewport — nothing the user sees moves.
+    private func growVisibleWindow(by total: Int) {
+        let conversation = chatStore.conversation.storageKey
+        var remaining = total
+        var expectedVisible = visibleCount
+        var expectedDrop = bottomDropCount
+        func step() {
+            // A conversation switch or a summon reset rewrote the window out
+            // from under the trickle — the reset wins, the trickle stops.
+            guard chatStore.conversation.storageKey == conversation,
+                  visibleCount == expectedVisible,
+                  bottomDropCount == expectedDrop else {
+                isBackfilling = false
+                return
+            }
+            let hiddenAbove = chatStore.messages.count - bottomDropCount - visibleCount
+            let add = min(Self.backfillChunk, remaining, max(0, hiddenAbove))
+            guard add > 0 else {
+                isBackfilling = false
+                return
+            }
+            visibleCount += add
+            if visibleCount > Self.maxLiveRows {
+                bottomDropCount += visibleCount - Self.maxLiveRows
+                visibleCount = Self.maxLiveRows
+            }
+            remaining -= add
+            expectedVisible = visibleCount
+            expectedDrop = bottomDropCount
+            DispatchQueue.main.async { step() }
+        }
+        step()
+    }
+
+    /// Downward counterpart of `loadOlderMessages`: nearing the window's
+    /// BOTTOM edge while newest rows are dropped slides the window back down
+    /// one page (same trickle, same cap — rows re-enter at the bottom, the
+    /// oldest retire off the top). No store round-trip: the dropped rows are
+    /// still in `chatStore.messages`.
+    private func restoreNewerRows() {
+        guard !isBackfilling, bottomDropCount > 0 else { return }
+        isBackfilling = true
+        let conversation = chatStore.conversation.storageKey
+        var remaining = Self.historyPageSize
+        var expectedDrop = bottomDropCount
+        func step() {
+            guard chatStore.conversation.storageKey == conversation,
+                  bottomDropCount == expectedDrop else {
+                isBackfilling = false
+                return
+            }
+            let restore = min(Self.backfillChunk, remaining, bottomDropCount)
+            guard restore > 0 else {
+                isBackfilling = false
+                return
+            }
+            bottomDropCount -= restore
+            remaining -= restore
+            expectedDrop = bottomDropCount
+            DispatchQueue.main.async { step() }
+        }
+        step()
+    }
+
+    /// Back to the newest message from ANY depth: rebuilds the window as the
+    /// plain newest page (sliding hundreds of rows through the cap would be
+    /// pure churn) and pins to the bottom.
+    private func jumpToLatest(animated: Bool) {
+        if bottomDropCount > 0 || visibleCount > Self.historyPageSize {
+            bottomDropCount = 0
+            visibleCount = Self.historyPageSize
+        }
+        transcriptController.scrollToBottom(animated: animated)
     }
 
     /// Stores the probed viewport width; persisted so the next launch's first

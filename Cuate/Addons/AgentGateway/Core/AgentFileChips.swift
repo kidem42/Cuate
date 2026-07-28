@@ -7,14 +7,32 @@ import AppKit
 /// opens it; with a remote gateway Hermes serves no file-download API, so
 /// the chip copies the path and says where the file lives.
 enum AgentFilePaths {
+    // /root, /srv, /mnt: a remote gateway commonly runs as root on a
+    // VPS — its files live under /root and never matched (e2e
+    // 2026-07-27: "/root/toluca_map.html" rendered as plain prose).
+    // Compiled ONCE — extract() runs in row bodies, and re-compiling the
+    // regex per call was measurable during history backfill.
+    private static let pathRegex = try? NSRegularExpression(
+        pattern: #"(?:^|[\s`'"(\[])((?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)/[A-Za-z0-9._\-/~]+)"#)
+
+    /// Memoized extraction — the result depends only on the text, and the
+    /// same reply is re-scanned on every row rebuild.
+    private final class PathsBox {
+        let paths: [String]
+        init(_ paths: [String]) { self.paths = paths }
+    }
+    private static let extractCache: NSCache<NSString, PathsBox> = {
+        let cache = NSCache<NSString, PathsBox>()
+        cache.countLimit = 512
+        return cache
+    }()
+
     /// Absolute (or ~-based) paths mentioned in the reply. Conservative:
     /// only common root prefixes, punctuation/quotes trimmed, capped.
     static func extract(from text: String) -> [String] {
-        // /root, /srv, /mnt: a remote gateway commonly runs as root on a
-        // VPS — its files live under /root and never matched (e2e
-        // 2026-07-27: "/root/toluca_map.html" rendered as plain prose).
-        let pattern = #"(?:^|[\s`'"(\[])((?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)/[A-Za-z0-9._\-/~]+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let cacheKey = text as NSString
+        if let cached = extractCache.object(forKey: cacheKey) { return cached.paths }
+        guard let regex = pathRegex else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         var seen = Set<String>()
         var result: [String] = []
@@ -29,6 +47,7 @@ enum AgentFilePaths {
             result.append(path)
             if result.count >= 5 { break }
         }
+        extractCache.setObject(PathsBox(result), forKey: cacheKey)
         return result
     }
 

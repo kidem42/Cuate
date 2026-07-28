@@ -16,12 +16,14 @@ struct ChatTranscriptView: NSViewRepresentable {
     var onContentFitsChange: (Bool) -> Void = { _ in }
     var onViewportWidthChange: (CGFloat) -> Void = { _ in }
     var onNeedOlder: () -> Void = {}
+    var onNeedNewer: () -> Void = {}
 
     final class Coordinator {
         var onNearBottomChange: (Bool) -> Void = { _ in }
         var onContentFitsChange: (Bool) -> Void = { _ in }
         var onViewportWidthChange: (CGFloat) -> Void = { _ in }
         var onNeedOlder: () -> Void = {}
+        var onNeedNewer: () -> Void = {}
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -45,6 +47,9 @@ struct ChatTranscriptView: NSViewRepresentable {
         engine.onNeedOlder = {
             DispatchQueue.main.async { coordinator.onNeedOlder() }
         }
+        engine.onNeedNewer = {
+            DispatchQueue.main.async { coordinator.onNeedNewer() }
+        }
         return engine
     }
 
@@ -55,6 +60,7 @@ struct ChatTranscriptView: NSViewRepresentable {
         coordinator.onContentFitsChange = onContentFitsChange
         coordinator.onViewportWidthChange = onViewportWidthChange
         coordinator.onNeedOlder = onNeedOlder
+        coordinator.onNeedNewer = onNeedNewer
         engine.apply(items: items, resetToken: resetToken)
     }
 }

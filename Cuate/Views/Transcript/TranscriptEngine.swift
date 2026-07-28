@@ -72,7 +72,9 @@ final class TranscriptEngineView: NSScrollView {
     private static let unpinDistance: CGFloat = 44
     private static let repinDistance: CGFloat = 8
     /// Scrolling within this distance of the top asks for older history.
-    private static let backfillThreshold: CGFloat = 300
+    /// Generous on purpose: the page should be trickling in BEFORE the user
+    /// reaches the top, so the prepend never lands under their thumb.
+    private static let backfillThreshold: CGFloat = 900
 
     // MARK: Callbacks (wired by the representable)
 
@@ -80,6 +82,12 @@ final class TranscriptEngineView: NSScrollView {
     var onContentFitsChange: ((Bool) -> Void)?
     var onViewportWidthChange: ((CGFloat) -> Void)?
     var onNeedOlder: (() -> Void)?
+    /// Nearing the BOTTOM edge of a window whose newest rows were dropped
+    /// (capped deep-history reading) asks for them back. Fires whenever the
+    /// viewport is close to the bottom — the owner no-ops when nothing is
+    /// dropped, so there is no pin guard here (the drain must run even as
+    /// momentum carries the user onto the temporary bottom).
+    var onNeedNewer: (() -> Void)?
 
     // MARK: State
 
@@ -111,6 +119,7 @@ final class TranscriptEngineView: NSScrollView {
     private var lastReportedFits = true
     private var lastReportedWidth: CGFloat = 0
     private var lastBackfillRequest = Date.distantPast
+    private var lastRestoreRequest = Date.distantPast
     /// Distinguishes viewport resizes from user scrolls in
     /// `clipBoundsChanged` — only origin moves classify the pin.
     private var lastViewportSize = NSSize.zero
@@ -417,11 +426,24 @@ final class TranscriptEngineView: NSScrollView {
             reportNearBottom(true)
         }
 
-        if contentView.bounds.origin.y < Self.backfillThreshold,
+        // Only while actually reading history: at the bottom the wide
+        // threshold would otherwise start paging the moment a short chat
+        // opens, loading rows nobody asked to see.
+        if !isPinnedToBottom,
+           contentView.bounds.origin.y < Self.backfillThreshold,
            documentHeight > viewportHeight,
            Date().timeIntervalSince(lastBackfillRequest) > 0.2 {
             lastBackfillRequest = Date()
             onNeedOlder?()
+        }
+
+        // Symmetric bottom trigger for the capped window (dropped newest
+        // rows re-enter as the user comes back down).
+        if distanceFromBottom < Self.backfillThreshold,
+           documentHeight > viewportHeight,
+           Date().timeIntervalSince(lastRestoreRequest) > 0.2 {
+            lastRestoreRequest = Date()
+            onNeedNewer?()
         }
     }
 

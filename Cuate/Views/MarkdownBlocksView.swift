@@ -217,7 +217,32 @@ struct MarkdownBlocksView: View {
         /// Long logs render folded (the tail); the user can unfold.
         @State private var showFullLog = false
         @Environment(\.themePalette) private var palette
+        @Environment(\.colorScheme) private var colorScheme
         @ObservedObject private var settings = AppSettings.shared
+
+        /// Memoizes the ANSI/diff rendering. The character-by-character SGR
+        /// walk over a pasted terminal dump is the expensive part of creating
+        /// an agent row — and it re-ran on every body evaluation. The output
+        /// depends only on the content and the theme context, so it caches by
+        /// that key (same idiom as `MarkdownText.renderCache`).
+        private final class AttrBox {
+            let value: AttributedString
+            init(_ value: AttributedString) { self.value = value }
+        }
+        private static let terminalRenderCache: NSCache<NSString, AttrBox> = {
+            let cache = NSCache<NSString, AttrBox>()
+            cache.countLimit = 256
+            return cache
+        }()
+
+        private func cachedTerminalRender(_ kind: String,
+                                          render: () -> AttributedString) -> AttributedString {
+            let key = "\(kind)|\(palette.themeID)|\(colorScheme)|\(displayContent)" as NSString
+            if let boxed = Self.terminalRenderCache.object(forKey: key) { return boxed.value }
+            let rendered = render()
+            Self.terminalRenderCache.setObject(AttrBox(rendered), forKey: key)
+            return rendered
+        }
 
         /// A single message can carry a 20k-line log — rendering it whole
         /// hangs the panel (notes §7.2 п.4). Above this the block folds.
@@ -287,10 +312,14 @@ struct MarkdownBlocksView: View {
         @ViewBuilder
         private var codeText: some View {
             if AgentTerminalText.isUnifiedDiff(content: displayContent, language: language) {
-                Text(AgentTerminalText.diffAttributed(displayContent, palette: ansiPalette, baseColor: baseTextColor))
+                Text(cachedTerminalRender("diff") {
+                    AgentTerminalText.diffAttributed(displayContent, palette: ansiPalette, baseColor: baseTextColor)
+                })
                     .font(.system(size: 11.5, design: .monospaced))
             } else if AgentTerminalText.containsANSI(displayContent) {
-                Text(AgentTerminalText.ansiAttributed(displayContent, palette: ansiPalette, baseColor: baseTextColor))
+                Text(cachedTerminalRender("ansi") {
+                    AgentTerminalText.ansiAttributed(displayContent, palette: ansiPalette, baseColor: baseTextColor)
+                })
                     .font(.system(size: 11.5, design: .monospaced))
             } else {
                 Text(displayContent)

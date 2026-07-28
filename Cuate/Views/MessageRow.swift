@@ -416,7 +416,17 @@ struct CopyableBubble: ViewModifier {
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(justCopied ? .green : .secondary)
                         .frame(width: 20, height: 20)
-                        .background(.ultraThinMaterial, in: Circle())
+                        // Material ONLY while shown: the hidden (opacity 0)
+                        // button used to keep a live backdrop-blur layer on
+                        // EVERY bubble, and each one taxes the compositor on
+                        // every scrolled frame (WindowServer at 70–90% while
+                        // scrolling — profiled 2026-07-28). The swap keeps
+                        // the button's identity, so no tracking-area rebuild
+                        // and none of the old hover flicker.
+                        .background(isHovering || justCopied
+                                    ? AnyShapeStyle(.ultraThinMaterial)
+                                    : AnyShapeStyle(Color.clear),
+                                    in: Circle())
                         .overlay(Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
                 }
                 .buttonStyle(PlainButtonStyle())
