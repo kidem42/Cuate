@@ -108,6 +108,16 @@ final class TranscriptEngineView: NSScrollView {
 
     private let stack = FlippedStackView()
     private var rows: [Row] = []
+    /// Telegram-style row recycling: rows dropped by the sliding window are
+    /// PARKED here instead of discarded — scrolling back re-attaches the
+    /// same hosting view, skipping the SwiftUI re-create + platform-view
+    /// layout that dominated the scroll profile (2026-07-28: ~13% of the
+    /// main thread in `NSHostingView.layout` re-building rows whose content
+    /// had not changed). LRU-capped; a stale revision on the way back in
+    /// just swaps the rootView, same as any row update.
+    private var retiredRows: [String: Row] = [:]
+    private var retiredOrder: [String] = []
+    private static let retiredCap = 120
     /// Conversation identity of the current row set. When it changes the
     /// whole transcript is replaced and the pin re-engages (a freshly opened
     /// conversation always lands on its newest message).
@@ -222,8 +232,10 @@ final class TranscriptEngineView: NSScrollView {
         }
 
         if isReset {
-            for row in rows { stack.removeArrangedSubview(row.host); row.host.removeFromSuperview() }
-            rows = items.map { makeRow($0) }
+            for row in rows { retire(row) }
+            // Coming BACK to a recently viewed conversation reuses its
+            // parked rows (message ids are stable across the switch).
+            rows = items.map { dequeueRetired($0) ?? makeRow($0) }
             for row in rows { stack.addArrangedSubview(row.host) }
             isPinnedToBottom = true
         } else {
@@ -264,11 +276,17 @@ final class TranscriptEngineView: NSScrollView {
             let itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
             for change in diff.insertions {
                 if case let .insert(offset, id, _) = change {
-                    let row = recycled[id] ?? makeRow(itemsByID[id]!)
+                    let row = recycled.removeValue(forKey: id)
+                        ?? dequeueRetired(itemsByID[id]!)
+                        ?? makeRow(itemsByID[id]!)
                     rows.insert(row, at: offset)
                     stack.insertArrangedSubview(row.host, at: offset)
                 }
             }
+            // Rows that actually left the window park in the retirement
+            // pool — the sliding window drops exactly the rows most likely
+            // to scroll right back in.
+            for (_, row) in recycled { retire(row) }
         }
 
         // Revision pass: swap rootView only where content actually changed.
@@ -283,6 +301,31 @@ final class TranscriptEngineView: NSScrollView {
         host.translatesAutoresizingMaskIntoConstraints = false
         host.sizingOptions = [.intrinsicContentSize]
         return Row(id: item.id, revision: item.revision, host: host)
+    }
+
+    /// Parks a detached row for likely reuse (LRU-capped).
+    private func retire(_ row: Row) {
+        stack.removeArrangedSubview(row.host)
+        row.host.removeFromSuperview()
+        if retiredRows.updateValue(row, forKey: row.id) == nil {
+            retiredOrder.append(row.id)
+        }
+        while retiredOrder.count > Self.retiredCap {
+            retiredRows.removeValue(forKey: retiredOrder.removeFirst())
+        }
+    }
+
+    /// Takes a parked row back out; a changed revision (theme switch, width
+    /// change, edited content) swaps the rootView on the way — same cost as
+    /// any row update, still far cheaper than a fresh hosting view.
+    private func dequeueRetired(_ item: TranscriptItem) -> Row? {
+        guard var row = retiredRows.removeValue(forKey: item.id) else { return nil }
+        retiredOrder.removeAll { $0 == item.id }
+        if row.revision != item.revision {
+            row.revision = item.revision
+            row.host.rootView = item.content()
+        }
+        return row
     }
 
     // MARK: Scrolling

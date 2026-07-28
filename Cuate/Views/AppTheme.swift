@@ -654,6 +654,14 @@ struct PatternFadeMask {
     var fadeHeight: CGFloat
 }
 
+/// Perf diagnostics (`defaults write com.getcuate.Cuate CuateDebugNoGlassNode
+/// -bool YES`): removes the resident Liquid Glass node entirely on macOS 26,
+/// so a themed (non-glass) panel renders through the plain backdrop path with
+/// NO glass in the layer tree. Read ONCE per launch — the branch below never
+/// flips at runtime, so the glass-teardown backdrop bug cannot trigger. Only
+/// meaningful for themed panels; with the glass theme it just drops the glass.
+private let debugNoGlassNode = UserDefaults.standard.bool(forKey: "CuateDebugNoGlassNode")
+
 extension View {
     /// The panel's backing surface. `current` keeps the existing Liquid Glass;
     /// every other theme fills the panel with its gradient (plus signature
@@ -672,7 +680,7 @@ extension View {
     func themedPanelSurface(_ palette: ThemePalette, cornerRadius: CGFloat,
                             decorations: Bool = true,
                             patternMask: PatternFadeMask? = nil) -> some View {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !debugNoGlassNode {
             self
                 .background { PanelBackdrop(palette: palette, decorations: decorations, patternMask: patternMask) }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))

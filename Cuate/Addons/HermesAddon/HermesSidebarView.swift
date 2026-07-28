@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// Root of the DETACHED sidebar panel: the column lives in its own child
+/// window docked left of the chat (the chat panel never resizes for it), so
+/// it carries its own themed surface and palette environment.
+struct AgentSidebarPanelRoot: View {
+    let role: AgentRole
+    @ObservedObject private var settings = AppSettings.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let palette = ThemePalette.palette(for: settings.theme, scheme: colorScheme)
+        HermesSidebarView(role: role)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .environment(\.themePalette, palette)
+            .fontDesign(palette.fontDesign)
+            .themedPanelSurface(palette, cornerRadius: 18, decorations: false)
+    }
+}
+
 /// The management column shown next to the chat while a Hermes role is
 /// active: sessions, skills, toolsets and the agent's runtime — operational
 /// control DURING the dialog, without leaving for a browser dashboard

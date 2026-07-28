@@ -533,19 +533,13 @@ struct ChatWindow: View {
         // glass-on-glass stacking. Pre-macOS 26 the same surface renders as
         // a translucent material (see AdaptiveGlass.swift).
         //
-        // The agent management column joins INSIDE the one glass surface
-        // (left, sidebar convention): the surface itself is unconditional —
-        // recreating glassEffect in if-branches is the known backdrop bug.
+        // The agent management column lives in its OWN child window docked
+        // to the panel's left edge (AppDelegate.setAgentSidebarVisible) —
+        // sliding it in and out never touches this window's frame or
+        // re-lays the transcript (the old in-window column did both, and
+        // the toggle looked like the panel was glitching).
         AdaptiveGlassContainer(spacing: 24) {
-            HStack(spacing: 0) {
-                if agentSidebarVisible, let role = settings.activeAgentRole {
-                    HermesSidebarView(role: role)
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(width: 1)
-                }
-                chatColumn
-            }
+            chatColumn
             // Untinted regular glass for the Current theme; the other themes
             // fill the panel with their gradient + signature pattern instead
             // (see themedPanelSurface). Legibility comes from the bubbles.
@@ -562,12 +556,20 @@ struct ChatWindow: View {
                     .stroke(Color.accentColor.opacity(isDropTargeted ? 0.8 : 0), lineWidth: 2)
             )
         }
-        // The window makes room for the column (grow left / shrink back);
-        // the chat column itself never changes size.
+        // The AppDelegate slides the docked column window in/out; this
+        // window's own frame never changes.
         .onChange(of: agentSidebarVisible) { _, visible in
             NotificationCenter.default.post(
                 name: .agentSidebarVisibilityChanged, object: nil,
                 userInfo: ["visible": visible]
+            )
+        }
+        // Role switch with the column already out: same visibility, new
+        // content — repost so the column re-roots to the new role.
+        .onChange(of: settings.activeAgentRole?.id) { _, _ in
+            NotificationCenter.default.post(
+                name: .agentSidebarVisibilityChanged, object: nil,
+                userInfo: ["visible": agentSidebarVisible]
             )
         }
     }

@@ -31,6 +31,9 @@ struct CuateApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private var chatWindow: NSWindow?
+    /// Agent sidebar — a child window docked left of the chat panel (see
+    /// `setAgentSidebarVisible`); nil until the first show.
+    private var agentSidebarWindow: FloatingPanelWindow?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var worldTimeWindow: NSWindow? // WorldTimeAddon (Addons/WorldTimeAddon)
@@ -164,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // resize); when it hides, the same delta comes back off.
         NotificationCenter.default.addObserver(forName: .agentSidebarVisibilityChanged, object: nil, queue: .main) { [weak self] note in
             let visible = note.userInfo?["visible"] as? Bool ?? false
-            Task { @MainActor in self?.applySidebarWindowDelta(visible: visible) }
+            Task { @MainActor in self?.setAgentSidebarVisible(visible) }
         }
 
         // Re-register global shortcuts when the user rebinds them in Settings
@@ -842,7 +845,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         window.backgroundColor = .clear
         window.isMovableByWindowBackground = false
         window.level = .floating
-        window.hasShadow = true
+        // NO system shadow: on a TRANSPARENT window WindowServer re-derives
+        // the shadow from content alpha when the content changes — while
+        // scrolling that is every frame over the whole panel area, and the
+        // compositor drops to half refresh (profiled 2026-07-28: WindowServer
+        // 70–92%, scroll pinned at ~30fps on every theme). Native chat apps
+        // sidestep this class of cost with opaque windows; our panel's edge
+        // definition comes from the themed border/glass instead of a shadow.
+        // (`defaults write com.getcuate.Cuate CuateDebugPanelShadow -bool
+        // YES` brings the old shadow back for comparison.)
+        window.hasShadow = UserDefaults.standard.bool(forKey: "CuateDebugPanelShadow")
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
@@ -886,52 +898,134 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         if !window.setFrameUsingName(Self.panelFrameName, force: true) {
             window.center() // first launch
         }
-        // The autosaved frame may already include the agent sidebar's width
-        // (quit with an active role) — the size limits must match it.
+        // Migrate frames saved by the in-window sidebar era: the column's
+        // width used to be baked INTO the panel frame — shave it back off
+        // once (the sidebar is its own child window now, the chat panel
+        // keeps its pure width).
         if UserDefaults.standard.bool(forKey: Self.sidebarDeltaKey) {
-            window.minSize = NSSize(width: 480 + AgentSidebarLayout.width, height: 320)
-            window.maxSize = NSSize(width: 1000 + AgentSidebarLayout.width, height: 850)
+            var frame = window.frame
+            frame.origin.x += AgentSidebarLayout.width
+            frame.size.width = max(480, frame.size.width - AgentSidebarLayout.width)
+            window.setFrame(frame, display: false)
+            UserDefaults.standard.set(false, forKey: Self.sidebarDeltaKey)
         }
         window.orderOut(nil)
         self.chatWindow = window
     }
 
-    // MARK: - Agent sidebar: window width delta
+    // MARK: - Agent sidebar: child window
 
-    /// Whether the sidebar's width is currently baked into the window frame.
-    /// Persisted: the autosaved frame already includes the delta, so a
-    /// relaunch with an active role must not widen a second time.
+    /// Legacy flag from the in-window sidebar era (only read once at launch
+    /// to migrate the autosaved frame back to the pure chat width).
     private static let sidebarDeltaKey = "agentSidebarWidthApplied"
 
-    /// Pure ±delta on the window frame: grow left by the sidebar width /
-    /// shrink back. No stored frames — the chat keeps whatever size the
-    /// user gave it, exactly.
-    private func applySidebarWindowDelta(visible: Bool) {
-        guard let window = chatWindow else { return }
-        let defaults = UserDefaults.standard
-        let applied = defaults.bool(forKey: Self.sidebarDeltaKey)
-        guard visible != applied else { return }
-        let delta = AgentSidebarLayout.width
-        var frame = window.frame
+    /// Gap between the sidebar panel and the chat panel — the column reads
+    /// as its own docked panel, which it is.
+    private static let sidebarGap: CGFloat = 8
+
+    /// Whether the sidebar should be on screen right now (role active and
+    /// not collapsed for that role) — the summon path re-asserts this.
+    private var agentSidebarShouldShow: Bool {
+        guard let role = AppSettings.shared.activeAgentRole else { return false }
+        return !HermesSettings.shared.isSidebarCollapsed(roleID: role.id)
+    }
+
+    /// Shows/hides the agent column as a CHILD window docked to the panel's
+    /// left edge. The old approach resized the chat window itself (grow
+    /// left, then SwiftUI squeezed the transcript, then the frame animation
+    /// raced it back) — every toggle re-laid the whole chat out and the
+    /// slide-out looked like the window was glitching. A child window slides
+    /// out on its own: the chat panel's frame and layout are never touched,
+    /// and dragging the panel carries the column along for free.
+    @MainActor
+    private func setAgentSidebarVisible(_ visible: Bool) {
+        guard let parent = chatWindow else { return }
         if visible {
-            frame.origin.x -= delta
-            frame.size.width += delta
-            // Clamped to the screen: at the left edge the window shifts
-            // right instead — the chat may move, but never shrinks.
-            if let bounds = (window.screen ?? NSScreen.main)?.visibleFrame,
-               frame.minX < bounds.minX {
-                frame.origin.x = bounds.minX
+            // Panel off screen: nothing to dock to — the summon re-asserts.
+            guard parent.isVisible, let role = AppSettings.shared.activeAgentRole else { return }
+            let sidebar = agentSidebarWindow ?? makeAgentSidebarWindow(role: role)
+            agentSidebarWindow = sidebar
+            // Fresh root every show: the ROLE may have changed since last.
+            (sidebar.contentView as? NSHostingView<AgentSidebarPanelRoot>)?
+                .rootView = AgentSidebarPanelRoot(role: role)
+            // No room at the screen's left edge → the parent shifts right
+            // (it may move, it never resizes).
+            let wanted = agentSidebarFrame(for: parent)
+            if let bounds = (parent.screen ?? NSScreen.main)?.visibleFrame,
+               wanted.minX < bounds.minX {
+                var parentFrame = parent.frame
+                parentFrame.origin.x += bounds.minX - wanted.minX
+                isProgrammaticMove = true
+                parent.setFrame(parentFrame, display: true, animate: true)
+                isProgrammaticMove = false
             }
-            window.maxSize = NSSize(width: 1000 + delta, height: 850)
-            window.minSize = NSSize(width: 480 + delta, height: 320)
-        } else {
-            frame.origin.x += delta
-            frame.size.width = max(480, frame.size.width - delta)
-            window.minSize = NSSize(width: 480, height: 320)
-            window.maxSize = NSSize(width: 1000, height: 850)
+            let final = agentSidebarFrame(for: parent)
+            if sidebar.isVisible, parent.childWindows?.contains(sidebar) == true {
+                // Already out (summon re-assert / role switch): just re-glue.
+                sidebar.setFrame(final, display: true)
+                sidebar.alphaValue = 1
+                return
+            }
+            var start = final
+            start.origin.x += 44 // slides out from under the panel's edge
+            sidebar.alphaValue = 0
+            sidebar.setFrame(start, display: false)
+            parent.addChildWindow(sidebar, ordered: .below)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                sidebar.animator().alphaValue = 1
+                sidebar.animator().setFrame(final, display: true)
+            }
+        } else if let sidebar = agentSidebarWindow {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                sidebar.animator().alphaValue = 0
+            }, completionHandler: {
+                parent.removeChildWindow(sidebar)
+                sidebar.orderOut(nil)
+            })
         }
-        defaults.set(visible, forKey: Self.sidebarDeltaKey)
-        window.setFrame(frame, display: true, animate: true)
+    }
+
+    /// The column's frame: docked to the panel's left edge, full height.
+    private func agentSidebarFrame(for parent: NSWindow) -> NSRect {
+        NSRect(x: parent.frame.minX - AgentSidebarLayout.width - Self.sidebarGap,
+               y: parent.frame.minY,
+               width: AgentSidebarLayout.width,
+               height: parent.frame.height)
+    }
+
+    private func makeAgentSidebarWindow(role: AgentRole) -> FloatingPanelWindow {
+        let window = FloatingPanelWindow(
+            contentRect: NSRect(x: 0, y: 0, width: AgentSidebarLayout.width, height: 400),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false // same policy as the chat panel (perf)
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.hidesOnDeactivate = false
+        window.isMovableByWindowBackground = false
+        window.role = .agentSidebar
+        window.delegate = self
+        let host = NSHostingView(rootView: AgentSidebarPanelRoot(role: role))
+        host.sizingOptions = []
+        window.contentView = host
+        return window
+    }
+
+    /// Keeps the docked column glued to the panel during a live resize
+    /// (moves are free — child windows follow their parent).
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === chatWindow,
+              let sidebar = agentSidebarWindow, sidebar.isVisible else { return }
+        sidebar.setFrame(agentSidebarFrame(for: window), display: true)
     }
 
     // MARK: - Panel placement
@@ -1061,6 +1155,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             NSApp.activate(ignoringOtherApps: true)
         }
         window.makeKeyAndOrderFront(nil)
+        // The docked agent column re-appears with the panel (it is a child
+        // window — hiding the panel took it down too).
+        setAgentSidebarVisible(agentSidebarShouldShow)
 
         // Notify ChatWindow to focus the input field. Deferred one runloop
         // tick so first-responder is requested after the window is key.
@@ -1121,6 +1218,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // Auto-hide the two floating panels, never the settings window.
         guard let window = notification.object as? NSWindow else { return }
         if window === chatWindow { hideChatWindow() }
+        // Focus leaving the docked agent column counts as leaving the panel
+        // (the same auto-hide the chat window itself has).
+        if window === agentSidebarWindow { hideChatWindow() }
         if window === worldTimeWindow { hideWorldTimePanel() }
     }
 
@@ -1131,6 +1231,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         guard let window = chatWindow, window.isVisible else { return }
         // Keep the panel visible while the user works in Settings
         if let settingsWindow, settingsWindow.isKeyWindow { return }
+        // Clicking between the panel and its docked agent column moves key
+        // status WITHIN the panel family — the user never left. Key status
+        // may not have settled at resign time, so the click's own window is
+        // checked too.
+        if let sidebar = agentSidebarWindow, sidebar.isVisible,
+           sidebar.isKeyWindow || NSApp.currentEvent?.window === sidebar { return }
+        if window.isKeyWindow || NSApp.currentEvent?.window === window { return }
         // A system dialog (Open/Save) presented as the panel's sheet takes
         // key status — that must not count as "the user left the panel".
         if window.attachedSheet != nil { return }

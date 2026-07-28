@@ -9,6 +9,9 @@ final class FloatingPanelWindow: NSWindow {
     enum Role {
         case chat
         case worldTime
+        /// The agent management column — a CHILD window docked to the chat
+        /// panel's left edge (its own surface; the chat panel never resizes).
+        case agentSidebar
     }
 
     var role: Role = .chat
