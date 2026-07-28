@@ -52,6 +52,10 @@ fetched from Maven at build time and are not vendored in this repository.
   DeepSeek, Moonshot/Kimi, OpenRouter, Deepgram, Brave, Nous Research) are
   trademarks of their respective owners, used here solely to identify the
   services the user can connect to. No affiliation or endorsement is implied.
+- PLAUD and the Plaud "Λ·" mark are trademarks of their owner. Cuate is an
+  independent application that works with Plaud via the user's own account
+  and Plaud's public third-party API; no affiliation or endorsement is
+  implied.
 - Design mockups under `design/` include renders of Apple SF Symbols, used in
   accordance with the Xcode and SF Symbols license terms for Apple-platform
   software.
