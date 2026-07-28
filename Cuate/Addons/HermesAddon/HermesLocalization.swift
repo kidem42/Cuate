@@ -11,6 +11,16 @@ func HL(_ key: String) -> String {
 enum HermesAddonStrings {
     static let table: [String: [AppLanguage: String]] = [
         "hermes.tab": [.english: "Hermes Agent", .spanish: "Agente Hermes", .russian: "Hermes-агент"],
+        "hermes.lock.stale": [
+            .english: "Model %model% is no longer in the gateway's catalog — switched to %fallback%. Pick another model in the agent settings if needed.",
+            .spanish: "El modelo %model% ya no está en el catálogo del gateway — cambiado a %fallback%. Elige otro modelo en los ajustes del agente si hace falta.",
+            .russian: "Модель %model% пропала из каталога гейтвея — переключено на %fallback%. При необходимости выберите другую модель в настройках агента."
+        ],
+        "hermes.lock.agentDefault": [
+            .english: "the agent's default model",
+            .spanish: "el modelo predeterminado del agente",
+            .russian: "модель агента по умолчанию"
+        ],
 
         // MARK: General tab master switch
         "hermes.general.enable": [

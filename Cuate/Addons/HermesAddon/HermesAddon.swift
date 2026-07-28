@@ -114,6 +114,9 @@ final class HermesAddon: ObservableObject {
             if let options = try? await transport.modelOptions() {
                 cachedProviders = options.providers
                 currentModelPair = options.current
+                // Stale-lock cleanup rides every probe, so a rotten model
+                // slug is caught at connect time, not at the failed send.
+                validateLock(against: options.providers, current: options.current)
             }
             if settings.cachedAgentIDs != models {
                 settings.cachedAgentIDs = models
@@ -243,10 +246,84 @@ final class HermesAddon: ObservableObject {
     /// Model-lock pair for new sessions: the explicit setting when present,
     /// else the gateway's current top-level (provider, model) from
     /// `/api/model/options` — the agent's own configured default.
+    ///
+    /// The explicit lock is re-validated against the FRESH catalog: model
+    /// slugs rot (OpenRouter rotates free tiers — `tencent/hy3:free`,
+    /// 2026-07-28), and a stale lock 404s every send. A dead pair falls
+    /// back to the agent's default and posts one system line to the chat.
     func resolveLockPair() async -> (provider: String, model: String)? {
+        let options = try? await transport().modelOptions()
         if !settings.lockProvider.isEmpty, !settings.lockModel.isEmpty {
-            return (settings.lockProvider, settings.lockModel)
+            guard let options else {
+                // Gateway unreachable right now — keep the user's choice.
+                return (settings.lockProvider, settings.lockModel)
+            }
+            if isLockValid(in: options.providers) {
+                return (settings.lockProvider, settings.lockModel)
+            }
+            resetStaleLock(fallback: options.current)
+            return options.current
         }
-        return (try? await transport().modelOptions())?.current
+        return options?.current
     }
+
+    /// True when the saved lock pair still exists in the gateway's catalog.
+    private func isLockValid(in providers: [HermesProviderOption]) -> Bool {
+        providers.contains {
+            $0.slug == settings.lockProvider && $0.models.contains(settings.lockModel)
+        }
+    }
+
+    /// Clears a dead lock and tells the user once (system line in the chat,
+    /// via ChatWindow's listener) which model replaced the vanished one.
+    func validateLock(against providers: [HermesProviderOption], current: (provider: String, model: String)?) {
+        guard !settings.lockProvider.isEmpty, !settings.lockModel.isEmpty,
+              !providers.isEmpty, !isLockValid(in: providers) else { return }
+        resetStaleLock(fallback: current)
+    }
+
+    /// Heals an EXISTING session whose per-session lock points at a model
+    /// that vanished from the gateway's catalog (the global-default reset
+    /// above only covers new sessions): re-locks the session to the agent's
+    /// current default and tells the user with one system line.
+    func healSessionLockIfStale(sessionID: String) async {
+        guard let recorded = settings.modelLock(forSession: sessionID) else { return }
+        guard let options = try? await transport().modelOptions(),
+              !options.providers.isEmpty else { return }
+        let valid = options.providers.contains {
+            $0.slug == recorded.provider && $0.models.contains(recorded.model)
+        }
+        guard !valid, let fallback = options.current,
+              fallback.model != recorded.model else { return }
+        try? await transport().lockModel(
+            sessionID: sessionID, provider: fallback.provider, model: fallback.model
+        )
+        settings.recordModelLock(
+            provider: fallback.provider, model: fallback.model, forSession: sessionID
+        )
+        Diagnostics.log("hermes", "sessionLock.stale \(recorded.model) → \(fallback.model) session=\(sessionID)")
+        postLockNotice(stale: recorded.model, fallback: fallback)
+    }
+
+    private func resetStaleLock(fallback: (provider: String, model: String)?) {
+        let stale = settings.lockModel
+        settings.lockProvider = ""
+        settings.lockModel = ""
+        Diagnostics.log("hermes", "modelLock.stale \(stale) — reset to agent default")
+        postLockNotice(stale: stale, fallback: fallback)
+    }
+
+    private func postLockNotice(stale: String, fallback: (provider: String, model: String)?) {
+        var notice = HL("hermes.lock.stale").replacingOccurrences(of: "%model%", with: stale)
+        notice = notice.replacingOccurrences(
+            of: "%fallback%", with: fallback?.model ?? HL("hermes.lock.agentDefault")
+        )
+        NotificationCenter.default.post(name: .hermesModelLockReset, object: notice)
+    }
+}
+
+extension Notification.Name {
+    /// Object: the user-facing notice string. ChatWindow shows it as one
+    /// system line in the active agent chat.
+    static let hermesModelLockReset = Notification.Name("hermesModelLockReset")
 }

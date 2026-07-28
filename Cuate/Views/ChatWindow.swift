@@ -750,6 +750,13 @@ struct ChatWindow: View {
                 VStack(spacing: 8) {
                     // Recording status (shown when recording)
                     RecordingStatusView(isRecording: $audioRecorder.isRecording)
+                        // Rides an always-mounted inner view: the outer
+                        // modifier chain is at the type-checker's limit —
+                        // one more .onReceive there fails the whole body.
+                        .onReceive(
+                            NotificationCenter.default.publisher(for: .hermesModelLockReset),
+                            perform: handleModelLockReset
+                        )
 
                     // Slash autocomplete (agent mode): "/" lists the agent's
                     // skills — the agent itself interprets "/skill-name …"
@@ -1492,6 +1499,14 @@ struct ChatWindow: View {
             .buttonStyle(PlainButtonStyle())
             .fixedSize()
             .help(L("panel.providerHelp"))
+        }
+    }
+
+    /// A saved model lock went stale (slug dropped from the gateway's
+    /// catalog) and was auto-reset — one system line, in agent chats.
+    private func handleModelLockReset(_ note: Notification) {
+        if chatStore.conversation.isAgent, let notice = note.object as? String {
+            chatStore.addMessage(text: notice, isUser: false, messageType: .system)
         }
     }
 

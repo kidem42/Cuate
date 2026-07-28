@@ -60,6 +60,9 @@ final class HermesAgentSession: AgentSession {
                     }
                 }
             }
+            // The gateway keeps a per-session model lock; when its slug rots
+            // out of the catalog every turn 404s — heal before the send.
+            await addon.healSessionLockIfStale(sessionID: existing)
             return existing
         }
         let transport = addon.transport()
