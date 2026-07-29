@@ -229,11 +229,29 @@ final class HermesSettings: ObservableObject {
         sessionContextTokens[sessionID]
     }
 
-    /// Context window the gauge measures against. The gateway exposes no
-    /// per-model limit over the API (0.19.0), so this is a setting — the
-    /// default matches what the Hermes CLI shows for the portal's models.
+    /// LAST-RESORT context window for the gauge, when neither the gateway
+    /// nor the ported Hermes table knows the session's model (resolution
+    /// chain in `HermesModelContext.limit`). Kept as a manual override —
+    /// the default mirrors Hermes' own final fallback.
     @Published var contextLimitTokens: Int {
         didSet { defaults.set(contextLimitTokens, forKey: "hermes.contextLimitTokens") }
+    }
+
+    /// Cached `GET /api/model/info` result: the agent's configured model and
+    /// the context window Hermes itself resolved for it (OAuth caps, config
+    /// overrides — things no client-side table can know). Refreshed on every
+    /// probe; 404 on pre-`model/info` gateways leaves the cache untouched.
+    @Published private(set) var agentContextModel: String {
+        didSet { defaults.set(agentContextModel, forKey: "hermes.agentContextModel") }
+    }
+    @Published private(set) var agentContextLength: Int {
+        didSet { defaults.set(agentContextLength, forKey: "hermes.agentContextLength") }
+    }
+
+    func recordAgentContext(model: String, length: Int) {
+        guard !model.isEmpty, length > 0 else { return }
+        agentContextModel = model
+        agentContextLength = length
     }
 
     // MARK: - Pinned messages (Telegram-style, agent chats)
@@ -388,6 +406,8 @@ final class HermesSettings: ObservableObject {
         sessionContextTokens = (defaults.dictionary(forKey: "hermes.sessionContextTokens") as? [String: Int]) ?? [:]
         sessionsAwaitingTitle = defaults.stringArray(forKey: "hermes.sessionsAwaitingTitle") ?? []
         contextLimitTokens = defaults.object(forKey: "hermes.contextLimitTokens") as? Int ?? 262_144
+        agentContextModel = defaults.string(forKey: "hermes.agentContextModel") ?? ""
+        agentContextLength = defaults.object(forKey: "hermes.agentContextLength") as? Int ?? 0
         pinnedSessions = defaults.stringArray(forKey: "hermes.pinnedSessions") ?? []
         sessionColors = (defaults.dictionary(forKey: "hermes.sessionColors") as? [String: String]) ?? [:]
         sidebarCollapsed = (defaults.dictionary(forKey: "hermes.sidebarCollapsed") as? [String: Bool]) ?? [:]

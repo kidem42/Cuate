@@ -230,9 +230,9 @@ enum HermesAddonStrings {
             .russian: "Полный проход: свой агент на VPS по HTTPS, доступен из любой сети без VPN — 4 шага, две вставки. Самодостаточный текст: читайте здесь или скопируйте и отдайте любой нейронке — она проведёт по шагам."
         ],
         "hermes.composer.context.help": [
-            .english: "How full this session's context is (tokens of the last turn). Click to compact it now — the gateway also compacts on its own near the limit.",
-            .spanish: "Cuán lleno está el contexto de esta sesión (tokens del último turno). Clic para compactarlo ahora — el gateway también compacta solo cerca del límite.",
-            .russian: "Насколько заполнен контекст этой сессии (токены последнего хода). Клик — сжать сейчас; у предела гейтвей сжимает и сам."
+            .english: "How full this session's context is (tokens of the last turn, against this model's own window). Click to compact it now — the gateway also compacts on its own near the limit.",
+            .spanish: "Cuán lleno está el contexto de esta sesión (tokens del último turno, sobre la ventana propia de este modelo). Clic para compactarlo ahora — el gateway también compacta solo cerca del límite.",
+            .russian: "Насколько заполнен контекст этой сессии (токены последнего хода от окна ЭТОЙ модели). Клик — сжать сейчас; у предела гейтвей сжимает и сам."
         ],
         "hermes.composer.model.help": [
             .english: "Model for THIS session (switches the gateway's session lock)",

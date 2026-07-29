@@ -123,14 +123,18 @@ struct HermesSidebarView: View {
     /// Context fill of the OPEN session — a hairline bar with "25K/262K"
     /// under the role's name. Numbers come from `run.completed` (the real
     /// prompt size, not an estimate); amber past 70%, red past 85%, where
-    /// the gateway starts compacting on its own.
+    /// the gateway starts compacting on its own. The denominator is
+    /// PER-MODEL now (HermesModelContext — Hermes' own table + the
+    /// gateway's `model/info`), not one global constant.
     @ViewBuilder
     private var contextGauge: some View {
         if let sessionID = HermesSettings.shared.activeSession(roleID: role.id),
            !sessionID.isEmpty,
            let used = HermesSettings.shared.contextTokens(forSession: sessionID),
-           HermesSettings.shared.contextLimitTokens > 0 {
-            let limit = HermesSettings.shared.contextLimitTokens
+           case let limit = HermesModelContext.limit(
+               forModel: gaugeModel(forSession: sessionID), settings: settings
+           ),
+           limit > 0 {
             let fraction = min(1, Double(used) / Double(limit))
             let tint: Color = fraction > 0.85 ? .red
                 : (fraction > 0.7 ? .orange : palette.secondaryText)
@@ -159,6 +163,23 @@ struct HermesSidebarView: View {
             .buttonStyle(PlainButtonStyle())
             .help(HL("hermes.composer.context.help"))
         }
+    }
+
+    /// The model whose context window the gauge measures, most specific
+    /// first — the same chain as the composer label: the session's own
+    /// lock → the gateway's session row → the global default for new
+    /// sessions → the agent's configured model. The literal
+    /// "hermes-agent" pseudo-model (an unlocked fresh session) means "the
+    /// agent's own model" — returned as nil so the resolver uses the
+    /// cached `model/info` answer.
+    private func gaugeModel(forSession sessionID: String) -> String? {
+        if let lock = settings.modelLock(forSession: sessionID) { return lock.model }
+        if let row = sessions.first(where: { $0.id == sessionID })?.model,
+           !row.isEmpty, row != "hermes-agent" {
+            return row
+        }
+        if !settings.lockModel.isEmpty { return settings.lockModel }
+        return addon.currentModelPair?.model
     }
 
     /// 262144 → "262K".

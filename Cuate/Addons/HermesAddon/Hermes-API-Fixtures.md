@@ -176,6 +176,30 @@ label уже с эмодзи — секция «Скиллы/Тулсеты» р
 Работает (модель видит картинку). Плоское поле `images:[...]` запрос НЕ ломает,
 но картинка до модели НЕ доходит — не использовать.
 
+## GET `/api/model/info` — окно контекста ТЕКУЩЕЙ модели агента
+
+⚠️ Роут новее части деплоев: в чекауте 0.19.0 (2026.7.20) есть
+(`hermes_cli/web_server.py`), а на VPS-гейтвее старее — **404** (проверено
+2026-07-29 на agent.<domain>; `/api/model/options` там жив → 401 без
+ключа). Клиент обязан переживать 404 как «нет данных». Форма ответа — из
+исходников (живой 200-дамп снять было не с чего):
+
+```json
+{"model":"gpt-5.6-terra","provider":"...",
+ "auto_context_length":272000,"config_context_length":0,
+ "effective_context_length":272000,
+ "capabilities":{"supports_tools":true,"supports_vision":true,
+   "supports_reasoning":true,"context_window":272000,
+   "max_output_tokens":128000,"model_family":"..."}}
+```
+
+`effective_context_length` — то, чем реально живёт агент (его же цепочка
+резолвинга: config override → кэш → пробы провайдера → models.dev →
+таблица → 256K). Только для ТЕКУЩЕЙ настроенной модели (+`?profile=`),
+произвольную пару model/provider спросить нельзя. Используется шкалой
+контекста (`HermesModelContext`); промах → порт его таблицы
+`DEFAULT_CONTEXT_LENGTHS` → настройка `hermes.contextLimitTokens`.
+
 ## Топ-левел `/api/model/options` (снято 2026-07-25)
 
 Кроме `providers[]` в корне есть **`model` и `provider`** — ТЕКУЩАЯ пара агента.

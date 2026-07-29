@@ -219,6 +219,18 @@ struct HermesTransport {
         return (current, providers)
     }
 
+    /// `/api/model/info`: the agent's CURRENT model plus the context window
+    /// Hermes resolved for it through its own full chain (config override →
+    /// probes → OAuth caps → table). Route is newer than 0.19.0-era VPS
+    /// deployments — absent there it 404s (probed 2026-07-29), which the
+    /// caller treats as "no data", never an error.
+    func modelInfo() async throws -> (model: String, contextLength: Int) {
+        let object = try await json("GET", "api/model/info")
+        let model = object["model"] as? String ?? ""
+        let length = object["effective_context_length"] as? Int ?? 0
+        return (model, length)
+    }
+
     // MARK: Sessions
 
     private static func sessionInfo(_ row: [String: Any]) -> HermesSessionInfo? {

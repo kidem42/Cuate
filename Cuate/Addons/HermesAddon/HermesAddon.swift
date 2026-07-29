@@ -118,6 +118,13 @@ final class HermesAddon: ObservableObject {
                 // slug is caught at connect time, not at the failed send.
                 validateLock(against: options.providers, current: options.current)
             }
+            // Context window of the agent's model, resolved by Hermes itself
+            // (the gauge's authoritative source). Older gateways 404 the
+            // route — `try?` leaves the cached value / table fallback in
+            // charge (HermesModelContext.limit).
+            if let info = try? await transport.modelInfo() {
+                settings.recordAgentContext(model: info.model, length: info.contextLength)
+            }
             if settings.cachedAgentIDs != models {
                 settings.cachedAgentIDs = models
             }
