@@ -29,8 +29,14 @@ enum HermesMirrorSync {
         // nothing to claim and would be inserted as a second copy (e2e
         // 2026-07-27 — duplicates appeared mid-run, while tools were still
         // running). The post-turn sync picks everything up moments later.
+        // Checked against the addon's own turn registry, NOT store.isLoading
+        // alone: a session switch wipes the store flag, and a catch-up then
+        // ran mid-run and duplicated the in-flight reply (2026-07-29 12:40).
         guard !store.isLoading else { return true }
         let conversationID = store.conversation
+        guard !HermesAddon.shared.isTurnActive(forConversationKey: conversationID.storageKey) else {
+            return true
+        }
         guard conversationID.isAgent,
               let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationID.storageKey) else {
             return true // nothing to sync yet — not an error
@@ -216,7 +222,51 @@ enum HermesMirrorSync {
         }
         flushGW(upTo: gwRows.count)
 
-        return (merged, changed)
+        // Self-heal duplicates older races left behind (a mid-run catch-up
+        // once inserted the gateway's copy of an in-flight reply; adoption
+        // later grew one bubble to the full text while the partial copy
+        // stayed): two ADJACENT assistant bubbles where one text fully
+        // contains the other are the same turn twice — a genuine repeat has
+        // the user's message between them. Keep the fuller copy and move
+        // the gateway identity/steps onto it when only the dropped one had
+        // them. Bounded like the claim containment (≥40 chars) so short
+        // "ок"-style answers never merge.
+        var healed: [ChatMessage] = []
+        for row in merged {
+            if let previous = healed.last,
+               !row.isUser, !previous.isUser,
+               row.messageType != .system, previous.messageType != .system {
+                let a = previous.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let b = row.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if min(a.count, b.count) >= 40 {
+                    if a.contains(b), row.attachments.isEmpty {
+                        healed[healed.count - 1] = absorbing(previous, dropped: row)
+                        changed = true
+                        continue
+                    }
+                    if b.contains(a), previous.attachments.isEmpty {
+                        healed[healed.count - 1] = absorbing(row, dropped: previous)
+                        changed = true
+                        continue
+                    }
+                }
+            }
+            healed.append(row)
+        }
+
+        return (healed, changed)
+
+        func absorbing(_ keeper: ChatMessage, dropped: ChatMessage) -> ChatMessage {
+            var kept = keeper
+            if kept.externalID == nil {
+                kept.externalID = dropped.externalID
+                kept.seq = dropped.seq
+            }
+            if kept.agentSteps == nil {
+                kept.agentSteps = dropped.agentSteps
+            }
+            return kept
+        }
 
         func message(from row: HermesTranscriptMessage, sessionID: String) -> ChatMessage {
             ChatMessage(

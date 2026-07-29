@@ -213,7 +213,7 @@ class ChatStore: ObservableObject {
     /// shared chat, a preset's own isolated chat (Settings → Prompts), or an
     /// agent role's chat (AgentGateway addons — isolation is forced there,
     /// the conversation also lives on the agent's side).
-    nonisolated enum ConversationID: Equatable {
+    nonisolated enum ConversationID: Hashable {
         case general
         case preset(String)
         /// An agent role's conversation: `addonID` names the addon ("hermes"),

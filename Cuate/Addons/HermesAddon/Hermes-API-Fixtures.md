@@ -67,6 +67,34 @@ API-сервер живёт в процессе **gateway**: `hermes gateway run
 После лока ходы идут с `route_source:"session_model_lock"`.
 Пары model/provider берём из `/api/model/options` (см. ниже).
 
+**Кросс-провайдерный ре-лок РАБОТАЕТ** (снято живьём 2026-07-29, VPS-гейтвей):
+сессия с локом openai-codex переключается на `{"model":"stepfun/step-3.7-flash:free",
+"provider":"nous"}` → `model_lock:"accepted"`, следующий ход — `route_source:
+"session_model_lock"`, `runtime.provider:"nous"`, `model_lock:"confirmed"`. Смена
+провайдера мид-сессией — штатная операция.
+
+### ⚠️ Квотный кулдаун провайдера (снято живьём 2026-07-29)
+Когда провайдер (Codex) исчерпал квоту, гейтвей ставит его в кулдаун и ходы сессий,
+залоченных на него, отбивает МГНОВЕННО: HTTP 200, SSE, но ошибка приходит как
+`assistant.completed` с текстом `"⚠️ Provider authentication failed: Codex provider
+quota exhausted (429); retry after 2590205s. Credentials are still valid."` —
+и user-строка хода при этом В ИСТОРИЮ НЕ ПИШЕТСЯ (в отличие от падения роутинга
+мид-раном, где user-строка остаётся). Кулдаун ~30 дней (месячная квота).
+Клиент детектит этот текст и дописывает подсказку «смени провайдера»
+(`HermesAgentSession.annotateGatewayFailure`).
+
+### ⚠️ Каталог `/api/model/options` — живой и переменчивый
+В кулдауне список моделей провайдера может СЖИМАТЬСЯ (живьём: openai-codex с
+полного списка до 1 модели — на старом гейтвее exhausted-провайдер деградировал
+до одной сохранённой модели; починено на стороне Hermes 2026-07-29, после
+обновления плана вернулись 9). Список моделей Codex гейтвей берёт живым
+запросом к OpenAI от аккаунта юзера; свой каталог кэширует ~1 час, у роута есть
+`?refresh=true` (сброс кэша, как кнопка «Refresh Models» их дашборда).
+Выводы для клиента: каталог показываем КАК ЕСТЬ от гейтвея (он — точка правды),
+но перечитываем при возвращении в панель (`HermesAddon.refreshCatalogIfStale`),
+а не только на launch-пробе; и НИКОГДА не «лечим»/сбрасываем лок по отсутствию
+пары в каталоге — правда о доступности выясняется только реальным ходом.
+
 ### GET `/api/sessions?limit=&offset=` — список
 Элемент богатый: `id, source, model, title, started_at, ended_at, end_reason, message_count,
 tool_call_count, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,

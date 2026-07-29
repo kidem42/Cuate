@@ -173,12 +173,34 @@ struct ChatWindow: View {
         }
         return (agent, user)
     }
-    /// In-flight assistant reply. Survives conversation switches (the reply
-    /// keeps streaming in the background into its origin chat); cancelled
-    /// only when the origin chat itself is deleted.
-    @State private var streamingTask: Task<Void, Never>?
-    /// Which conversation the in-flight reply belongs to.
-    @State private var streamingOrigin: ChatStore.ConversationID?
+    /// Bookkeeping of ONE in-flight assistant reply. Several conversations
+    /// can stream at once (Hermes sessions: start a task, switch, start
+    /// another) — each keeps its own slot, so returning to any of them
+    /// restores its bubble/pill, not just the newest one's.
+    private struct StreamSlot {
+        /// The stream task. Survives conversation switches (the reply keeps
+        /// streaming in the background into its origin chat); cancelled only
+        /// when the origin chat itself is deleted/stopped.
+        var task: Task<Void, Never>?
+        /// Live buffer of the reply streaming in. NOT observed by this view:
+        /// only the streaming bubble's text subtree subscribes, so a flush
+        /// re-renders that subtree alone.
+        let live: StreamingReplyModel
+        /// Identity/timestamp stub for the streaming bubble. While set (and
+        /// the origin conversation is on screen) the transcript masks the
+        /// store's copy of this message and renders the live row in its place.
+        var stub: ChatMessage?
+        /// True from send until the first streamed text chunk (the
+        /// tool/thinking phase). Switching conversations wipes the store's
+        /// isLoading/statusText — this plus `lastStatus` remember enough to
+        /// put the pill back when the user returns to this chat.
+        var awaitingText = true
+        var lastStatus: String?
+    }
+    /// Origin conversation → its in-flight reply. One per conversation at
+    /// most: send is disabled while its chat is loading, and a finished
+    /// stream removes its own slot before the next send can start.
+    @State private var streamSlots: [ChatStore.ConversationID: StreamSlot] = [:]
     /// Whether the scroll position is near the newest message (reported by
     /// the transcript engine; mirrors its pin state).
     @State private var isNearBottom = true
@@ -188,20 +210,6 @@ struct ChatWindow: View {
     /// Imperative handle to the transcript engine (scroll-to-bottom on send
     /// and summon). @State so the instance survives view-struct re-inits.
     @State private var transcriptController = TranscriptController()
-    /// Live buffer of the reply currently streaming in. NOT observed by this
-    /// view (no @ObservedObject on purpose): only the streaming bubble's
-    /// text subtree subscribes, so a flush re-renders that subtree alone.
-    @State private var liveReply = StreamingReplyModel()
-    /// Identity/timestamp stub for the streaming bubble. While set (and the
-    /// origin conversation is on screen) the transcript masks the store's
-    /// copy of this message and renders the live row in its place.
-    @State private var liveReplyStub: ChatMessage?
-    /// True from send until the first streamed text chunk (the tool/thinking
-    /// phase). Switching conversations wipes the store's isLoading/statusText
-    /// — these two remember enough to put the pill back when the user
-    /// returns to a chat whose reply is still in that phase.
-    @State private var streamingAwaitingText = false
-    @State private var streamingLastStatus: String?
     @FocusState private var isInputFocused: Bool
     @State private var textEditorHeight: CGFloat = 27 // Default height for one line
     /// Providers offered by the header switcher (see `refreshAvailableProviders`).
@@ -306,11 +314,18 @@ struct ChatWindow: View {
 
     // MARK: - Transcript rows
 
-    /// Whether the in-flight reply is being rendered live in THIS transcript
+    /// The stream slot of the ON-SCREEN conversation, if it has a reply in
+    /// flight. Replies streaming for other conversations keep their own
+    /// slots and never touch this transcript.
+    private var currentStreamSlot: StreamSlot? {
+        streamSlots[chatStore.conversation]
+    }
+
+    /// Whether an in-flight reply is being rendered live in THIS transcript
     /// (its origin conversation is on screen). While true, the store's copy
     /// of the streaming message is masked and the live row stands in for it.
     private var liveStreamOnScreen: Bool {
-        liveReplyStub != nil && streamingOrigin == chatStore.conversation
+        currentStreamSlot?.stub != nil
     }
 
     /// Rows for the transcript engine. Identity + revision give the engine
@@ -376,7 +391,7 @@ struct ChatWindow: View {
             })
         }
 
-        let maskedID = liveStreamOnScreen ? liveReplyStub?.id : nil
+        let maskedID = currentStreamSlot?.stub?.id
         for message in visibleMessages where message.id != maskedID {
             items.append(messageItem(message, rowWidth: rowWidth,
                                      maxBubble: maxBubble, baseRevision: baseRevision))
@@ -402,7 +417,7 @@ struct ChatWindow: View {
             })
         }
 
-        if bottomDropCount == 0, liveStreamOnScreen, let stub = liveReplyStub {
+        if bottomDropCount == 0, let slot = currentStreamSlot, let stub = slot.stub {
             // Constant revision WITHIN a stream on purpose: the row's CONTENT
             // updates itself through the model — the engine never rebuilds it
             // mid-stream. But it must differ PER STREAM (stub.id is fresh
@@ -414,7 +429,7 @@ struct ChatWindow: View {
             var liveHasher = Hasher()
             liveHasher.combine(baseRevision)
             liveHasher.combine(stub.id)
-            let live = liveReply
+            let live = slot.live
             items.append(TranscriptItem(id: "live-reply", revision: liveHasher.finalize()) { [palette] in
                 AnyView(
                     MessageRow(message: stub, maxBubbleWidth: maxBubble,
@@ -741,16 +756,16 @@ struct ChatWindow: View {
                     jumpToLatest(animated: false)
                 }
                 .onChange(of: chatStore.conversation.storageKey) {
-                    // Returning to a chat whose reply is still in the
-                    // tool/thinking phase: the switch wiped the store's
-                    // isLoading/statusText, and the stream only touches them
-                    // on events that arrive while live — until the next one,
-                    // the chat looked dead and then a reply "appeared out of
-                    // nowhere". Put the pill straight back.
-                    guard streamingAwaitingText,
-                          streamingOrigin == chatStore.conversation else { return }
+                    // Returning to a chat whose reply is still in flight: the
+                    // switch wiped the store's isLoading/statusText, and the
+                    // stream only touches them on events that arrive while
+                    // live — until the next one, the chat looked dead and
+                    // then a reply "appeared out of nowhere". Restore from
+                    // THIS conversation's slot (each in-flight chat keeps its
+                    // own — the newest stream must not eat the others' pills).
+                    guard let slot = currentStreamSlot else { return }
                     chatStore.setLoading(true)
-                    if let status = streamingLastStatus {
+                    if slot.awaitingText, let status = slot.lastStatus {
                         chatStore.statusText = status
                     }
                 }
@@ -763,8 +778,8 @@ struct ChatWindow: View {
                         // modifier chain is at the type-checker's limit —
                         // one more .onReceive there fails the whole body.
                         .onReceive(
-                            NotificationCenter.default.publisher(for: .hermesModelLockReset),
-                            perform: handleModelLockReset
+                            NotificationCenter.default.publisher(for: .hermesSystemNotice),
+                            perform: handleHermesNotice
                         )
 
                     // Slash autocomplete (agent mode): "/" lists the agent's
@@ -1051,7 +1066,7 @@ struct ChatWindow: View {
             isHistoryLoaded: chatStore.isHistoryLoaded,
             canPoll: {
                 FloatingPanelWindow.chatPanel?.isVisible == true
-                    && (streamingOrigin != chatStore.conversation || streamingTask == nil)
+                    && streamSlots[chatStore.conversation] == nil
             },
             catchUp: { runAgentCatchUpIfNeeded() }
         )
@@ -1382,6 +1397,15 @@ struct ChatWindow: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
                 .frame(height: 27)
+                // The menu must mirror the gateway's CURRENT catalog, not
+                // the launch-time probe: quotas renew and the gateway gets
+                // fixed while the app sits open — re-read (throttled) on
+                // every return to the panel. SwiftUI's Menu has no "will
+                // open" hook, so the panel-level moments stand in for it.
+                .onAppear { Task { await hermesAddon.refreshCatalogIfStale() } }
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+                    Task { await hermesAddon.refreshCatalogIfStale() }
+                }
         }
         .menuIndicator(.hidden)
         .buttonStyle(PlainButtonStyle())
@@ -1400,15 +1424,34 @@ struct ChatWindow: View {
     /// Re-locks the model on the gateway session bound to the CURRENT
     /// conversation (each session is its own thread now) and stores the
     /// pair as the default for new sessions.
+    ///
+    /// The gateway's answer is awaited and surfaced as a system line — a
+    /// silently swallowed lock left the UI claiming a switch that never
+    /// happened (live 2026-07-29); the local per-session record (what the
+    /// composer label shows) is only written once the gateway accepted.
     private func switchSessionModel(provider: String, model: String) {
         hermesSettings.lockProvider = provider
         hermesSettings.lockModel = model
         guard chatStore.conversation.isAgent,
               let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey)
         else { return }
-        hermesSettings.recordModelLock(provider: provider, model: model, forSession: sessionID)
+        let providerName = hermesAddon.cachedProviders.first { $0.slug == provider }?.name ?? provider
         Task {
-            try? await hermesAddon.transport().lockModel(sessionID: sessionID, provider: provider, model: model)
+            do {
+                try await hermesAddon.transport().lockModel(sessionID: sessionID, provider: provider, model: model)
+                hermesSettings.recordModelLock(provider: provider, model: model, forSession: sessionID)
+                Diagnostics.log("hermes", "sessionLock.switch ok \(provider)/\(model) session=\(sessionID)")
+                let notice = HL("hermes.lock.switched")
+                    .replacingOccurrences(of: "%provider%", with: providerName)
+                    .replacingOccurrences(of: "%model%", with: model)
+                NotificationCenter.default.post(name: .hermesSystemNotice, object: notice)
+            } catch {
+                Diagnostics.log("hermes", "sessionLock.switch fail \(provider)/\(model) session=\(sessionID) \(String(error.localizedDescription.prefix(120)))")
+                let notice = HL("hermes.lock.switchFailed")
+                    .replacingOccurrences(of: "%model%", with: model)
+                    .replacingOccurrences(of: "%error%", with: error.localizedDescription)
+                NotificationCenter.default.post(name: .hermesSystemNotice, object: notice)
+            }
         }
     }
 
@@ -1511,9 +1554,9 @@ struct ChatWindow: View {
         }
     }
 
-    /// A saved model lock went stale (slug dropped from the gateway's
-    /// catalog) and was auto-reset — one system line, in agent chats.
-    private func handleModelLockReset(_ note: Notification) {
+    /// Hermes feedback channel (model-switch confirmed/failed) — one system
+    /// line, in agent chats.
+    private func handleHermesNotice(_ note: Notification) {
         if chatStore.conversation.isAgent, let notice = note.object as? String {
             chatStore.addMessage(text: notice, isUser: false, messageType: .system)
         }
@@ -1710,12 +1753,12 @@ struct ChatWindow: View {
         // A reply still streaming into THIS conversation must not survive the
         // wipe: without the cancel, its next flush would re-append the answer
         // into the fresh chat — an orphan reply to a question just erased.
-        if streamingOrigin == chatStore.conversation {
-            streamingTask?.cancel()
-            // Drop the live row NOW — the cancelled task unwinds a beat
-            // later, and the fresh chat must not show the orphan bubble
-            // for that beat.
-            liveReplyStub = nil
+        if let slot = streamSlots[chatStore.conversation] {
+            slot.task?.cancel()
+            // Drop the slot (and its live row) NOW — the cancelled task
+            // unwinds a beat later, and the fresh chat must not show the
+            // orphan bubble for that beat.
+            streamSlots.removeValue(forKey: chatStore.conversation)
             chatStore.statusText = nil
             chatStore.setLoading(false)
         }
@@ -1739,7 +1782,7 @@ struct ChatWindow: View {
     /// conversation (drives the send→stop button swap).
     private var agentTurnInFlight: Bool {
         chatStore.conversation.isAgent
-            && streamingOrigin == chatStore.conversation
+            && currentStreamSlot != nil
             && chatStore.isLoading
     }
 
@@ -1749,9 +1792,9 @@ struct ChatWindow: View {
     /// in the store; a catch-up moments later pulls whatever the gateway
     /// recorded for the interrupted turn.
     private func stopAgentTurn() {
-        guard streamingOrigin == chatStore.conversation else { return }
-        streamingTask?.cancel()
-        liveReplyStub = nil
+        guard let slot = streamSlots[chatStore.conversation] else { return }
+        slot.task?.cancel()
+        streamSlots.removeValue(forKey: chatStore.conversation)
         pendingAgentApproval = nil
         chatStore.statusText = nil
         chatStore.setLoading(false)
@@ -1844,9 +1887,9 @@ struct ChatWindow: View {
         // A reply streaming FOR the deleted chat — live or background — is
         // discarded: cancellation makes the stream task skip delivery, so it
         // cannot resurrect the deleted file.
-        if streamingOrigin == deletedID {
-            streamingTask?.cancel()
-            liveReplyStub = nil
+        if let slot = streamSlots[deletedID] {
+            slot.task?.cancel()
+            streamSlots.removeValue(forKey: deletedID)
         }
         if chatStore.conversation == deletedID {
             Task { @MainActor in
@@ -2216,19 +2259,20 @@ struct ChatWindow: View {
         let summary = chatStore.conversationSummary
         // The conversation this reply belongs to. If the user switches to
         // another preset chat mid-stream, generation continues in the
-        // background and the reply is delivered back to this one.
+        // background and the reply is delivered back to this one. The slot
+        // is keyed by it — parallel streams in OTHER conversations keep
+        // their own slots untouched.
         let origin = chatStore.conversation
-        streamingOrigin = origin
 
         // Fresh live buffer per stream: an older background stream keeps its
         // own instance and can't write into this one's bubble.
         let live = StreamingReplyModel()
-        liveReply = live
-        liveReplyStub = nil
-        streamingAwaitingText = true
-        streamingLastStatus = nil
+        streamSlots[origin] = StreamSlot(task: nil, live: live)
 
-        streamingTask = Task { @MainActor in
+        let task = Task { @MainActor in
+            // Whether this stream still owns its conversation's slot (a
+            // stop/new-chat/delete may have retired it mid-flight).
+            var owns: Bool { streamSlots[origin]?.live === live }
             // Local canonical copy of the reply (stable UUID). The LIVE
             // transcript renders from `live` (frozen segments + short tail,
             // O(chunk) per flush — see StreamingReplyModel); the STORE sees
@@ -2237,6 +2281,9 @@ struct ChatWindow: View {
             // already-final text, which is what lets it run at 30 Hz.
             var reply: ChatMessage?
             var isLive: Bool { chatStore.conversation == origin }
+            // Whether the on-screen store currently holds the reply row
+            // (false while detached; re-checked once on each return).
+            var storeRowInSync = false
             var pendingText = ""
             var lastFlush = ContinuousClock.now
             var lastCheckpoint = ContinuousClock.now
@@ -2294,35 +2341,42 @@ struct ChatWindow: View {
                     }
                     let first = ChatMessage(text: pendingText, isUser: false)
                     reply = first
-                    // Text is flowing — the tool/thinking phase is over.
-                    if liveReply === live {
-                        streamingAwaitingText = false
-                        streamingLastStatus = nil
+                    // Text is flowing — the tool/thinking phase is over. The
+                    // stub arms the live row even while DETACHED: returning
+                    // to this chat then renders the growing bubble at once,
+                    // not on the next flush.
+                    if owns {
+                        streamSlots[origin]?.awaitingText = false
+                        streamSlots[origin]?.lastStatus = nil
+                        streamSlots[origin]?.stub = first
                     }
-                    if isLive, chatStore.isHistoryLoaded, !Task.isCancelled, liveReply === live {
-                        // Materialize both rows the moment text flows: the
-                        // store row (masked while streaming — persistence and
-                        // API context see it) and the live row that renders.
-                        liveReplyStub = first
+                    if isLive, chatStore.isHistoryLoaded, !Task.isCancelled, owns {
+                        // Materialize the store row the moment text flows
+                        // (masked while streaming — persistence and API
+                        // context see it); the live row renders in its place.
                         chatStore.appendNow(first)
+                        storeRowInSync = true
                     } else {
                         // Telemetry for the "bubble freezes then pops" hunt:
                         // an unarmed live row renders at ~1 Hz checkpoint
                         // cadence instead of streaming.
-                        Diagnostics.log("chat", "live.unarmed isLive=\(isLive) historyLoaded=\(chatStore.isHistoryLoaded) sameModel=\(liveReply === live)")
+                        Diagnostics.log("chat", "live.unarmed isLive=\(isLive) historyLoaded=\(chatStore.isHistoryLoaded) sameModel=\(owns)")
                     }
                 }
                 // Mid-stream return: the reply may have materialized while
                 // ANOTHER chat was on screen (the branch above skipped the
-                // stub). Once the origin is back, re-arm the live row and
-                // give the store its masked copy — otherwise the rest of
-                // the stream would render at checkpoint cadence (~1 Hz).
-                if liveReplyStub == nil, let current = reply,
-                   isLive, chatStore.isHistoryLoaded, !Task.isCancelled, liveReply === live {
-                    liveReplyStub = current
+                // store row). Once the origin is back, give the store its
+                // masked copy — the live row is already armed via the slot.
+                // `storeRowInSync` keeps the contains() scan off the 30 Hz
+                // flush path: it runs once per return, not per chunk.
+                if !isLive {
+                    storeRowInSync = false
+                } else if !storeRowInSync, let current = reply,
+                          chatStore.isHistoryLoaded, !Task.isCancelled, owns {
                     if !chatStore.messages.contains(where: { $0.id == current.id }) {
                         chatStore.appendNow(current)
                     }
+                    storeRowInSync = true
                 }
                 live.append(pendingText)
                 pendingText = ""
@@ -2386,7 +2440,7 @@ struct ChatWindow: View {
                         }
                     case .status(let status):
                         flush() // keep text/status ordering intact
-                        if liveReply === live { streamingLastStatus = status }
+                        if owns { streamSlots[origin]?.lastStatus = status }
                         if isLive { chatStore.statusText = status }
                     case .toolContext(let context):
                         // Arrives once per round, at its end. Stored on the
@@ -2421,7 +2475,7 @@ struct ChatWindow: View {
                         if var current = reply {
                             current.text = full
                             reply = current
-                            if liveReply === live { live.setFullText(full) }
+                            if owns { live.setFullText(full) }
                             if isLive, chatStore.isHistoryLoaded,
                                chatStore.messages.contains(where: { $0.id == current.id }) {
                                 chatStore.setText(full, for: current.id)
@@ -2467,9 +2521,9 @@ struct ChatWindow: View {
                         reply = current
                         // Reflect the strip in the live bubble and the store
                         // copy so the marker never survives to the final text.
-                        if liveReply === live {
+                        if owns {
                             live.setFullText(current.text)
-                            streamingLastStatus = L("panel.thinking")
+                            streamSlots[origin]?.lastStatus = L("panel.thinking")
                         }
                         if isLive, chatStore.isHistoryLoaded,
                            chatStore.messages.contains(where: { $0.id == current.id }) {
@@ -2533,16 +2587,14 @@ struct ChatWindow: View {
                     if isLive { pendingRetry = .chat }
                 }
             }
-            // Retire the live row only AFTER the delivery above put the
-            // final text into the store row (a synchronous upsert when
-            // live): both changes land in one UI update, so the live→store
-            // row swap is invisible. Guarded — a newer stream may already
-            // own the live slot.
-            if liveReply === live {
-                liveReplyStub = nil
+            // Retire the slot only AFTER the delivery above put the final
+            // text into the store row (a synchronous upsert when live): both
+            // changes land in one UI update, so the live→store row swap is
+            // invisible. Guarded — a stop/new-chat may have retired it (and
+            // a fresh stream may already own the key).
+            if owns {
+                streamSlots.removeValue(forKey: origin)
                 live.reset()
-                streamingAwaitingText = false
-                streamingLastStatus = nil
             }
             if isLive {
                 chatStore.statusText = nil
@@ -2555,9 +2607,10 @@ struct ChatWindow: View {
                     await ChatService.compressHistoryIfNeeded(store: chatStore)
                 }
             }
-            // streamingTask deliberately NOT nil-ed here: a newer stream may
-            // already own the slot, and cancelling a finished task is a no-op.
         }
+        // Both writes are on the MainActor: the task body cannot have run
+        // before this line, so the slot always sees its task handle.
+        streamSlots[origin]?.task = task
     }
 
     // MARK: - Attachments / OCR

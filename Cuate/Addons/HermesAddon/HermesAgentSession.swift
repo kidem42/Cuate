@@ -46,6 +46,29 @@ final class HermesAgentSession: AgentSession {
         return String(excerpt.prefix(48)) + (excerpt.count > 48 ? "…" : "")
     }
 
+    /// A failed turn arrives as ordinary assistant text over HTTP 200
+    /// (fixtures) — a bare "quota exhausted (429)" plate explains nothing
+    /// about the way out. Known gateway failure shapes get a hint appended:
+    /// pick a model of another provider in the composer's model menu (or
+    /// just resend if the limits have renewed — the lock itself is fine).
+    /// Live shapes (2026-07-29): "⚠️ Provider authentication failed: Codex
+    /// provider quota exhausted (429); retry after …s." and
+    /// "HTTP 404: Model '…' not found" (rotted free-tier slug).
+    static func annotateGatewayFailure(_ content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Error frames are one-liners; long content merely QUOTING an error
+        // (e.g. the agent debugging its own logs) must pass untouched.
+        guard trimmed.count < 500 else { return content }
+        let lowered = trimmed.lowercased()
+        let quotaDead = lowered.contains("quota exhausted")
+            || lowered.contains("provider authentication failed")
+        let modelGone = lowered.contains("not found") && lowered.contains("model")
+            && (lowered.hasPrefix("http 4") || lowered.hasPrefix("⚠️") || lowered.contains("404"))
+        guard quotaDead || modelGone else { return content }
+        let hint = HL(quotaDead ? "hermes.fail.quota.hint" : "hermes.fail.model.hint")
+        return content + "\n\n" + hint
+    }
+
     func ensureSession(firstText: String = "") async throws -> String {
         if let existing = boundSessionID {
             // A session created by a button carries the placeholder title —
@@ -60,9 +83,6 @@ final class HermesAgentSession: AgentSession {
                     }
                 }
             }
-            // The gateway keeps a per-session model lock; when its slug rots
-            // out of the catalog every turn 404s — heal before the send.
-            await addon.healSessionLockIfStale(sessionID: existing)
             return existing
         }
         let transport = addon.transport()
@@ -176,7 +196,11 @@ final class HermesAgentSession: AgentSession {
                         case .assistantCompleted(let content, _):
                             // Authoritative full text — with the agent's own
                             // streaming off, this is the ONLY text event.
-                            continuation.yield(.finalText(content))
+                            // Gateway-side failures arrive HERE as error text
+                            // with HTTP 200 (fixtures) — annotated with a
+                            // "switch the model" hint so the user knows the
+                            // way out (live 2026-07-29: quota cooldown).
+                            continuation.yield(.finalText(Self.annotateGatewayFailure(content)))
                         case .runCompleted(let usage):
                             if !usage.isEmpty {
                                 continuation.yield(.usage(usage))

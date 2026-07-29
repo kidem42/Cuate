@@ -47,11 +47,13 @@ enum AgentChatService {
                 do {
                     continuation.yield(.status(AGL("agent.status.thinking")))
                     // The background poll must not misread our own turn as
-                    // outside activity (double banner): paused while we
-                    // stream, baseline re-seeded once we finish.
-                    HermesAddon.shared.streamActive = true
+                    // outside activity, and the mirror sync must keep its
+                    // hands off this conversation until the turn delivers
+                    // (registered per conversation — parallel session turns
+                    // each hold their own key). Baseline re-seeded once done.
+                    HermesAddon.shared.beginStreaming(conversationKey: conversationKey)
                     defer {
-                        HermesAddon.shared.streamActive = false
+                        HermesAddon.shared.endStreaming(conversationKey: conversationKey)
                         Task { await HermesAddon.shared.reseedPollBaseline() }
                     }
                     let events = session.send(text: userMessage.text, attachments: userMessage.attachments)

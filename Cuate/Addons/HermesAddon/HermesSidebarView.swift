@@ -404,6 +404,9 @@ struct HermesSidebarView: View {
             HermesSettings.shared.markAwaitingTitle(info.id)
             if let pair = await addon.resolveLockPair() {
                 try? await addon.transport().lockModel(sessionID: info.id, provider: pair.provider, model: pair.model)
+                // The composer label reads the per-session record — a
+                // button-made session must show its lock like any other.
+                HermesSettings.shared.recordModelLock(provider: pair.provider, model: pair.model, forSession: info.id)
             }
             NotificationCenter.default.post(
                 name: .hermesContinueSession, object: nil,

@@ -31,15 +31,46 @@ final class HermesAddon: ObservableObject {
     @Published private(set) var cachedProviders: [HermesProviderOption] = []
     @Published private(set) var currentModelPair: (provider: String, model: String)?
 
-    /// True while OUR chat pipeline streams a turn — the background poll
-    /// must not misreport our own reply as outside activity.
-    var streamActive = false
+    /// Conversations OUR chat pipeline is streaming a turn into right now
+    /// (several Hermes sessions can run at once). Two consumers:
+    /// - the background poll must not misreport our own replies as outside
+    ///   activity (and one turn ending must not unmute it while another
+    ///   still runs);
+    /// - the mirror sync must not touch a conversation mid-turn. Its old
+    ///   guard was `store.isLoading`, which a session switch wipes — a
+    ///   catch-up then ran DURING the run and inserted the gateway's rows
+    ///   for the in-flight reply as duplicate bubbles (app.log 2026-07-29
+    ///   12:40: catchUp between turn start and turn.end).
+    private var activeTurnKeys: [String: Int] = [:]
+    var streamActive: Bool { !activeTurnKeys.isEmpty }
+    func beginStreaming(conversationKey: String) {
+        activeTurnKeys[conversationKey, default: 0] += 1
+    }
+    func endStreaming(conversationKey: String) {
+        guard let count = activeTurnKeys[conversationKey] else { return }
+        if count <= 1 {
+            activeTurnKeys.removeValue(forKey: conversationKey)
+        } else {
+            activeTurnKeys[conversationKey] = count - 1
+        }
+    }
+    func isTurnActive(forConversationKey key: String) -> Bool {
+        activeTurnKeys[key] != nil
+    }
 
     /// Background gateway poll (§7.1: notifications must also cover runs we
     /// did NOT start — Hermes has no push channel, so we ask periodically).
     private var pollTask: Task<Void, Never>?
     /// sessionID → message_count at the last look (baseline seeded silently).
     private var lastSeenCounts: [String: Int] = [:]
+
+    /// sessionID → unread VISIBLE messages (sidebar badge). The gateway's
+    /// message_count includes tool rows — see `unreadCount(for:)`.
+    @Published private(set) var unreadBadges: [String: Int] = [:]
+    /// sessionID → the message_count each badge was computed at (stale →
+    /// the transcript tail is refetched); plus in-flight fetch dedup.
+    private var badgeComputedAt: [String: Int] = [:]
+    private var badgeFetchesInFlight: Set<String> = []
 
     private init() {}
 
@@ -114,9 +145,6 @@ final class HermesAddon: ObservableObject {
             if let options = try? await transport.modelOptions() {
                 cachedProviders = options.providers
                 currentModelPair = options.current
-                // Stale-lock cleanup rides every probe, so a rotten model
-                // slug is caught at connect time, not at the failed send.
-                validateLock(against: options.providers, current: options.current)
             }
             // Context window of the agent's model, resolved by Hermes itself
             // (the gauge's authoritative source). Older gateways 404 the
@@ -140,6 +168,22 @@ final class HermesAddon: ObservableObject {
             setConnection(.disconnected(status.message))
             return GatewayProbe.Result(status: status, serverInfo: serverInfo)
         }
+    }
+
+    /// Re-reads the provider/model catalog from the gateway. The truth
+    /// about availability lives THERE (its picker logic, its caches, its
+    /// quota handling — 2026-07-29) — the composer menu must mirror it
+    /// whenever the user comes back to the panel, not the snapshot of the
+    /// launch-time probe (a gateway-side picker fix stayed invisible until
+    /// an app restart). Throttled: the triggers (panel key, app active,
+    /// composer appear) fire in bursts.
+    private var lastCatalogRefresh: Date = .distantPast
+    func refreshCatalogIfStale() async {
+        guard Date().timeIntervalSince(lastCatalogRefresh) > 15 else { return }
+        lastCatalogRefresh = Date()
+        guard isAvailable, let options = try? await transport().modelOptions() else { return }
+        cachedProviders = options.providers
+        currentModelPair = options.current
     }
 
     private func setConnection(_ state: AgentConnectionState) {
@@ -198,11 +242,55 @@ final class HermesAddon: ObservableObject {
                 settings.markSessionRead(session.id, count: session.messageCount)
             }
         }
+        refreshUnreadBadges(sessions: sessions)
     }
 
-    /// Unread messages of a session (nil watermark = freshly seeded → 0).
+    /// Unread messages of a session, in MESSAGES the user would see — not in
+    /// gateway transcript rows. The raw watermark delta counts tool results
+    /// and tool-call shells too, so one agent turn showed as "34 unread";
+    /// the badge now reads from `unreadBadges` (computed from the transcript
+    /// tail), and 0 stands in while a fresh delta is still being resolved.
     func unreadCount(for session: HermesSessionInfo) -> Int {
-        max(0, session.messageCount - (settings.readCount(for: session.id) ?? session.messageCount))
+        guard let read = settings.readCount(for: session.id),
+              session.messageCount > read else { return 0 }
+        return unreadBadges[session.id] ?? 0
+    }
+
+    /// Recomputes visible-unread badges for sessions whose raw message_count
+    /// moved past the read watermark. One transcript fetch per (session,
+    /// count) — the poll and the sidebar reload both funnel through here.
+    private func refreshUnreadBadges(sessions: [HermesSessionInfo]) {
+        for session in sessions {
+            guard let read = settings.readCount(for: session.id),
+                  session.messageCount > read else {
+                // Read (or freshly seeded) — retire any stale badge.
+                if unreadBadges[session.id] != nil {
+                    unreadBadges.removeValue(forKey: session.id)
+                    badgeComputedAt.removeValue(forKey: session.id)
+                }
+                continue
+            }
+            guard badgeComputedAt[session.id] != session.messageCount,
+                  !badgeFetchesInFlight.contains(session.id) else { continue }
+            badgeFetchesInFlight.insert(session.id)
+            Task { @MainActor in
+                defer { badgeFetchesInFlight.remove(session.id) }
+                guard let rows = try? await transport().messages(sessionID: session.id) else { return }
+                // Rows are append-only: the first `read` ones were on screen
+                // when the watermark was set — everything after is new.
+                // Visible = what the transcript renders as bubbles: user
+                // turns and assistant rows with actual text (tool results
+                // and bare tool-call shells stay out).
+                let visible = rows.suffix(max(0, rows.count - read)).filter {
+                    $0.role == "user" || ($0.role == "assistant"
+                        && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.count
+                badgeComputedAt[session.id] = session.messageCount
+                // Never 0 while the raw count moved: an all-tool tail still
+                // means the agent worked here since the user last looked.
+                unreadBadges[session.id] = max(1, visible)
+            }
+        }
     }
 
     private func pollBoundSessions() async {
@@ -254,83 +342,23 @@ final class HermesAddon: ObservableObject {
     /// else the gateway's current top-level (provider, model) from
     /// `/api/model/options` — the agent's own configured default.
     ///
-    /// The explicit lock is re-validated against the FRESH catalog: model
-    /// slugs rot (OpenRouter rotates free tiers — `tencent/hy3:free`,
-    /// 2026-07-28), and a stale lock 404s every send. A dead pair falls
-    /// back to the agent's default and posts one system line to the chat.
+    /// The explicit choice is NOT validated against the catalog: the catalog
+    /// mirrors the gateway's momentary mood (quota cooldowns shrink it —
+    /// live 2026-07-29), while limits renew on the user's schedule. A model
+    /// that is truly gone fails the send with a visible hint
+    /// (`HermesAgentSession.annotateGatewayFailure`) — the user re-picks;
+    /// nothing silently overrides their choice (4.6 regression: the old
+    /// auto-heal reverted an explicit pick back to the quota-dead provider).
     func resolveLockPair() async -> (provider: String, model: String)? {
-        let options = try? await transport().modelOptions()
         if !settings.lockProvider.isEmpty, !settings.lockModel.isEmpty {
-            guard let options else {
-                // Gateway unreachable right now — keep the user's choice.
-                return (settings.lockProvider, settings.lockModel)
-            }
-            if isLockValid(in: options.providers) {
-                return (settings.lockProvider, settings.lockModel)
-            }
-            resetStaleLock(fallback: options.current)
-            return options.current
+            return (settings.lockProvider, settings.lockModel)
         }
-        return options?.current
-    }
-
-    /// True when the saved lock pair still exists in the gateway's catalog.
-    private func isLockValid(in providers: [HermesProviderOption]) -> Bool {
-        providers.contains {
-            $0.slug == settings.lockProvider && $0.models.contains(settings.lockModel)
-        }
-    }
-
-    /// Clears a dead lock and tells the user once (system line in the chat,
-    /// via ChatWindow's listener) which model replaced the vanished one.
-    func validateLock(against providers: [HermesProviderOption], current: (provider: String, model: String)?) {
-        guard !settings.lockProvider.isEmpty, !settings.lockModel.isEmpty,
-              !providers.isEmpty, !isLockValid(in: providers) else { return }
-        resetStaleLock(fallback: current)
-    }
-
-    /// Heals an EXISTING session whose per-session lock points at a model
-    /// that vanished from the gateway's catalog (the global-default reset
-    /// above only covers new sessions): re-locks the session to the agent's
-    /// current default and tells the user with one system line.
-    func healSessionLockIfStale(sessionID: String) async {
-        guard let recorded = settings.modelLock(forSession: sessionID) else { return }
-        guard let options = try? await transport().modelOptions(),
-              !options.providers.isEmpty else { return }
-        let valid = options.providers.contains {
-            $0.slug == recorded.provider && $0.models.contains(recorded.model)
-        }
-        guard !valid, let fallback = options.current,
-              fallback.model != recorded.model else { return }
-        try? await transport().lockModel(
-            sessionID: sessionID, provider: fallback.provider, model: fallback.model
-        )
-        settings.recordModelLock(
-            provider: fallback.provider, model: fallback.model, forSession: sessionID
-        )
-        Diagnostics.log("hermes", "sessionLock.stale \(recorded.model) → \(fallback.model) session=\(sessionID)")
-        postLockNotice(stale: recorded.model, fallback: fallback)
-    }
-
-    private func resetStaleLock(fallback: (provider: String, model: String)?) {
-        let stale = settings.lockModel
-        settings.lockProvider = ""
-        settings.lockModel = ""
-        Diagnostics.log("hermes", "modelLock.stale \(stale) — reset to agent default")
-        postLockNotice(stale: stale, fallback: fallback)
-    }
-
-    private func postLockNotice(stale: String, fallback: (provider: String, model: String)?) {
-        var notice = HL("hermes.lock.stale").replacingOccurrences(of: "%model%", with: stale)
-        notice = notice.replacingOccurrences(
-            of: "%fallback%", with: fallback?.model ?? HL("hermes.lock.agentDefault")
-        )
-        NotificationCenter.default.post(name: .hermesModelLockReset, object: notice)
+        return (try? await transport().modelOptions())?.current
     }
 }
 
 extension Notification.Name {
     /// Object: the user-facing notice string. ChatWindow shows it as one
-    /// system line in the active agent chat.
-    static let hermesModelLockReset = Notification.Name("hermesModelLockReset")
+    /// system line in the active agent chat (model-switch feedback).
+    static let hermesSystemNotice = Notification.Name("hermesSystemNotice")
 }

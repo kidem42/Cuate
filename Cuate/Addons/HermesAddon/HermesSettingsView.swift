@@ -285,7 +285,8 @@ struct HermesSettingsView: View {
             probeState = .result(message, ok: ok)
         }
         if ok {
-            lockOptions = (try? await addon.transport().modelOptions())?.providers ?? []
+            // The probe above just refreshed the cached catalog.
+            lockOptions = addon.cachedProviders
             await refreshSessions()
         }
     }

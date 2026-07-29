@@ -11,15 +11,25 @@ func HL(_ key: String) -> String {
 enum HermesAddonStrings {
     static let table: [String: [AppLanguage: String]] = [
         "hermes.tab": [.english: "Hermes Agent", .spanish: "Agente Hermes", .russian: "Hermes-агент"],
-        "hermes.lock.stale": [
-            .english: "Model %model% is no longer in the gateway's catalog — switched to %fallback%. Pick another model in the agent settings if needed.",
-            .spanish: "El modelo %model% ya no está en el catálogo del gateway — cambiado a %fallback%. Elige otro modelo en los ajustes del agente si hace falta.",
-            .russian: "Модель %model% пропала из каталога гейтвея — переключено на %fallback%. При необходимости выберите другую модель в настройках агента."
+        "hermes.lock.switched": [
+            .english: "Session model → %model% (%provider%)",
+            .spanish: "Modelo de la sesión → %model% (%provider%)",
+            .russian: "Модель сессии → %model% (%provider%)"
         ],
-        "hermes.lock.agentDefault": [
-            .english: "the agent's default model",
-            .spanish: "el modelo predeterminado del agente",
-            .russian: "модель агента по умолчанию"
+        "hermes.lock.switchFailed": [
+            .english: "Couldn't switch this session to %model%: %error%. The session keeps its previous model.",
+            .spanish: "No se pudo cambiar esta sesión a %model%: %error%. La sesión mantiene su modelo anterior.",
+            .russian: "Не удалось переключить сессию на %model%: %error%. Сессия остаётся на прежней модели."
+        ],
+        "hermes.fail.quota.hint": [
+            .english: "👉 This looks like an exhausted provider quota. Pick a model from another provider in the model menu below the composer — or, if your limits have renewed, just send again: the session keeps your chosen model.",
+            .spanish: "👉 Parece una cuota de proveedor agotada. Elige un modelo de otro proveedor en el menú de modelo bajo el compositor — o, si tus límites se han renovado, simplemente reenvía: la sesión mantiene tu modelo elegido.",
+            .russian: "👉 Похоже, у провайдера исчерпан лимит. Выберите модель другого провайдера в меню модели под композером — или, если лимиты обновились, просто отправьте ещё раз: сессия остаётся на выбранной вами модели."
+        ],
+        "hermes.fail.model.hint": [
+            .english: "👉 The gateway couldn't reach this session's model. Pick another one in the model menu below the composer.",
+            .spanish: "👉 El gateway no pudo acceder al modelo de esta sesión. Elige otro en el menú de modelo bajo el compositor.",
+            .russian: "👉 Гейтвею не удалось обратиться к модели этой сессии. Выберите другую в меню модели под композером."
         ],
 
         // MARK: General tab master switch
