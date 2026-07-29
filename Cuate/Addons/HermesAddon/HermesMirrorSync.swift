@@ -127,7 +127,11 @@ enum HermesMirrorSync {
                 continue
             }
             let isUser = gwRow.role == "user"
-            let gwText = gwRow.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Our briefed first send holds preamble + text on the gateway,
+            // while the local bubble holds the text alone — strip the tagged
+            // block before comparing (and below, before inserting).
+            let gwText = HermesBriefing.stripped(gwRow.content)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             var scan = textScanStart
             while scan < localRows.count {
                 let candidate = localRows[scan]
@@ -217,7 +221,9 @@ enum HermesMirrorSync {
         func message(from row: HermesTranscriptMessage, sessionID: String) -> ChatMessage {
             ChatMessage(
                 id: UUID(),
-                text: row.content,
+                // A briefed first send rebuilt from the gateway (app
+                // reinstall, another Cuate) must not show the preamble.
+                text: row.role == "user" ? HermesBriefing.stripped(row.content) : row.content,
                 isUser: row.role == "user",
                 timestamp: row.timestamp ?? Date(),
                 messageType: .text,

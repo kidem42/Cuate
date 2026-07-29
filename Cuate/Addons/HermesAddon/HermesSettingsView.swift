@@ -104,6 +104,7 @@ struct HermesSettingsView: View {
             dashboardSection
             setupSection
             modelSection
+            briefingSection
             historySection
             appFeaturesSection
             notificationsSection
@@ -385,6 +386,21 @@ struct HermesSettingsView: View {
             let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
             settings.lockProvider = parts.count == 2 ? parts[0] : ""
             settings.lockModel = parts.count == 2 ? parts[1] : ""
+        }
+    }
+
+    // MARK: - Formatting briefing (per-session preamble, HermesBriefing)
+
+    private var briefingSection: some View {
+        Section {
+            Toggle(HL("hermes.briefing.toggle"), isOn: $settings.briefingEnabled)
+        } header: {
+            Text(HL("hermes.briefing.header"))
+        } footer: {
+            Text(HL("hermes.briefing.caption"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

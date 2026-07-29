@@ -177,6 +177,23 @@ enum HermesAddonStrings {
         "hermes.sessions.empty": [.english: "No sessions on the gateway.", .spanish: "No hay sesiones en el gateway.", .russian: "На гейтвее нет сессий."],
         "hermes.sessions.messages": [.english: "%d messages", .spanish: "%d mensajes", .russian: "%d сообщений"],
 
+        // MARK: Formatting briefing (per-session preamble)
+        "hermes.briefing.header": [
+            .english: "Formatting briefing",
+            .spanish: "Instrucciones de formato",
+            .russian: "Брифинг по форматированию"
+        ],
+        "hermes.briefing.toggle": [
+            .english: "Teach the agent Cuate's formatting",
+            .spanish: "Enseñar al agente el formato de Cuate",
+            .russian: "Обучать агента форматированию Cuate"
+        ],
+        "hermes.briefing.caption": [
+            .english: "The first message of each session carries a hidden preamble telling the agent how to format replies for this app: rich Markdown, HTML/Mermaid blocks only for interactives and diagrams, full re-issues of edited documents. Costs ~350 tokens once per session; the agent's other surfaces are unaffected, though the preamble is visible when that session's transcript is read from Telegram or the CLI.",
+            .spanish: "El primer mensaje de cada sesión lleva un preámbulo oculto que indica al agente cómo formatear las respuestas para esta app: Markdown completo, bloques HTML/Mermaid solo para interactivos y diagramas, reediciones completas de documentos corregidos. Cuesta ~350 tokens una vez por sesión; las demás superficies del agente no se ven afectadas, aunque el preámbulo es visible al leer esa sesión desde Telegram o la CLI.",
+            .russian: "Первое сообщение каждой сессии несёт скрытую преамбулу — как оформлять ответы для этого приложения: полноценный Markdown, блоки HTML/Mermaid только для интерактивов и диаграмм, правки документов — полным переизданием. Стоит ~350 токенов один раз на сессию; другие поверхности агента не затрагиваются, но преамбула видна, если читать транскрипт той же сессии из Telegram или CLI."
+        ],
+
         // MARK: Notifications
         "hermes.notif.header": [.english: "Notifications", .spanish: "Notificaciones", .russian: "Уведомления"],
         "hermes.notif.hideDetails": [

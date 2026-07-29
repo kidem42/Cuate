@@ -113,7 +113,18 @@ final class HermesAgentSession: AgentSession {
                     // OTHER surfaces happens in the send path (ChatWindow),
                     // so its note is part of the local message too — doing it
                     // here left our bubble and the gateway's row different.
-                    let input = HermesTransport.inputPayload(text: text, images: images)
+
+                    // Per-session formatting briefing: an invisible tagged
+                    // preamble rides at the head of OUR FIRST message in this
+                    // session (HermesBriefing; the mirror sync strips it on
+                    // the way back). Skipped for slash commands — a prefix
+                    // would unhook the gateway's command detection; the next
+                    // plain message briefs instead.
+                    let needsBriefing = self.settings.briefingEnabled
+                        && !self.settings.isSessionBriefed(sessionID)
+                        && !text.trimmingCharacters(in: .whitespaces).hasPrefix("/")
+                    let wireText = needsBriefing ? HermesBriefing.prefixed(text) : text
+                    let input = HermesTransport.inputPayload(text: wireText, images: images)
                     // Reasoning effort from the composer control ("" = the
                     // agent's own default, nothing is sent).
                     let effort = self.settings.reasoningEffort
@@ -127,6 +138,13 @@ final class HermesAgentSession: AgentSession {
                         switch event {
                         case .runStarted(let runID):
                             self.currentRunID = runID
+                            // The gateway accepted the message — the briefing
+                            // is in the session's history for good. Marking
+                            // here (not before the send) lets a failed send
+                            // retry with the preamble still attached.
+                            if needsBriefing {
+                                self.settings.markSessionBriefed(sessionID)
+                            }
                         case .messageStarted:
                             break
                         case .toolStarted(let tool, let preview):

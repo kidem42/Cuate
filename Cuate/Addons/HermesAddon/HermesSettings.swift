@@ -210,6 +210,31 @@ final class HermesSettings: ObservableObject {
         return true
     }
 
+    // MARK: - Formatting briefing (per-session preamble)
+    //
+    // The invisible `HermesBriefing.preamble` rides at the head of OUR first
+    // message in each gateway session; this remembers which sessions already
+    // carry it. Bounded like `sessionsAwaitingTitle` — an evicted id would
+    // merely re-brief once.
+
+    /// Master switch for the injection (on by default).
+    @Published var briefingEnabled: Bool {
+        didSet { defaults.set(briefingEnabled, forKey: "hermes.briefingEnabled") }
+    }
+
+    @Published private(set) var briefedSessions: [String] {
+        didSet { defaults.set(briefedSessions, forKey: "hermes.briefedSessions") }
+    }
+
+    func isSessionBriefed(_ sessionID: String) -> Bool {
+        briefedSessions.contains(sessionID)
+    }
+
+    func markSessionBriefed(_ sessionID: String) {
+        guard !briefedSessions.contains(sessionID) else { return }
+        briefedSessions = Array((briefedSessions + [sessionID]).suffix(300))
+    }
+
     // MARK: - Context fill (composer gauge)
     //
     // sessionID → tokens the last run's prompt+completion occupied. Hermes
@@ -405,6 +430,8 @@ final class HermesSettings: ObservableObject {
         sessionModelLocks = (defaults.dictionary(forKey: "hermes.sessionModelLocks") as? [String: String]) ?? [:]
         sessionContextTokens = (defaults.dictionary(forKey: "hermes.sessionContextTokens") as? [String: Int]) ?? [:]
         sessionsAwaitingTitle = defaults.stringArray(forKey: "hermes.sessionsAwaitingTitle") ?? []
+        briefingEnabled = defaults.object(forKey: "hermes.briefingEnabled") as? Bool ?? true
+        briefedSessions = defaults.stringArray(forKey: "hermes.briefedSessions") ?? []
         contextLimitTokens = defaults.object(forKey: "hermes.contextLimitTokens") as? Int ?? 262_144
         agentContextModel = defaults.string(forKey: "hermes.agentContextModel") ?? ""
         agentContextLength = defaults.object(forKey: "hermes.agentContextLength") as? Int ?? 0
