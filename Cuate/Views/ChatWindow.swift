@@ -403,10 +403,19 @@ struct ChatWindow: View {
         }
 
         if bottomDropCount == 0, liveStreamOnScreen, let stub = liveReplyStub {
-            // Constant revision on purpose: the row's CONTENT updates itself
-            // through the model — the engine never rebuilds it mid-stream.
+            // Constant revision WITHIN a stream on purpose: the row's CONTENT
+            // updates itself through the model — the engine never rebuilds it
+            // mid-stream. But it must differ PER STREAM (stub.id is fresh
+            // each turn): the engine parks removed rows for reuse, and a
+            // same-revision "live-reply" comes back with the PREVIOUS turn's
+            // rootView — old stub, reset model — an empty bubble the new
+            // stream never writes into, while the real text goes to a model
+            // nobody renders (empty bubble till delivery, 2026-07-29).
+            var liveHasher = Hasher()
+            liveHasher.combine(baseRevision)
+            liveHasher.combine(stub.id)
             let live = liveReply
-            items.append(TranscriptItem(id: "live-reply", revision: baseRevision) { [palette] in
+            items.append(TranscriptItem(id: "live-reply", revision: liveHasher.finalize()) { [palette] in
                 AnyView(
                     MessageRow(message: stub, maxBubbleWidth: maxBubble,
                                isStreamingReply: true, liveModel: live)
@@ -2231,6 +2240,8 @@ struct ChatWindow: View {
             var pendingText = ""
             var lastFlush = ContinuousClock.now
             var lastCheckpoint = ContinuousClock.now
+            // One line per turn, max — see the invisible-prefix guard in flush().
+            var loggedInvisiblePrefix = false
             // Tool-produced chips (Plaud notes) buffered until delivery —
             // they arrive mid-turn, usually BEFORE any reply text exists to
             // hang them on.
@@ -2263,6 +2274,24 @@ struct ChatWindow: View {
                     current.text += pendingText
                     reply = current
                 } else {
+                    // Only VISIBLE content materializes the bubble: models
+                    // open a message with a bare "\n"/"\n\n" delta (Hermes —
+                    // see its API fixtures; kimi-k3 in plain chat, 2026-07-28
+                    // 18:20 in the diagnostics log) and then think/run tools
+                    // for seconds-to-minutes — flushing on that parked an
+                    // EMPTY bubble on screen for the whole phase. The
+                    // whitespace stays buffered and rides out with the first
+                    // real text.
+                    guard !pendingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        // Escaped so the exact invisible bytes are readable;
+                        // if an "empty bubble" report ever comes back, this
+                        // line says what the provider actually sent.
+                        if !loggedInvisiblePrefix {
+                            loggedInvisiblePrefix = true
+                            Diagnostics.log("chat", "live.buffer invisible prefix \(String(reflecting: pendingText.prefix(60)))")
+                        }
+                        return
+                    }
                     let first = ChatMessage(text: pendingText, isUser: false)
                     reply = first
                     // Text is flowing — the tool/thinking phase is over.
@@ -2326,13 +2355,18 @@ struct ChatWindow: View {
                 for try await event in stream {
                     switch event {
                     case .text(let chunk):
+                        pendingText += chunk
                         // Text is flowing — the thinking/search pill must go
                         // away (otherwise it lingers *below* the growing
                         // answer bubble, since it renders after the messages).
-                        if isLive, chatStore.statusText != nil {
+                        // Only VISIBLE text counts: a leading "\n\n" delta
+                        // must not kill the pill before there is a bubble —
+                        // that left the chat looking dead until the next
+                        // status event.
+                        if isLive, chatStore.statusText != nil,
+                           reply != nil || !pendingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             chatStore.statusText = nil
                         }
-                        pendingText += chunk
                         // The first chunk flushes immediately so the bubble
                         // appears the moment text starts flowing.
                         //

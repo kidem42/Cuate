@@ -133,6 +133,12 @@ final class TranscriptEngineView: NSScrollView {
     /// Distinguishes viewport resizes from user scrolls in
     /// `clipBoundsChanged` — only origin moves classify the pin.
     private var lastViewportSize = NSSize.zero
+    /// Origin at the last clip-bounds notification (programmatic moves
+    /// update it too — their notifications fire inside the depth guard).
+    /// Classification compares against it: a bounds event whose origin did
+    /// NOT move is the DOCUMENT changing under a stationary viewport, never
+    /// the user scrolling.
+    private var lastObservedOriginY: CGFloat = 0
 
     // MARK: Init
 
@@ -385,6 +391,7 @@ final class TranscriptEngineView: NSScrollView {
             // appears after a pinned-message jump and the only way back
             // down is the wheel (e2e 2026-07-27).
             reportNearBottom(false)
+            Diagnostics.log("transcript", "pin.drop jump id=\(id)")
         }
         guard animated else {
             setOriginY(target)
@@ -447,6 +454,7 @@ final class TranscriptEngineView: NSScrollView {
            documentHeight > viewportHeight, isPinnedToBottom {
             isPinnedToBottom = false
             reportNearBottom(false)
+            Diagnostics.log("transcript", "pin.drop wheel dy=\(String(format: "%.1f", event.scrollingDeltaY))")
         }
         super.scrollWheel(with: event)
     }
@@ -455,6 +463,12 @@ final class TranscriptEngineView: NSScrollView {
     /// else is the user, and the pin state follows their position with
     /// hysteresis.
     @objc private func clipBoundsChanged(_ note: Notification) {
+        // Origin tracking feeds classification below; programmatic moves
+        // consume their own delta here too (their notifications arrive
+        // synchronously inside the depth guard).
+        let originY = contentView.bounds.origin.y
+        let originMoved = abs(originY - lastObservedOriginY) > 0.5
+        lastObservedOriginY = originY
         // A bounds SIZE change is geometry, not scrolling: the composer grew
         // (file pills, slash suggestions, recording bar), the pinned bar
         // toggled, the window resized. Re-assert the pin instead of
@@ -469,13 +483,21 @@ final class TranscriptEngineView: NSScrollView {
         }
         guard programmaticScrollDepth == 0 else { return }
         if isPinnedToBottom {
-            if distanceFromBottom > Self.unpinDistance {
+            // Unpin needs BOTH: the viewport actually moved (the user's
+            // hand) AND it ended far from the bottom. Distance alone also
+            // grows when the STREAMING BUBBLE grows under a stationary
+            // viewport — classifying that as "user scrolled away" killed
+            // auto-follow the moment 30 Hz growth outran the follow
+            // (pin.drop bounds distance=50, 2026-07-29 11:29).
+            if originMoved, distanceFromBottom > Self.unpinDistance {
                 isPinnedToBottom = false
                 reportNearBottom(false)
+                Diagnostics.log("transcript", "pin.drop bounds distance=\(Int(distanceFromBottom)) doc=\(Int(documentHeight))")
             }
         } else if distanceFromBottom < Self.repinDistance {
             isPinnedToBottom = true
             reportNearBottom(true)
+            Diagnostics.log("transcript", "pin.gain bounds")
         }
 
         // Only while actually reading history: at the bottom the wide
