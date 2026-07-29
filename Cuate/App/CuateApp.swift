@@ -37,6 +37,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var worldTimeWindow: NSWindow? // WorldTimeAddon (Addons/WorldTimeAddon)
+    /// When the World Time panel was last summoned — a resign-key arriving
+    /// within a beat of the summon is our own activation dance settling, not
+    /// the user leaving (see `hideWorldTimePanel`).
+    private var worldTimeShownAt = Date.distantPast
     private var hotkeyManager: HotkeyManager?
     private var statusItem: NSStatusItem?
     /// Keeps the pending-approval → status-item subscription alive.
@@ -719,10 +723,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
 
         guard let window = worldTimeWindow else { return }
-        // First show (no saved frame): Spotlight-centered on the screen
-        // under the cursor. Afterwards: wherever the user left it.
-        if !window.setFrameUsingName(Self.worldTimeFrameName, force: true) {
-            let screen = screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
+        // Saved frame first (size + position where the user left it) — but
+        // ALWAYS on the screen the user is on now: a frame saved on another
+        // display summoned the panel "somewhere else entirely" while the
+        // user was looking at this screen (2026-07-29). Same-screen summons
+        // keep the exact remembered spot.
+        let screen = screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
+        if !window.setFrameUsingName(Self.worldTimeFrameName, force: true)
+            || !screen.frame.intersects(window.frame) {
             spotlightCenter(window, on: screen)
         }
         // Same raising dance as the chat panel (`activatePanel`): cooperative
@@ -736,6 +744,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             NSApp.activate(ignoringOtherApps: true)
         }
         window.makeKeyAndOrderFront(nil)
+        worldTimeShownAt = Date()
     }
 
     /// Chrome around the panel's measured content block: top padding (4) +
@@ -1261,6 +1270,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         guard let window = worldTimeWindow, window.isVisible else { return }
         if let settingsWindow, settingsWindow.isKeyWindow { return }
         if window.attachedSheet != nil { return }
+        // Summon-time steal: cooperative activation completes a beat AFTER
+        // makeKeyAndOrderFront and can hand key back to another of our
+        // windows (the chat panel) — that resign is our own activation dance
+        // settling, not the user leaving. Hiding on it made every summon
+        // flash-and-vanish (app.log 2026-07-29 13:13, worldTime.hide storm
+        // right after each hotkey press). Re-take key instead.
+        if Date().timeIntervalSince(worldTimeShownAt) < 1.0 {
+            Diagnostics.log("ui", "worldTime.rekey")
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
         Diagnostics.log("ui", "worldTime.hide")
         window.orderOut(nil)
     }
