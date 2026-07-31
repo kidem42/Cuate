@@ -83,7 +83,7 @@ nonisolated enum APIKeyStore {
         if let carried {
             bundleCache = carried
             bundleLock.unlock()
-            DispatchQueue.main.async { notifyChange(invalidateCache: false) }
+            DispatchQueue.main.async { notifyChange() }
             return
         }
         switch result {
@@ -96,12 +96,12 @@ nonisolated enum APIKeyStore {
             // The ACL-repair path below always posted; this silent-success
             // path never did — with a STABLE signing identity (no repair on
             // relaunch) that left the switcher hidden after every launch.
-            DispatchQueue.main.async { notifyChange(invalidateCache: false) }
+            DispatchQueue.main.async { notifyChange() }
         case .missing:
             let migrated = migrateLegacyLocked()
             bundleCache = migrated
             bundleLock.unlock()
-            DispatchQueue.main.async { notifyChange(invalidateCache: false) }
+            DispatchQueue.main.async { notifyChange() }
         case .locked:
             bundleLock.unlock()
             Diagnostics.log("keys", "keychain needs authorization — asking in the background")
@@ -162,7 +162,7 @@ nonisolated enum APIKeyStore {
         bundleLock.unlock()
 
         Diagnostics.log("keys", "keychain authorized — acl rebuilt=\(rewritten)")
-        DispatchQueue.main.async { notifyChange(invalidateCache: false) }
+        DispatchQueue.main.async { notifyChange() }
     }
 
     // MARK: - Bundle storage
@@ -350,14 +350,12 @@ nonisolated enum APIKeyStore {
         return "••••••••" + suffix
     }
 
-    /// `invalidateCache: false` is for the authorization repair, which has just
-    /// FILLED the cache — dropping it there would send the app straight back to
-    /// the Keychain.
-    private static func notifyChange(invalidateCache: Bool = true) {
-        if invalidateCache {
-            bundleLock.withLock { bundleCache = nil }
-            warmInBackground()
-        }
+    /// Never drops the cache: every caller (warm, repair, set/remove) has just
+    /// brought it into exact agreement with the Keychain, and invalidating here
+    /// opened a window in which every sync accessor reported "no key" — the
+    /// Settings UI read its masks inside that window and rendered ALL keys as
+    /// empty after any save or remove.
+    private static func notifyChange() {
         NotificationCenter.default.post(name: .apiKeysDidChange, object: nil)
     }
 

@@ -132,6 +132,12 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshPermissions()
         }
+        // Masks are computed from APIKeyStore's cache, which may still be cold
+        // when onAppear ran (background warm in flight) — re-read once the
+        // store republishes, so keys don't render as empty fields.
+        .onReceive(NotificationCenter.default.publisher(for: .apiKeysDidChange)) { _ in
+            refreshMasks()
+        }
         .onChange(of: settings.chatProvider) { _, provider in
             // Load the newly selected provider's models (or OpenRouter catalog).
             settings.autoLoadModelsIfNeeded(for: provider)
