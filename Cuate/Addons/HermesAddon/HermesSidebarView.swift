@@ -316,6 +316,7 @@ struct HermesSidebarView: View {
                             .font(.system(size: 10))
                             .foregroundColor(palette.ink)
                     }
+                    let hasTitle = session.title?.isEmpty == false
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 3) {
                             if settings.isSessionPinned(session.id) {
@@ -323,16 +324,29 @@ struct HermesSidebarView: View {
                                     .font(.system(size: 8))
                                     .foregroundColor(palette.secondaryText)
                             }
-                            Text(session.title?.isEmpty == false ? session.title! : session.id)
+                            Text(hasTitle ? session.title! : session.id)
                                 .font(.system(size: 12, weight: isBound ? .medium : .regular))
                                 .foregroundColor(palette.primaryText)
                                 .lineLimit(1)
                         }
-                        if let preview = session.preview, !preview.isEmpty {
-                            Text(preview)
-                                .font(.system(size: 10))
-                                .foregroundColor(palette.secondaryText)
-                                .lineLimit(1)
+                        // Title and preview both derive from the first
+                        // message — a second line under a titled row only
+                        // DUPLICATED it (report 2026-07-31). The preview
+                        // stays where it carries information: sessions
+                        // listed by raw id (CLI-made, no title), with our
+                        // invisible briefing preamble stripped.
+                        if !hasTitle, let raw = session.preview {
+                            let preview = HermesBriefing.stripped(raw)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            // A TRUNCATED preview can carry the open tag
+                            // with its closing tag cut off — stripped()
+                            // passes that through; show nothing instead.
+                            if !preview.isEmpty, !preview.hasPrefix(HermesBriefing.openTag) {
+                                Text(preview)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(palette.secondaryText)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                     // Unread badge: growth past the read watermark (set

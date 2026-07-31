@@ -1819,6 +1819,13 @@ struct ChatWindow: View {
             // The conversation may have moved on during the fetch.
             if chatStore.conversation == role.conversationID {
                 agentGatewayOffline = !reachable
+                // Catch-up runs at every "came back to look" moment (panel
+                // shown, conversation switched) and may itself have pulled
+                // fresh rows — what's on screen now counts as read.
+                if reachable,
+                   let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey) {
+                    await hermesAddon.markSessionRead(sessionID)
+                }
             }
         }
     }
@@ -1877,6 +1884,12 @@ struct ChatWindow: View {
         let target = targetConversation()
         guard target != chatStore.conversation else { return }
         chatStore.switchConversation(to: target)
+        // The just-opened agent thread is read NOW — its badge must not
+        // wait for the sidebar's 30s watermark poll (report 2026-07-31).
+        if case .agent = target,
+           let sessionID = hermesSettings.sessionID(forConversationKey: target.storageKey) {
+            Task { await hermesAddon.markSessionRead(sessionID) }
+        }
     }
 
     /// A custom preset was deleted: its dormant chat file + media go away.

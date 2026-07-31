@@ -245,6 +245,24 @@ final class HermesAddon: ObservableObject {
         refreshUnreadBadges(sessions: sessions)
     }
 
+    /// Immediate read-marking for the session whose conversation just came
+    /// on screen. The sidebar's watermark pass only rides the 30s poll
+    /// (muted during any streaming turn) and sidebar reloads — waiting for
+    /// it left badges hanging long after the user had opened the thread
+    /// (report 2026-07-31). The badge retires optimistically right away;
+    /// the watermark trues up from a fresh sessions fetch.
+    func markSessionRead(_ sessionID: String) async {
+        unreadBadges.removeValue(forKey: sessionID)
+        badgeComputedAt.removeValue(forKey: sessionID)
+        guard let sessions = try? await transport().sessions(limit: 50),
+              let row = sessions.first(where: { $0.id == sessionID }) else { return }
+        settings.markSessionRead(sessionID, count: row.messageCount)
+        // The user is looking at these rows — they must not come back as
+        // an "outside activity" banner either.
+        lastSeenCounts[sessionID] = row.messageCount
+        refreshUnreadBadges(sessions: sessions)
+    }
+
     /// Unread messages of a session, in MESSAGES the user would see — not in
     /// gateway transcript rows. The raw watermark delta counts tool results
     /// and tool-call shells too, so one agent turn showed as "34 unread";
