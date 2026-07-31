@@ -201,15 +201,20 @@ final class HermesAgentSession: AgentSession {
                             // "switch the model" hint so the user knows the
                             // way out (live 2026-07-29: quota cooldown).
                             continuation.yield(.finalText(Self.annotateGatewayFailure(content)))
-                        case .runCompleted(let usage):
+                        case .runCompleted(let usage, let contextTokens):
                             if !usage.isEmpty {
                                 continuation.yield(.usage(usage))
-                                // Context fill of THIS session: the prompt the
-                                // gateway just sent plus what it generated is
-                                // what the next turn's prompt starts from.
-                                // Cached reads count — they are context too.
+                                // Context fill of THIS session. Patched
+                                // gateways report it directly (the last
+                                // call's prompt size — Hermes' own status-bar
+                                // number). Stock gateways only give run-
+                                // cumulative sums, where every tool-loop call
+                                // re-counts the whole prompt — a 26-step turn
+                                // reads as 2M+; the gauge caps that at the
+                                // window so the fallback stays plausible.
                                 self.settings.recordContextTokens(
-                                    usage.inputTokens + usage.cacheReadTokens + usage.outputTokens,
+                                    contextTokens
+                                        ?? usage.inputTokens + usage.cacheReadTokens + usage.outputTokens,
                                     forSession: sessionID
                                 )
                             }

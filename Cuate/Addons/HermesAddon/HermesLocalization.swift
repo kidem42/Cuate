@@ -349,6 +349,46 @@ enum HermesAddonStrings {
             .spanish: "Instalando el servicio del gateway…",
             .russian: "Устанавливаю сервис гейтвея…"
         ],
+        "hermes.auto.step.patch": [
+            .english: "Enabling the accurate context metric…",
+            .spanish: "Activando la métrica de contexto precisa…",
+            .russian: "Включаю точную метрику контекста…"
+        ],
+        "hermes.patch.found": [
+            .english: "The gateway does not report the session's actual context fill yet (its API only sums a turn's token spend). Cuate can add it — two lines in the gateway's api_server.py, with a backup saved next to it. A Hermes update rolls this back; the offer will then reappear here.",
+            .spanish: "El gateway aún no informa el llenado real del contexto de la sesión (su API solo suma el gasto de tokens del turno). Cuate puede añadirlo: dos líneas en api_server.py del gateway, con copia de seguridad al lado. Una actualización de Hermes lo revierte; la oferta reaparecerá aquí.",
+            .russian: "Гейтвей пока не отдаёт реальное заполнение контекста сессии (его API суммирует лишь расход токенов за ход). Cuate может добавить это — две строки в api_server.py гейтвея, бэкап останется рядом. Обновление Hermes откатит правку — предложение снова появится здесь."
+        ],
+        "hermes.patch.run": [
+            .english: "Enable accurate context gauge",
+            .spanish: "Activar medidor de contexto preciso",
+            .russian: "Включить точный гейдж контекста"
+        ],
+        "hermes.patch.running": [
+            .english: "Patching the gateway and restarting…",
+            .spanish: "Parcheando el gateway y reiniciando…",
+            .russian: "Патчу гейтвей и перезапускаю…"
+        ],
+        "hermes.patch.ok": [
+            .english: "Done: the gateway now reports the real context fill (usage.context_tokens).",
+            .spanish: "Listo: el gateway ahora informa el llenado real del contexto (usage.context_tokens).",
+            .russian: "Готово: гейтвей теперь отдаёт реальное заполнение контекста (usage.context_tokens)."
+        ],
+        "hermes.patch.err": [
+            .english: "Could not patch the gateway:",
+            .spanish: "No se pudo parchear el gateway:",
+            .russian: "Не удалось пропатчить гейтвей:"
+        ],
+        "hermes.setup.patch.title": [
+            .english: "Accurate context gauge (gateway patch)",
+            .spanish: "Medidor de contexto preciso (parche del gateway)",
+            .russian: "Точный гейдж контекста (патч гейтвея)"
+        ],
+        "hermes.setup.patch.caption": [
+            .english: "Paste into the remote machine's terminal. Hermes counts the real context fill internally but does not expose it over its API — this adds usage.context_tokens (two lines, backup next to the file, refuses on unknown layouts). Safe to re-run; repeat after a Hermes update. Without it the gauge falls back to the turn's token spend, capped at the window.",
+            .spanish: "Pega esto en la terminal de la máquina remota. Hermes calcula el llenado real del contexto internamente pero no lo expone por su API — esto añade usage.context_tokens (dos líneas, copia de seguridad junto al archivo, se niega ante estructuras desconocidas). Se puede repetir; repítelo tras actualizar Hermes. Sin él, el medidor recurre al gasto de tokens del turno, limitado a la ventana.",
+            .russian: "Вставьте в терминал удалённой машины. Hermes считает реальное заполнение контекста у себя, но не отдаёт его по API — команда добавляет usage.context_tokens (две строки, бэкап рядом с файлом, на незнакомой структуре откажется без правок). Повторный запуск безопасен; после обновления Hermes — повторить. Без патча гейдж падает на расход токенов за ход, обрезанный по окну."
+        ],
         "hermes.auto.step.reload": [
             .english: "Starting the gateway…",
             .spanish: "Arrancando el gateway…",

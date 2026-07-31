@@ -46,6 +46,33 @@ struct HermesSettingsView: View {
     ssh USER@HOST "grep '^API_SERVER_KEY=' ~/.hermes/.env"
     """
 
+    /// Context-metric patch for a REMOTE gateway — the same edit
+    /// HermesLocalGateway performs on this Mac, as a paste-into-the-VPS
+    /// block (we have no file access over there). Anchored by code with a
+    /// backup next to the file; idempotent; refuses untouched on foreign
+    /// layouts. Battle-tested on the maintainer's VPS 2026-07-30. Mirrors
+    /// `HermesLocalGateway.contextPatchLine` — keep the two in sync.
+    private static let contextPatchRemoteCommands = """
+    HP=$(hermes --version 2>/dev/null | sed -n 's/^Install directory: //p'); \\
+    [ -z "$HP" ] && HP=$(dirname "$(dirname "$(dirname "$(find /root /home /opt /usr/local \\
+      -name api_server.py -path '*/gateway/platforms/*' 2>/dev/null | head -1)")")"); \\
+    echo "hermes at: $HP"; \\
+    HERMES_DIR="$HP" python3 - <<'EOF' && hermes gateway restart
+    import os, re, pathlib
+    p = pathlib.Path(os.environ["HERMES_DIR"]) / "gateway/platforms/api_server.py"
+    src = p.read_text()
+    if '"context_tokens"' in src:
+        print("already patched"); raise SystemExit
+    pathlib.Path(str(p) + ".bak").write_text(src)  # backup
+    pat = re.compile(r'^(\\s*)("total_tokens": getattr\\(agent, "session_total_tokens", 0\\) or 0,)$', re.M)
+    line = '"context_tokens": max(0, getattr(getattr(agent, "context_compressor", None), "last_prompt_tokens", 0) or 0),'
+    src2, n = pat.subn(lambda m: m.group(0) + "\\n" + m.group(1) + line, src)
+    assert n >= 1, "anchor not found - different Hermes version, patch by hand"
+    p.write_text(src2)
+    print(f"ok: patched {n} site(s)")
+    EOF
+    """
+
     @State private var dashboardTokenInput = ""
     @State private var dashboardTokenMasked: String? = APIKeyStore.maskedKey(aux: .hermesDashboard)
 
@@ -57,6 +84,17 @@ struct HermesSettingsView: View {
         case failed(String)
     }
     @State private var autoSetupState: AutoSetupState = .idle
+
+    /// Context-metric patch of the LOCAL gateway (usage.context_tokens —
+    /// HermesLocalGateway). nil until the async check ran.
+    private enum PatchRowState: Equatable {
+        case checking
+        case offer
+        case running
+        case done
+        case failed(String)
+    }
+    @State private var patchRowState: PatchRowState?
 
     /// Remote-file courier: the dashboard's files API (needed only when the
     /// gateway is on another machine).
@@ -171,6 +209,7 @@ struct HermesSettingsView: View {
                 }
             }
             autoSetupRow
+            contextPatchRow
         } header: {
             Text(HL("hermes.conn.header"))
         } footer: {
@@ -231,6 +270,69 @@ struct HermesSettingsView: View {
                 }
             }
             .padding(.top, 2)
+        }
+    }
+
+    /// Offer to patch the LOCAL gateway's context metric when it doesn't
+    /// serve `usage.context_tokens` yet (stock install, or `hermes update`
+    /// rolled our patch back). Checked lazily on the pane's appearance;
+    /// silent when already patched or when there is nothing local to patch —
+    /// the row only surfaces an actionable offer or its outcome.
+    @ViewBuilder
+    private var contextPatchRow: some View {
+        if HermesLocalGateway.isLocalEndpoint(settings.endpointURL),
+           HermesLocalGateway.isInstalled() {
+            VStack(alignment: .leading, spacing: 8) {
+                switch patchRowState {
+                case nil, .checking:
+                    EmptyView()
+                case .offer:
+                    Text(HL("hermes.patch.found"))
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(HL("hermes.patch.run")) {
+                        Task { await runContextPatch() }
+                    }
+                case .running:
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(HL("hermes.patch.running")).foregroundColor(.secondary)
+                    }
+                case .done:
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text(HL("hermes.patch.ok"))
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                case .failed(let message):
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                        Text(message)
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .task(id: settings.endpointURL) {
+                guard patchRowState == nil || patchRowState == .checking else { return }
+                patchRowState = .checking
+                let state = await HermesLocalGateway.contextPatchState()
+                // .patched and .unavailable both mean "nothing to offer" —
+                // the row stays invisible rather than celebrating a default.
+                patchRowState = state == .patchable ? .offer : nil
+            }
+        }
+    }
+
+    private func runContextPatch() async {
+        patchRowState = .running
+        do {
+            try await HermesLocalGateway.applyContextPatchAndRestart()
+            patchRowState = .done
+        } catch {
+            patchRowState = .failed(error.localizedDescription)
         }
     }
 
@@ -310,6 +412,19 @@ struct HermesSettingsView: View {
                 .font(.callout.weight(.medium))
             commandBlock(Self.setupRemoteCommands)
             Text(HL("hermes.setup.remote.caption"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            // Accurate context gauge on a remote gateway: paste-block for
+            // the VPS terminal (locally the app applies the same patch
+            // itself — contextPatchRow / autoSetup).
+            Text(HL("hermes.setup.patch.title"))
+                .font(.callout.weight(.medium))
+            commandBlock(Self.contextPatchRemoteCommands)
+            Text(HL("hermes.setup.patch.caption"))
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -599,6 +714,24 @@ API_SERVER_PORT=8642
 API_SERVER_KEY=$(openssl rand -hex 24)
 EOF
 hermes gateway install
+
+# Accurate context gauge: Hermes tracks the real context fill internally but
+# does not expose it over the API — add usage.context_tokens (backup lands
+# next to the file; skips itself if already applied; repeat after a Hermes
+# update, which overwrites the file)
+HERMES_DIR=$(hermes --version | sed -n 's/^Install directory: //p') python3 - <<'PYEOF'
+import os, re, pathlib
+p = pathlib.Path(os.environ["HERMES_DIR"]) / "gateway/platforms/api_server.py"
+src = p.read_text()
+if '"context_tokens"' not in src:
+    pathlib.Path(str(p) + ".bak").write_text(src)
+    pat = re.compile(r'^(\\s*)("total_tokens": getattr\\(agent, "session_total_tokens", 0\\) or 0,)$', re.M)
+    line = '"context_tokens": max(0, getattr(getattr(agent, "context_compressor", None), "last_prompt_tokens", 0) or 0),'
+    src2, n = pat.subn(lambda m: m.group(0) + "\\n" + m.group(1) + line, src)
+    if n: p.write_text(src2)
+print("context patch ok")
+PYEOF
+hermes gateway restart
 
 # Dashboard (files) + the one token used everywhere
 DASHTOKEN=$(openssl rand -hex 24)

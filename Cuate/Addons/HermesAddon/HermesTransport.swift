@@ -95,7 +95,12 @@ enum HermesStreamEvent {
     /// Definitive full text. NOTE: a turn that failed on the gateway ALSO
     /// arrives this way — as error text with HTTP 200 (see fixtures).
     case assistantCompleted(content: String, interrupted: Bool)
-    case runCompleted(usage: TokenUsage)
+    /// `contextTokens` — the prompt size of the run's LAST model call, i.e.
+    /// the session's actual context fill (what Hermes' own status bar shows).
+    /// Only patched gateways send it (`usage.context_tokens`, our carried
+    /// commit); stock 0.19.0 reports run-CUMULATIVE sums in `usage` — summed
+    /// across every tool-loop call, so a 26-step turn "uses" 2M+ tokens.
+    case runCompleted(usage: TokenUsage, contextTokens: Int?)
     case done
     /// Approval frames (feature-flagged; exact name pinned down in stage 6
     /// against the live gateway) and anything a future Hermes adds.
@@ -468,14 +473,18 @@ struct HermesTransport {
                                        interrupted: payload["interrupted"] as? Bool ?? false)
         case "run.completed":
             var usage = TokenUsage()
+            var contextTokens: Int?
             if let raw = payload["usage"] as? [String: Any] {
                 usage.inputTokens = raw["input_tokens"] as? Int ?? 0
                 usage.outputTokens = raw["output_tokens"] as? Int ?? 0
                 usage.cacheReadTokens = raw["cache_read_tokens"] as? Int ?? 0
                 usage.cacheWriteTokens = raw["cache_write_tokens"] as? Int ?? 0
                 usage.reasoningTokens = raw["reasoning_tokens"] as? Int ?? 0
+                if let context = raw["context_tokens"] as? Int, context > 0 {
+                    contextTokens = context
+                }
             }
-            return .runCompleted(usage: usage)
+            return .runCompleted(usage: usage, contextTokens: contextTokens)
         case "done":
             return .done
         default:

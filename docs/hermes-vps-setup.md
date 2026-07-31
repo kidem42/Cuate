@@ -42,6 +42,24 @@ API_SERVER_KEY=$(openssl rand -hex 24)
 EOF
 hermes gateway install
 
+# Accurate context gauge: Hermes tracks the real context fill internally but
+# does not expose it over the API — add usage.context_tokens (backup lands
+# next to the file; skips itself if already applied; repeat after a Hermes
+# update, which overwrites the file)
+HERMES_DIR=$(hermes --version | sed -n 's/^Install directory: //p') python3 - <<'PYEOF'
+import os, re, pathlib
+p = pathlib.Path(os.environ["HERMES_DIR"]) / "gateway/platforms/api_server.py"
+src = p.read_text()
+if '"context_tokens"' not in src:
+    pathlib.Path(str(p) + ".bak").write_text(src)
+    pat = re.compile(r'^(\s*)("total_tokens": getattr\(agent, "session_total_tokens", 0\) or 0,)$', re.M)
+    line = '"context_tokens": max(0, getattr(getattr(agent, "context_compressor", None), "last_prompt_tokens", 0) or 0),'
+    src2, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + line, src)
+    if n: p.write_text(src2)
+print("context patch ok")
+PYEOF
+hermes gateway restart
+
 # Dashboard (files) + the one token used everywhere
 DASHTOKEN=$(openssl rand -hex 24)
 echo "HERMES_DASHBOARD_SESSION_TOKEN=$DASHTOKEN" >> ~/.hermes/.env

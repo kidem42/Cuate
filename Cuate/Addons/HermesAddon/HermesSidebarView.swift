@@ -121,11 +121,14 @@ struct HermesSidebarView: View {
     }
 
     /// Context fill of the OPEN session — a hairline bar with "25K/262K"
-    /// under the role's name. Numbers come from `run.completed` (the real
-    /// prompt size, not an estimate); amber past 70%, red past 85%, where
-    /// the gateway starts compacting on its own. The denominator is
-    /// PER-MODEL now (HermesModelContext — Hermes' own table + the
-    /// gateway's `model/info`), not one global constant.
+    /// under the role's name. Numbers come from `run.completed`: patched
+    /// gateways send the true fill (`usage.context_tokens`, the last call's
+    /// prompt size); stock ones only give run-cumulative sums, so the value
+    /// is capped at the window — a multi-tool turn otherwise "fills" the
+    /// gauge severalfold (seen live: 2188K/1050K). Amber past 70%, red past
+    /// 85%, where the gateway starts compacting on its own. The denominator
+    /// is PER-MODEL (HermesModelContext — Hermes' own table + the gateway's
+    /// `model/info`), not one global constant.
     @ViewBuilder
     private var contextGauge: some View {
         if let sessionID = HermesSettings.shared.activeSession(roleID: role.id),
@@ -135,7 +138,8 @@ struct HermesSidebarView: View {
                forModel: gaugeModel(forSession: sessionID), settings: settings
            ),
            limit > 0 {
-            let fraction = min(1, Double(used) / Double(limit))
+            let used = min(used, limit)
+            let fraction = Double(used) / Double(limit)
             let tint: Color = fraction > 0.85 ? .red
                 : (fraction > 0.7 ? .orange : palette.secondaryText)
             Button {

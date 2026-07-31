@@ -47,6 +47,7 @@ enum HermesLocalGateway {
         case envNotWritable(String)
         case installFailed(String)
         case gatewayNeverCameUp(String)
+        case patchFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -54,8 +55,104 @@ enum HermesLocalGateway {
             case .envNotWritable(let detail): return HL("hermes.auto.err.env") + " " + detail
             case .installFailed(let detail): return HL("hermes.auto.err.install") + " " + detail
             case .gatewayNeverCameUp(let detail): return HL("hermes.auto.err.timeout") + (detail.isEmpty ? "" : " " + detail)
+            case .patchFailed(let detail): return HL("hermes.patch.err") + " " + detail
             }
         }
+    }
+
+    // MARK: - Context-metric patch (usage.context_tokens)
+    //
+    // Hermes reports run-CUMULATIVE token sums in `run.completed.usage` —
+    // useless as a context gauge (a 26-step turn "fills" the window
+    // severalfold; seen live: 2188K against a 1050K window). The true fill —
+    // the last call's prompt size — lives in `agent.context_compressor.
+    // last_prompt_tokens`: Hermes' own status bar shows it, the API omits
+    // it. The patch appends it as `usage.context_tokens` after every
+    // `"total_tokens"` line of the two usage dicts in gateway/platforms/
+    // api_server.py (anchored by code, not line numbers — survives version
+    // drift; refuses untouched when the anchor is missing). `hermes update`
+    // overwrites the file, so the state is re-checked each time the
+    // settings pane looks and the offer simply reappears. The client copes
+    // either way: without the field the gauge falls back to the capped sums.
+
+    enum ContextPatchState: Equatable {
+        case patched
+        case patchable
+        /// No install, unreadable file, or a layout the anchor doesn't
+        /// match — nothing we can safely offer.
+        case unavailable
+    }
+
+    private static let contextPatchAnchor =
+        "\"total_tokens\": getattr(agent, \"session_total_tokens\", 0) or 0,"
+    static let contextPatchLine =
+        "\"context_tokens\": max(0, getattr(getattr(agent, \"context_compressor\", None), \"last_prompt_tokens\", 0) or 0),"
+
+    /// The gateway source file, resolved like `cliPath`: the documented
+    /// install root first, then the CLI's own `--version` answer ("Install
+    /// directory: …") for relocated installs.
+    static func apiServerFile() async -> URL? {
+        let sub = "gateway/platforms/api_server.py"
+        let documented = home.appendingPathComponent(".hermes/hermes-agent/" + sub)
+        if FileManager.default.fileExists(atPath: documented.path) { return documented }
+        guard let cli = cliPath() else { return nil }
+        let version = await run(cli, ["--version"], timeout: 15)
+        guard let range = version.tail.range(of: "Install directory: ") else { return nil }
+        let root = version.tail[range.upperBound...]
+            .split(separator: "\n").first.map(String.init)?
+            .components(separatedBy: " · ").first?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        guard !root.isEmpty else { return nil }
+        let resolved = URL(fileURLWithPath: root).appendingPathComponent(sub)
+        return FileManager.default.fileExists(atPath: resolved.path) ? resolved : nil
+    }
+
+    static func contextPatchState() async -> ContextPatchState {
+        guard let file = await apiServerFile(),
+              let src = try? String(contentsOf: file, encoding: .utf8) else { return .unavailable }
+        if src.contains("\"context_tokens\"") { return .patched }
+        return src.contains(contextPatchAnchor) ? .patchable : .unavailable
+    }
+
+    /// Edits api_server.py in place (backup lands next to it as .bak).
+    /// Returns whether anything changed; the caller owns the restart.
+    @discardableResult
+    static func applyContextPatchFile() async throws -> Bool {
+        guard let file = await apiServerFile(),
+              let src = try? String(contentsOf: file, encoding: .utf8) else {
+            throw SetupError.patchFailed("api_server.py not found")
+        }
+        if src.contains("\"context_tokens\"") { return false }
+        var out: [String] = []
+        var patched = 0
+        for line in src.components(separatedBy: "\n") {
+            out.append(line)
+            if line.trimmingCharacters(in: .whitespaces) == contextPatchAnchor {
+                let indent = line.prefix { $0 == " " || $0 == "\t" }
+                out.append(indent + contextPatchLine)
+                patched += 1
+            }
+        }
+        guard patched > 0 else { throw SetupError.patchFailed("anchor not found") }
+        do {
+            try src.write(to: URL(fileURLWithPath: file.path + ".bak"),
+                          atomically: true, encoding: .utf8)
+            try out.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            throw SetupError.patchFailed(error.localizedDescription)
+        }
+        Diagnostics.log("hermes", "patch.context applied sites=\(patched) file=\(file.path)")
+        return true
+    }
+
+    /// Settings-button entry point: patch + restart + wait for health.
+    static func applyContextPatchAndRestart() async throws {
+        let changed = try await applyContextPatchFile()
+        guard changed, let cli = cliPath() else { return }
+        let restart = await run(cli, ["gateway", "restart"], timeout: 90)
+        Diagnostics.log("hermes", "patch.context restart ok=\(restart.completed)")
+        let port = Int(readEnv()["API_SERVER_PORT"] ?? "") ?? 8642
+        _ = await waitForHealth(port: port, seconds: 20)
     }
 
     /// Brings the local gateway up and returns the (port, key) to connect
@@ -93,6 +190,17 @@ enum HermesLocalGateway {
         }
 
         Diagnostics.log("hermes", "auto.setup envChanged=\(envChanged) port=\(port)")
+
+        // Context-metric patch, before the service (re)starts below — the
+        // fresh gateway then serves `usage.context_tokens` from the first
+        // turn. Best-effort: a refusal (unknown layout) must not block the
+        // setup, the client's fallback covers it.
+        progress(HL("hermes.auto.step.patch"))
+        do {
+            try await applyContextPatchFile()
+        } catch {
+            Diagnostics.log("hermes", "auto.setup patch skipped: \(error.localizedDescription)")
+        }
 
         progress(HL("hermes.auto.step.install"))
         let install = await run(cli, ["gateway", "install"], timeout: 90)
