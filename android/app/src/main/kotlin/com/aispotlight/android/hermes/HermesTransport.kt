@@ -122,6 +122,20 @@ class HermesTransportException(val status: Int, body: String) :
 
 // MARK: - Transport
 
+/**
+ * Dedicated client for the chat SSE stream: the shared [HttpClient] enforces
+ * readTimeout=120s and callTimeout=600s — an agent turn with one long silent
+ * tool (or simply longer than 10 minutes) was killed by our OWN client,
+ * surfacing as "aborted connection" (live bug 2026-07-30). Agent turns are
+ * unbounded: no read/call timeout, only the connect handshake stays capped.
+ */
+private val sseClient: okhttp3.OkHttpClient by lazy {
+    HttpClient.client.newBuilder()
+        .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+}
+
 class HermesTransport(
     baseURL: String,
     private val apiKey: String,
@@ -181,8 +195,11 @@ class HermesTransport(
      * `/api/model/options`: provider rows + the agent's CURRENT
      * (provider, model) pair at top level — the reliable model-lock source.
      */
-    suspend fun modelOptions(): HermesModelOptions {
-        val obj = json("GET", "api/model/options")
+    suspend fun modelOptions(refresh: Boolean = false): HermesModelOptions {
+        // `?refresh=true` drops the gateway's ~1h catalog cache (fixtures) —
+        // the picker's Refresh button maps to it.
+        val obj = json("GET", "api/model/options",
+            query = if (refresh) mapOf("refresh" to "true") else emptyMap())
         val providers = mutableListOf<HermesProviderOption>()
         obj.optJSONArray("providers")?.let { rows ->
             for (i in 0 until rows.length()) {
@@ -414,7 +431,7 @@ class HermesTransport(
             .header("Authorization", "Bearer $apiKey")
             .post(body.toString().toRequestBody(jsonMedia))
             .build()
-        val call = HttpClient.client.newCall(request)
+        val call = sseClient.newCall(request)
         val thread = Thread {
             try {
                 call.execute().use { response ->

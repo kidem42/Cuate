@@ -3,8 +3,12 @@
 
     <string name="chat_placeholder">Ask anything…</string>
     <string name="chat_load_earlier">Load earlier messages</string>
-    <string name="chat_attach">Attach image</string>
-    <string name="chat_camera">Take photo</string>
+    <string name="chat_attach">Attach file…</string>
+    <string name="chat_camera">Camera</string>
+    <string name="attach_gallery">All photos</string>
+    <string name="attach_any_file">File</string>
+    <string name="attach_allow_photos">Allow access to photos</string>
+    <string name="attach_confirm">Attach (%1$d)</string>
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>
     <string name="chat_dictate">Dictate</string>
@@ -169,7 +173,7 @@
     <string name="voice_hide_transcript">Hide text</string>
     <string name="settings_tts_voice">Voice</string>
     <string name="settings_tts_speed">Speed: %1$s×</string>
-    <string name="attach_failed">Couldn\'t read this image — try another one.</string>
+    <string name="attach_failed">Couldn\'t read this file — try another one.</string>
     <string name="action_copy">Copy</string>
     <string name="action_select_text">Select text</string>
     <string name="image_extract_text">Extract text (OCR)</string>
@@ -181,7 +185,6 @@
     <!-- Hermes Agent addon -->
     <string name="hermes_role">Hermes Agent</string>
     <string name="hermes_new_session">New session</string>
-    <string name="hermes_attach_file">Attach file…</string>
     <string name="hermes_sessions">Sessions</string>
     <string name="hermes_rename">Rename session</string>
     <string name="hermes_pin_session">Pin session</string>
@@ -206,6 +209,15 @@
     <string name="hermes_key_saved">Key saved ✓</string>
     <string name="hermes_model_lock">Model for new sessions</string>
     <string name="hermes_model_agent_default">As configured in the agent</string>
+    <string name="hermes_creating_session">Creating session…</string>
+    <string name="hermes_model_active">Active: %1$s</string>
+    <string name="hermes_model_search">Search models</string>
+    <string name="hermes_model_refresh">Refresh the catalog</string>
+    <string name="hermes_model_current">current</string>
+    <string name="hermes_model_empty">No models available — check the gateway connection.</string>
+    <string name="hermes_reconnecting">Connection lost — recovering the reply…</string>
+    <string name="hermes_run_channel">Agent activity</string>
+    <string name="hermes_run_notification">The agent is working…</string>
     <string name="hermes_dashboard">Hermes dashboard (file uploads)</string>
     <string name="hermes_dashboard_url">Dashboard URL</string>
     <string name="hermes_dashboard_token">Dashboard token</string>

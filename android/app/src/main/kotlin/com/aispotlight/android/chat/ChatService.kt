@@ -387,27 +387,53 @@ object ChatService {
             var images = emptyList<LLMImage>()
 
             if (message.attachments.isNotEmpty()) {
+                // Documents (PDF/Word — shared in or picked) never travel as
+                // pixels: their content is injected as extracted text (Mistral
+                // OCR / direct read for text files), cached per attachment
+                // like image OCR. Fails soft into a filename note.
+                val imageAttachments = message.attachments.filter { it.mimeType.startsWith("image") }
+                for (attachment in message.attachments) {
+                    if (attachment.mimeType.startsWith("image")) continue
+                    val fresh = message.id in pixelIDs
+                    var extracted = attachment.ocrText
+                    if (extracted.isNullOrEmpty() && (fresh || lazyOCRBudget > 0)) {
+                        if (!fresh) lazyOCRBudget -= 1
+                        extracted = try {
+                            cachedDocumentText(context, attachment, message.id, onAttachmentOCR)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    text += if (!extracted.isNullOrEmpty()) {
+                        val cap = if (fresh) MAX_DOC_CHARS else 4000
+                        "\n\n[Attached file ${attachment.filename}; extracted content:]\n${extracted.take(cap)}"
+                    } else {
+                        "\n[The user attached a file: ${attachment.filename}]"
+                    }
+                }
+                if (imageAttachments.isNotEmpty()) {
                 if (message.id in pixelIDs) {
                     if (supportsVision) {
-                        images = message.attachments.mapNotNull { attachment ->
+                        images = imageAttachments.mapNotNull { attachment ->
+                            // Downscaled copy for the wire; originals stay
+                            // untouched for OCR / image-processing tracks.
                             val base64 = ImageStore.contentBase64(context, attachment)
-                            if (base64.isEmpty()) null else LLMImage(attachment.mimeType, base64)
+                            if (base64.isEmpty()) null
+                            else LLMImage.forModel(attachment.mimeType, base64)
                         }
                     } else {
                         // Non-vision provider: OCR the attachments into text.
                         if (!MistralOCRService.isAvailable) {
                             throw ProviderException.visionUnsupported(providerID)
                         }
-                        for (attachment in message.attachments) {
-                            if (!attachment.mimeType.startsWith("image")) continue
+                        for (attachment in imageAttachments) {
                             val ocrText = cachedOCRText(context, attachment, message.id, onAttachmentOCR)
                             text += "\n\n[Image content extracted via OCR]:\n$ocrText"
                         }
                     }
                 } else {
                     var extractedAny = false
-                    for (attachment in message.attachments) {
-                        if (!attachment.mimeType.startsWith("image")) continue
+                    for (attachment in imageAttachments) {
                         var extracted = attachment.ocrText
                         if (extracted == null && lazyOCRBudget > 0 && MistralOCRService.isAvailable) {
                             lazyOCRBudget -= 1
@@ -426,6 +452,7 @@ object ChatService {
                         text += "\n[The user attached an image earlier in the conversation.]"
                     }
                 }
+                }
             }
 
             if (message.id == lastToolContextID && message.toolContext != null) {
@@ -440,6 +467,48 @@ object ChatService {
             ))
         }
         return result
+    }
+
+    /** Longest extracted-document injection for the message being answered. */
+    private const val MAX_DOC_CHARS = 24_000
+
+    /** Document types Mistral OCR accepts through `document_url`. */
+    private val OCR_DOCUMENT_MIMES = setOf(
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+
+    /**
+     * Extracts a non-image attachment's content as text, persisted on the
+     * attachment (same cache as image OCR): plain-text files are read
+     * directly, PDFs/Office documents go through Mistral OCR. Returns ""
+     * when the type can't be extracted or OCR isn't configured.
+     */
+    private suspend fun cachedDocumentText(
+        context: Context,
+        attachment: ChatAttachment,
+        messageId: String,
+        onAttachmentOCR: suspend (String, String, String) -> Unit,
+    ): String {
+        attachment.ocrText?.takeIf { it.isNotEmpty() }?.let { return it }
+        val mime = attachment.mimeType.substringBefore(";").trim()
+        val extracted = when {
+            mime.startsWith("text/") || mime == "application/json" || mime == "application/xml" -> {
+                val file = ImageStore.file(context, attachment)
+                if (file.exists()) file.readText().take(MAX_DOC_CHARS) else ""
+            }
+            mime in OCR_DOCUMENT_MIMES && MistralOCRService.isAvailable -> {
+                val base64 = ImageStore.contentBase64(context, attachment)
+                if (base64.isEmpty()) ""
+                else MistralOCRService.extractDocumentText(base64, mime, attachment.filename)
+            }
+            else -> ""
+        }
+        if (extracted.isNotEmpty()) onAttachmentOCR(messageId, attachment.id, extracted)
+        return extracted
     }
 
     /**

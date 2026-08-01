@@ -123,6 +123,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val switchMutex = Mutex()
 
+    /**
+     * Guards the one-shot "return to where the user left off" branch: only
+     * the FIRST emission of the preset collector (the cold start) restores
+     * the stored conversation — every later preset change is a deliberate
+     * switch and must be obeyed.
+     */
+    private var restoredLastConversation = false
+
     init {
         // The macOS conversation model: ONE shared general chat, plus a
         // dedicated chat per isolated preset. The active conversation is a
@@ -143,22 +151,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .distinctUntilChanged()
                 .collect { (active, isIsolated) ->
                     switchMutex.withLock {
+                        // COLD START ONLY: the conversation the user left wins
+                        // over the derived rule. An agent thread is not
+                        // derivable from a preset at all, so without this a
+                        // relaunch always dumped the user back into the preset
+                        // chat, whatever they were doing in Hermes.
+                        val restoreId = if (restoredLastConversation) null else {
+                            settings.lastConversationId()
+                                ?.let { dao.conversation(it) }
+                                // A thread whose gateway is gone (endpoint
+                                // cleared in Settings) would restore into a
+                                // dead agent chat — fall back to the preset.
+                                ?.takeIf { it.hermesSessionId == null || settings.hermesConfigured }
+                                ?.id
+                        }
+                        restoredLastConversation = true
                         if (isIsolated) {
-                            openIsolated(active)
+                            if (restoreId != null) openConversation(restoreId)
+                            else openIsolated(active)
                         } else {
                             val generalId = ensureGeneralConversation()
                             // The general chat carries the active preset's
                             // system prompt (mac semantics: regular presets
-                            // share one conversation, swapping prompts).
+                            // share one conversation, swapping prompts). Synced
+                            // even when restoring elsewhere — a later switch
+                            // back to this preset must speak with its prompt.
                             dao.conversation(generalId)?.let { entity ->
                                 if (entity.presetName != active) {
                                     dao.upsertConversation(entity.copy(presetName = active))
                                 }
                             }
-                            if (_activeConversationId.value == generalId) {
-                                activeConversation = activeConversation?.copy(presetName = active)
+                            val target = restoreId ?: generalId
+                            if (_activeConversationId.value == target) {
+                                if (target == generalId) {
+                                    activeConversation = activeConversation?.copy(presetName = active)
+                                }
                             } else {
-                                openConversation(generalId)
+                                openConversation(target)
                             }
                         }
                     }
@@ -182,15 +211,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         switchMutex.withLock {
             streamJobs[id]?.cancel()
             markStreaming(id, false)
-            for (path in dao.attachmentPaths(id)) {
-                ImageStore.delete(getApplication(), path)
-            }
-            for (path in dao.audioPaths(id)) {
-                java.io.File(getApplication<Application>().filesDir, path).delete()
-            }
+            purgeMediaFiles(id)
             dao.deleteMessages(id)
             dao.deleteConversation(id)
             settings.clearIsolatedConversationId(presetName)
+        }
+    }
+
+    /**
+     * Deletes a conversation's media FILES (attachments + voice recordings)
+     * from disk — every path that deletes messages must call this first, or
+     * the payloads leak until the retention sweep ages them out.
+     */
+    private suspend fun purgeMediaFiles(conversationId: String) {
+        for (path in dao.attachmentPaths(conversationId)) {
+            ImageStore.delete(getApplication(), path)
+        }
+        for (path in dao.audioPaths(conversationId)) {
+            java.io.File(getApplication<Application>().filesDir, path).delete()
         }
     }
 
@@ -230,6 +268,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _statusText.value = null
         _errorText.value = null
         _activeConversationId.value = id
+        // Every switch — preset chat or agent thread — is where a cold start
+        // will come back to.
+        settings.setLastConversationId(id)
         _messages.value = emptyList()
         refreshLoading()
         viewModelScope.launch {
@@ -280,12 +321,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         streamJobs[id]?.cancel()
         markStreaming(id, false)
         viewModelScope.launch {
-            for (path in dao.attachmentPaths(id)) {
-                ImageStore.delete(getApplication(), path)
-            }
-            for (path in dao.audioPaths(id)) {
-                java.io.File(getApplication<Application>().filesDir, path).delete()
-            }
+            purgeMediaFiles(id)
             dao.deleteMessages(id)
             dao.setSummary(id, null, 0)
             if (_activeConversationId.value == id) {
@@ -767,21 +803,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Builds a shareable markdown transcript of the active conversation. */
-    fun exportTranscript(): String {
-        val title = conversations.value.firstOrNull { it.id == _activeConversationId.value }?.title ?: "Chat"
-        return buildString {
-            appendLine("# $title")
-            appendLine()
-            for (message in _messages.value) {
-                if (message.messageType == ChatMessage.Type.SYSTEM) continue
-                appendLine(if (message.isUser) "**User:**" else "**Assistant:**")
-                appendLine(message.text)
-                appendLine()
-            }
-        }
-    }
-
     /** Runs the send pipeline for a prebuilt user message (text or voice). */
     private fun dispatch(userMessage: ChatMessage) {
         val conversationId = _activeConversationId.value ?: return
@@ -1089,6 +1110,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val chatFiles: StateFlow<ChatFiles?> = _chatFiles
 
     /**
+     * True while a gateway session create is in flight. Guards against
+     * repeat taps — creation takes 2 slow round-trips to a remote gateway,
+     * and every extra tap used to make one more identical session (the
+     * switchMutex only SERIALIZED them, live bug 2026-07-31). The UI shows
+     * it as a spinner on the new-session controls.
+     */
+    private val _hermesCreating = MutableStateFlow(false)
+    val hermesCreating: StateFlow<Boolean> = _hermesCreating
+
+    /**
      * The Hermes role tapped in the switcher: opens the most recent agent
      * thread (creating the first session when there is none), then refreshes
      * the session mirror and the skills cache in the background.
@@ -1097,8 +1128,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             switchMutex.withLock {
                 val existing = dao.hermesConversations().maxByOrNull { it.updatedAt }
-                val id = existing?.id ?: createHermesConversation()
-                id?.let { openConversation(it) }
+                if (existing != null) {
+                    openConversation(existing.id)
+                } else if (_hermesCreating.compareAndSet(expect = false, update = true)) {
+                    try {
+                        createHermesConversation()?.let { openConversation(it) }
+                    } finally {
+                        _hermesCreating.value = false
+                    }
+                }
             }
             syncHermesSessions()
             loadHermesSkills()
@@ -1113,9 +1151,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** "New session" — a fresh gateway session as a fresh thread. */
     fun newHermesSession() {
+        // The flag flips BEFORE the coroutine queues on the mutex — a tap
+        // during any phase (mutex wait, network) is dropped, not deferred.
+        if (!_hermesCreating.compareAndSet(expect = false, update = true)) return
         viewModelScope.launch {
-            switchMutex.withLock {
-                createHermesConversation()?.let { openConversation(it) }
+            try {
+                switchMutex.withLock {
+                    createHermesConversation()?.let { openConversation(it) }
+                }
+            } finally {
+                _hermesCreating.value = false
             }
         }
     }
@@ -1133,6 +1178,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 com.aispotlight.android.core.Diagnostics.log("hermes", "delete.fail ${e.message?.take(120)}")
             }
+            purgeMediaFiles(id)
             dao.deleteMessages(id)
             dao.deleteConversation(id)
             _hermesUnread.value = _hermesUnread.value - id
@@ -1199,7 +1245,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             val stamp = java.text.SimpleDateFormat("MMM d HH:mm", java.util.Locale.US)
                 .format(java.util.Date())
-            val session = HermesChatService.createSession(settings, "Cuate $stamp")
+            val session = HermesChatService.createSession(
+                settings, "Cuate $stamp",
+                cachedCurrent = _hermesModelOptions.value?.current,
+            )
             val conversation = Conversation(
                 title = session.title ?: "Agent",
                 presetName = null,
@@ -1226,6 +1275,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val transport = HermesChatService.transport(settings)
                 val remote = transport.sessions(limit = 50)
                 for (info in remote) {
+                    // The session row knows the agent's ACTUAL model — keep
+                    // the label map current for sessions locked elsewhere
+                    // (creation default, desktop, CLI). The pre-lock literal
+                    // is noise. A stored pair with the same model wins: it
+                    // also knows the provider.
+                    info.model?.takeIf { it != "hermes-agent" }?.let { model ->
+                        val stored = settings.hermesSessionModels.value[info.id]
+                        if (stored == null || stored.substringAfter("|") != model) {
+                            settings.setHermesSessionModel(info.id, "|$model")
+                        }
+                    }
                     val existing = dao.conversationForHermesSession(info.id)
                     if (existing == null) {
                         val conversation = Conversation(
@@ -1243,7 +1303,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // Transcript fetch only when the gateway saw activity
                         // we haven't (lastActive vs our updatedAt, 5s slack) —
                         // a resume must not refetch 50 quiet sessions.
-                        val stale = (info.lastActive ?: 0) > existing.updatedAt + 5_000
+                        // NEVER while this conversation's own turn streams:
+                        // the gateway already holds the turn's interim rows
+                        // and they'd import as duplicates next to the live
+                        // bubble (desktop 4.6.1 activeTurnKeys gate; the
+                        // turn's end bumps the watermark before releasing
+                        // the mark).
+                        val streamingNow = existing.id in streamingIds.value
+                        val stale = !streamingNow &&
+                            (info.lastActive ?: 0) > existing.updatedAt + 5_000
                         val added = if (stale) HermesChatService.syncTranscript(dao, existing) else 0
                         if (added > 0) {
                             dao.touch(existing.id, info.lastActive ?: System.currentTimeMillis())
@@ -1273,6 +1341,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     for (orphan in orphans) {
                         streamJobs[orphan.id]?.cancel()
                         markStreaming(orphan.id, false)
+                        purgeMediaFiles(orphan.id)
                         dao.deleteMessages(orphan.id)
                         dao.deleteConversation(orphan.id)
                         _hermesUnread.value = _hermesUnread.value - orphan.id
@@ -1287,6 +1356,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 com.aispotlight.android.core.Diagnostics.log("hermes", "sync.fail ${e.message?.take(120)}")
+            }
+        }
+    }
+
+    /**
+     * Re-reads the model catalog when the picker opens (the gateway's list
+     * is live and mutable — fixtures 2026-07-29); `force` maps to the
+     * gateway's `?refresh=true` cache drop.
+     */
+    fun refreshHermesModelOptions(force: Boolean = false) {
+        if (!settings.hermesConfigured) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _hermesModelOptions.value =
+                    HermesChatService.transport(settings).modelOptions(refresh = force)
+            } catch (e: Exception) {
+                com.aispotlight.android.core.Diagnostics.log("hermes", "models.fail ${e.message?.take(120)}")
             }
         }
     }
@@ -1460,6 +1546,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (_: android.database.sqlite.SQLiteException) { }
             }
 
+            // Foreground service for the whole turn: without it Android cuts
+            // the SSE socket as soon as the app leaves the screen.
+            com.aispotlight.android.hermes.HermesRunService.begin(getApplication())
             try {
                 HermesChatService.streamTurn(
                     getApplication(), sessionId, userMessage.text, userMessage.attachments,
@@ -1510,8 +1599,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (isActive()) totalMessageCount = dao.messageCount(conversationId)
                 }
                 // Our turn is now the gateway transcript's tail — bump the
-                // mirror watermark so sync never re-imports it as duplicates.
-                launch(Dispatchers.IO) {
+                // mirror watermark BEFORE releasing the streaming mark: an
+                // async bump raced the onResume mirror sync, which slipped in
+                // first and re-imported the fresh turn as duplicate bubbles
+                // (live bug 2026-07-31).
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
                     HermesChatService.advanceWatermark(dao, conversationId, sessionId)
                 }
                 hermesRunIds.remove(conversationId)
@@ -1533,17 +1625,73 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 markStreaming(conversationId, false)
                 throw e
             } catch (e: Exception) {
-                val message = e.message ?: "Agent request failed."
-                if (replyText.isEmpty()) {
-                    replyText.append(message)
-                } else {
-                    replyText.append("\n\n⚠️ $message")
+                // A dropped socket is NOT a failed turn: the gateway usually
+                // keeps executing the run (mobile networks flap, Doze cuts
+                // sockets). Rebuild the reply from the session transcript
+                // before admitting defeat.
+                var recovered: HermesChatService.RecoveredTurn? = null
+                if (e is java.io.IOException) {
+                    if (isActive()) {
+                        _statusText.value = getApplication<android.app.Application>()
+                            .getString(com.aispotlight.android.R.string.hermes_reconnecting)
+                    }
+                    recovered = try {
+                        HermesChatService.recoverTurn(
+                            dao, conversationId, sessionId, userMessage.text,
+                        ) { partial ->
+                            replyText.setLength(0)
+                            replyText.append(partial.text)
+                            partial.steps?.let { agentSteps = it }
+                            pushReply()
+                        }
+                    } catch (c: kotlinx.coroutines.CancellationException) {
+                        if (replyText.isNotEmpty()) {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { persistReply() }
+                        }
+                        hermesRunIds.remove(conversationId)
+                        markStreaming(conversationId, false)
+                        throw c
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
-                pushReply(error = true)
-                persistReply(error = true)
-                if (isActive()) totalMessageCount = dao.messageCount(conversationId)
-                hermesRunIds.remove(conversationId)
-                markStreaming(conversationId, false)
+                if (recovered != null && recovered.text.isNotEmpty()) {
+                    // The transcript is authoritative — it replaces whatever
+                    // was streamed before the drop.
+                    replyText.setLength(0)
+                    replyText.append(recovered.text)
+                    recovered.steps?.let { agentSteps = it }
+                    if (isActive()) _statusText.value = null
+                    pushReply()
+                    persistReply()
+                    dao.touch(conversationId, System.currentTimeMillis())
+                    if (isActive()) totalMessageCount = dao.messageCount(conversationId)
+                    hermesRunIds.remove(conversationId)
+                    markStreaming(conversationId, false)
+                    if (!isActive()) {
+                        _hermesUnread.value = _hermesUnread.value + conversationId
+                    }
+                    if (!isActive() || !com.aispotlight.android.NotificationService.appVisible) {
+                        com.aispotlight.android.NotificationService.notifyAgentDone(
+                            getApplication(), conversation.title, replyText.toString().trim().take(160),
+                        )
+                    }
+                } else {
+                    if (isActive()) _statusText.value = null
+                    val message = e.message ?: "Agent request failed."
+                    if (replyText.isEmpty()) {
+                        replyText.append(message)
+                    } else {
+                        replyText.append("\n\n⚠️ $message")
+                    }
+                    pushReply(error = true)
+                    persistReply(error = true)
+                    if (isActive()) totalMessageCount = dao.messageCount(conversationId)
+                    hermesRunIds.remove(conversationId)
+                    markStreaming(conversationId, false)
+                }
+            } finally {
+                com.aispotlight.android.hermes.HermesRunService.end(getApplication())
             }
         }
         streamJobs[conversationId] = job

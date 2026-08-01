@@ -68,6 +68,8 @@ fun HermesSidebar(
     sessionColors: Map<String, String>,
     onOpen: (String) -> Unit,
     onNewSession: () -> Unit,
+    /** A gateway create is in flight — the button shows it and goes inert. */
+    creatingSession: Boolean = false,
     onRename: (conversationId: String, title: String) -> Unit,
     onTogglePin: (sessionId: String) -> Unit,
     onSetColor: (sessionId: String, hex: String?) -> Unit,
@@ -122,13 +124,29 @@ fun HermesSidebar(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
-                .combinedClickable(onClick = onNewSession)
+                .combinedClickable(enabled = !creatingSession, onClick = onNewSession)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(10.dp))
-            Text(stringResource(R.string.hermes_new_session), style = MaterialTheme.typography.bodyMedium)
+            if (creatingSession) {
+                // Session create = 2 slow round-trips to a remote gateway;
+                // without visible progress the taps multiplied into
+                // identical sessions (user feedback 2026-07-31).
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    stringResource(R.string.hermes_creating_session),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(stringResource(R.string.hermes_new_session), style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 

@@ -68,7 +68,11 @@ fun MaskEditorView(
 ) {
     val context = LocalContext.current
     val bitmap = remember(attachment.id) { ImageStore.thumbnail(context, attachment, targetPx = 1600) }
-    if (bitmap == null) {
+    // Mask APIs require the mask pixel-aligned with the image the model
+    // receives — the stored ORIGINAL's dimensions, not the preview's (the
+    // editor bitmap is a downsampled copy now that imports keep full size).
+    val maskSize = remember(attachment.id) { ImageStore.pixelSize(context, attachment) }
+    if (bitmap == null || maskSize == null) {
         onDismiss()
         return
     }
@@ -96,7 +100,7 @@ fun MaskEditorView(
                         TextButton(
                             enabled = strokes.isNotEmpty(),
                             onClick = {
-                                val mask = renderMask(bitmap.width, bitmap.height, canvasSize, strokes.map { it.points to it.width })
+                                val mask = renderMask(maskSize.first, maskSize.second, canvasSize, strokes.map { it.points to it.width })
                                 onRun(mask)
                             },
                         ) { Text(stringResource(R.string.mask_run)) }

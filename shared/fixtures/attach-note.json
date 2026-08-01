@@ -1,0 +1,147 @@
+{
+  "_comment": "Executable contract for the agent attach note — the cross-device carrier of attachments in agent chats. Consumed by BOTH platforms' tests (Swift: scripts/AttachNoteContractTest.swift via scripts/test-attach-note.sh; Kotlin: android app unit test AgentAttachNoteTest). Any change to AgentAttachNote.swift / AgentAttachNote.kt must keep every case green on both sides.",
+  "compose": [
+    {
+      "name": "single",
+      "paths": ["/root/cuate-uploads/photo.jpg"],
+      "note": "Attached file (read it from your host):\n- /root/cuate-uploads/photo.jpg"
+    },
+    {
+      "name": "multiple",
+      "paths": ["/root/cuate-uploads/a.pdf", "/root/cuate-uploads/b.jpg"],
+      "note": "Attached files (read them from your host):\n- /root/cuate-uploads/a.pdf\n- /root/cuate-uploads/b.jpg"
+    }
+  ],
+  "split": [
+    {
+      "name": "canonical-single-with-text",
+      "text": "смотри что нашел\n\nAttached file (read it from your host):\n- /root/cuate-uploads/photo.jpg",
+      "display": "смотри что нашел",
+      "paths": ["/root/cuate-uploads/photo.jpg"]
+    },
+    {
+      "name": "canonical-multiple",
+      "text": "Attached files (read them from your host):\n- /root/cuate-uploads/a.pdf\n- /root/cuate-uploads/b.jpg",
+      "display": "",
+      "paths": ["/root/cuate-uploads/a.pdf", "/root/cuate-uploads/b.jpg"]
+    },
+    {
+      "name": "gateway-screenshot-placeholder-after-note",
+      "text": "проверь еще\n\nAttached file (read it from your host):\n- /root/cuate-uploads/shot.png\n[screenshot]",
+      "display": "проверь еще",
+      "paths": ["/root/cuate-uploads/shot.png"]
+    },
+    {
+      "name": "attachment-only-with-placeholder",
+      "text": "Attached file (read it from your host):\n- /root/cuate-uploads/shot.png\n[screenshot]",
+      "display": "",
+      "paths": ["/root/cuate-uploads/shot.png"]
+    },
+    {
+      "name": "multiple-trailing-placeholders-and-blanks",
+      "text": "два вложения\n\nAttached files (read them from your host):\n- /root/cuate-uploads/a.png\n- /root/cuate-uploads/b.png\n\n[screenshot]\n[image]\n",
+      "display": "два вложения",
+      "paths": ["/root/cuate-uploads/a.png", "/root/cuate-uploads/b.png"]
+    },
+    {
+      "name": "legacy-android-single-real-world",
+      "text": "The user attached a file, available at this path on your host:\n- /root/cuate-uploads/041355f6-24d6-43b8-9907-f85e55517842.jpg\n[screenshot]",
+      "display": "",
+      "paths": ["/root/cuate-uploads/041355f6-24d6-43b8-9907-f85e55517842.jpg"]
+    },
+    {
+      "name": "legacy-android-multiple",
+      "text": "вот файлы\n\nThe user attached files, available at these paths on your host:\n- /root/cuate-uploads/a.pdf\n- /root/cuate-uploads/b.docx",
+      "display": "вот файлы",
+      "paths": ["/root/cuate-uploads/a.pdf", "/root/cuate-uploads/b.docx"]
+    },
+    {
+      "name": "legacy-mac-english",
+      "text": "check this\n\nAttached file (read it from your host):\n- /Users/me/Documents/report.pdf",
+      "display": "check this",
+      "paths": ["/Users/me/Documents/report.pdf"]
+    },
+    {
+      "name": "legacy-mac-spanish",
+      "text": "mira\n\nArchivos adjuntos (léelos desde tu host):\n- /root/cuate-uploads/a.png\n- /root/cuate-uploads/b.png",
+      "display": "mira",
+      "paths": ["/root/cuate-uploads/a.png", "/root/cuate-uploads/b.png"]
+    },
+    {
+      "name": "legacy-mac-russian-single",
+      "text": "глянь\n\nПриложен файл (прочитай его со своей машины):\n- /root/cuate-uploads/таблица.xlsx",
+      "display": "глянь",
+      "paths": ["/root/cuate-uploads/таблица.xlsx"]
+    },
+    {
+      "name": "legacy-mac-russian-multiple",
+      "text": "Приложены файлы (прочитай их со своей машины):\n- /root/cuate-uploads/a.md\n- /root/cuate-uploads/b.md",
+      "display": "",
+      "paths": ["/root/cuate-uploads/a.md", "/root/cuate-uploads/b.md"]
+    },
+    {
+      "name": "crlf-line-endings",
+      "text": "hi\r\n\r\nAttached file (read it from your host):\r\n- /root/cuate-uploads/x.png\r\n[screenshot]",
+      "display": "hi",
+      "paths": ["/root/cuate-uploads/x.png"]
+    },
+    {
+      "name": "path-with-spaces",
+      "text": "Attached file (read it from your host):\n- /root/cuate-uploads/my summer photo.jpg",
+      "display": "",
+      "paths": ["/root/cuate-uploads/my summer photo.jpg"]
+    },
+    {
+      "name": "plain-text-no-note",
+      "text": "просто сообщение без вложений",
+      "display": "просто сообщение без вложений",
+      "paths": []
+    },
+    {
+      "name": "markdown-list-without-header",
+      "text": "купи пожалуйста:\n- молоко\n- хлеб",
+      "display": "купи пожалуйста:\n- молоко\n- хлеб",
+      "paths": []
+    },
+    {
+      "name": "placeholder-only-no-note",
+      "text": "[screenshot]",
+      "display": "[screenshot]",
+      "paths": []
+    },
+    {
+      "name": "long-bracketed-line-is-not-a-placeholder",
+      "text": "Attached file (read it from your host):\n- /root/cuate-uploads/x.png\n[this trailing bracketed sentence is far too long to be a media placeholder]",
+      "display": "Attached file (read it from your host):\n- /root/cuate-uploads/x.png\n[this trailing bracketed sentence is far too long to be a media placeholder]",
+      "paths": []
+    },
+    {
+      "name": "indented-code-in-display-survives",
+      "text": "вот сниппет:\n    if x {\n        y()\n    }\n\nAttached file (read it from your host):\n- /root/cuate-uploads/log.txt",
+      "display": "вот сниппет:\n    if x {\n        y()\n    }",
+      "paths": ["/root/cuate-uploads/log.txt"]
+    }
+  ],
+  "matching": [
+    {
+      "name": "strip-single-placeholder",
+      "text": "проверь еще [screenshot]",
+      "normalized": "проверь еще"
+    },
+    {
+      "name": "strip-trailing-placeholder-line",
+      "text": "проверь еще\n[screenshot]",
+      "normalized": "проверь еще"
+    },
+    {
+      "name": "no-placeholder-untouched",
+      "text": "обычный текст",
+      "normalized": "обычный текст"
+    },
+    {
+      "name": "keeps-overlong-bracket",
+      "text": "keep [this bracketed run because it is much longer than forty characters inside]",
+      "normalized": "keep [this bracketed run because it is much longer than forty characters inside]"
+    }
+  ]
+}

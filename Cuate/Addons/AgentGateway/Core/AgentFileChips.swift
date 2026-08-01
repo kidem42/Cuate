@@ -409,42 +409,9 @@ extension EnvironmentValues {
     }
 }
 
-/// The attached-files note woven into an outgoing agent message is a
-/// CONTRACT the agent reads ("Attached files…:\n- path"); on screen it
-/// renders as pills instead of raw paths. This splits a message into the
-/// display text and the note's paths (all UI languages recognized).
-enum AgentAttachNote {
-    /// Every localized header the courier can produce.
-    private static let headers: Set<String> = {
-        var result = Set<String>()
-        for key in ["agent.attach.fileNote.header", "agent.attach.filesNote.header"] {
-            for (_, value) in AgentGatewayStrings.table[key] ?? [:] {
-                result.insert(value)
-            }
-        }
-        return result
-    }()
-
-    /// Returns the text WITHOUT the trailing note, plus the note's paths
-    /// (empty when the message carries no note).
-    static func split(_ text: String) -> (display: String, paths: [String]) {
-        let lines = text.components(separatedBy: "\n")
-        // The note is a header line followed by "- path" lines at the END.
-        var index = lines.count - 1
-        var paths: [String] = []
-        while index >= 0, lines[index].hasPrefix("- ") {
-            paths.insert(String(lines[index].dropFirst(2)), at: 0)
-            index -= 1
-        }
-        guard !paths.isEmpty, index >= 0,
-              headers.contains(lines[index].trimmingCharacters(in: .whitespaces)) else {
-            return (text, [])
-        }
-        let display = lines[..<index].joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (display, paths)
-    }
-}
+// AgentAttachNote — the note contract shared with Android — lives in its
+// own dependency-free file (AgentAttachNote.swift): the cross-platform
+// contract tests compile it standalone.
 
 /// Pills for the files of an outgoing message (user bubble): filename chip,
 /// click reveals a local file in Finder, full path in the tooltip.

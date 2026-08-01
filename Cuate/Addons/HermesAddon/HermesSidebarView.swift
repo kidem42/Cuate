@@ -328,6 +328,15 @@ struct HermesSidebarView: View {
                                 .font(.system(size: 12, weight: isBound ? .medium : .regular))
                                 .foregroundColor(palette.primaryText)
                                 .lineLimit(1)
+                            // "Agent is working here": a tiny equalizer wave
+                            // beside the title while a turn WE started runs
+                            // in this session (turns driven from Telegram/CLI
+                            // are outside the local registry). Rendered only
+                            // while active, so its timeline never ticks idle.
+                            if isAgentWorking(session.id) {
+                                MiniActivityWave(color: markColor ?? palette.accent)
+                                    .help(HL("hermes.sessions.working"))
+                            }
                         }
                         // Title and preview both derive from the first
                         // message — a second line under a titled row only
@@ -548,5 +557,42 @@ struct HermesSidebarView: View {
     private func loadModel() async {
         currentModel = (try? await addon.transport().modelOptions())?.current
         loadedModel = true
+    }
+
+    /// Whether a turn WE started is running in this session right now. The
+    /// registry keys by conversation, the sidebar rows by session — the
+    /// (small, @Published) session map bridges the two, so rows re-render on
+    /// every turn start/end.
+    private func isAgentWorking(_ sessionID: String) -> Bool {
+        guard let key = settings.sessionMap.first(where: { $0.value == sessionID })?.key
+        else { return false }
+        return addon.isTurnActive(forConversationKey: key)
+    }
+}
+
+/// Tiny three-bar equalizer beside a session title — the ThinkingEqualizer's
+/// wave scaled to text height. Only ever mounted for sessions with a turn in
+/// flight, so its 20 fps timeline never runs idle.
+private struct MiniActivityWave: View {
+    let color: Color
+    private let period = 1.1
+    private let cascade = 0.18
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+            let now = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 1.5) {
+                ForEach(0..<3, id: \.self) { index in
+                    let phase = (now - Double(index) * cascade) * 2 * .pi / period
+                    let wave = (1 - cos(phase)) / 2
+                    RoundedRectangle(cornerRadius: 0.8)
+                        .fill(color)
+                        .frame(width: 2, height: 3 + 5 * wave)
+                        .opacity(0.45 + 0.55 * wave)
+                }
+            }
+            // Fixed frame: the bars breathe INSIDE it, the row never jitters.
+            .frame(width: 2 * 3 + 1.5 * 2, height: 9)
+        }
     }
 }

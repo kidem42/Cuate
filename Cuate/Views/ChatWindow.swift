@@ -207,6 +207,10 @@ struct ChatWindow: View {
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
     @State private var panelKeyMonitor: Any?
     @State private var pendingVoiceSend: DispatchWorkItem?
+    /// Conversation on screen when the mic OPENED — the voice send's true
+    /// origin. Captured at record start (not at send: every stop path has an
+    /// async gap a fast chat switch can slip into); cleared by send/cancel.
+    @State private var voiceRecordingOrigin: ChatStore.ConversationID?
     /// Imperative handle to the transcript engine (scroll-to-bottom on send
     /// and summon). @State so the instance survives view-struct re-inits.
     @State private var transcriptController = TranscriptController()
@@ -2264,18 +2268,29 @@ struct ChatWindow: View {
 
     /// Streams the assistant reply for the current history into the chat,
     /// then triggers best-effort context compression.
-    private func streamAssistantReply() {
-        chatStore.setLoading(true)
-        chatStore.statusText = nil
-        pendingRetry = nil
-        let history = chatStore.activeContextMessages
-        let summary = chatStore.conversationSummary
+    private func streamAssistantReply(
+        /// Stream for THIS conversation instead of the on-screen one: a
+        /// voice send whose transcription outlived a chat switch starts its
+        /// reply already detached — the slot/delivery machinery below treats
+        /// it exactly like a mid-stream switch. History + summary must come
+        /// along (the store only holds the ON-SCREEN chat's context).
+        for originOverride: ChatStore.ConversationID? = nil,
+        history historyOverride: [ChatMessage]? = nil,
+        summary summaryOverride: String? = nil
+    ) {
         // The conversation this reply belongs to. If the user switches to
         // another preset chat mid-stream, generation continues in the
         // background and the reply is delivered back to this one. The slot
         // is keyed by it — parallel streams in OTHER conversations keep
         // their own slots untouched.
-        let origin = chatStore.conversation
+        let origin = originOverride ?? chatStore.conversation
+        if origin == chatStore.conversation {
+            chatStore.setLoading(true)
+            chatStore.statusText = nil
+            pendingRetry = nil
+        }
+        let history = historyOverride ?? chatStore.activeContextMessages
+        let summary = summaryOverride ?? chatStore.conversationSummary
 
         // Fresh live buffer per stream: an older background stream keeps its
         // own instance and can't write into this one's bubble.
@@ -2888,6 +2903,13 @@ struct ChatWindow: View {
     }
 
     private func handleVoiceRecordingStart() {
+        // The dictation belongs to the chat on screen at the moment the mic
+        // OPENS. Every stop path reaches sendVoiceMessage through an async
+        // gap (0.5s file-finalize wait, the 0.35s Space cancel window) — a
+        // fast switch right after "send" landed inside that gap, so a
+        // capture at send time still aimed at the NEW chat (report
+        // 2026-07-31, second round: the voice bubble followed the switch).
+        voiceRecordingOrigin = chatStore.conversation
         Task {
             guard transcriptionAvailable else {
                 _ = await MainActor.run {
@@ -2924,6 +2946,7 @@ struct ChatWindow: View {
     }
 
     private func handleVoiceRecordingCancel() {
+        voiceRecordingOrigin = nil
         audioRecorder.cancelRecording()
     }
 
@@ -3023,6 +3046,7 @@ struct ChatWindow: View {
     private func cancelPendingVoiceSend() {
         pendingVoiceSend?.cancel()
         pendingVoiceSend = nil
+        voiceRecordingOrigin = nil
         audioRecorder.deleteRecording()
         chatStore.addMessage(text: L("panel.recordingCancelled"), isUser: false, messageType: .system)
     }
@@ -3033,42 +3057,99 @@ struct ChatWindow: View {
     private func sendVoiceMessage(audioURL: URL) async {
         guard ensureChatConfigured() else { return }
 
+        // The chat the user dictated IN — captured when the mic OPENED
+        // (voiceRecordingOrigin), not here: between the stop tap and this
+        // call sit async gaps (file finalize, cancel window) a fast session
+        // switch can slip into, and transcription itself takes seconds.
+        // Everything below binds to this capture instead of the live store —
+        // a send re-aimed by a switch fed the dictation into the WRONG
+        // Hermes session (report 2026-07-31, both rounds).
+        let origin = voiceRecordingOrigin ?? chatStore.conversation
+        voiceRecordingOrigin = nil
+
         // Synchronous set + status (not setLoading's async dispatch): during
         // transcription the last message is still the assistant's previous
         // reply, so the thinking pill only shows because statusText is set —
         // without it a long recognition looks like the message was lost.
+        // (A switch wipes both — correctly: they belong to the origin chat.)
         chatStore.isLoading = true
         chatStore.statusText = L("panel.transcribing")
         pendingRetry = nil
         do {
             let transcript = try await TranscriptionService.transcribe(audioURL: audioURL)
+            let onOrigin = chatStore.conversation == origin
             guard !transcript.isEmpty else {
-                chatStore.statusText = nil
-                chatStore.setLoading(false)
-                chatStore.addMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system)
+                if onOrigin {
+                    chatStore.statusText = nil
+                    chatStore.setLoading(false)
+                    chatStore.addMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system)
+                } else {
+                    chatStore.deliver(
+                        ChatMessage(text: L("panel.noSpeech"), isUser: false, messageType: .system),
+                        to: origin
+                    )
+                }
                 return
             }
+            let userMessage: ChatMessage
             if !pendingAttachments.isEmpty {
                 // Dictation over staged images: voice here is just an input
                 // method (instead of typing), so the transcript goes out as a
                 // regular text message under the images — no audio kept, no
                 // voice reply. (A failed transcription keeps the attachments
                 // staged for retry.)
-                let userMessage = ChatMessage(text: transcript, isUser: true, attachments: pendingAttachments)
-                chatStore.appendNow(userMessage)
+                userMessage = ChatMessage(text: transcript, isUser: true, attachments: pendingAttachments)
                 clearPendingAttachments()
                 try? FileManager.default.removeItem(at: audioURL)
             } else {
-                let voiceMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
-                chatStore.appendNow(voiceMessage)
+                userMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
             }
-            streamAssistantReply()
+            if onOrigin {
+                chatStore.appendNow(userMessage)
+                streamAssistantReply()
+            } else {
+                // Switched away mid-transcription: the message goes home (the
+                // origin's file / its pending-load queue), and the reply
+                // starts already DETACHED with the origin's own context read
+                // from disk — the stream-slot machinery delivers it exactly
+                // like any turn whose chat was switched away mid-stream.
+                chatStore.deliver(userMessage, to: origin)
+                guard streamSlots[origin] == nil else { return }
+                ChatPersistence.load(key: origin.storageKey, mediaExpiredText: L("chat.mediaExpired")) { loaded in
+                    DispatchQueue.main.async {
+                        // The user may have re-sent in the origin meanwhile.
+                        guard streamSlots[origin] == nil else { return }
+                        // Same context-window rule as activeContextMessages:
+                        // the summarized prefix stays out.
+                        let start = min(max(0, loaded.summaryCoversCount - loaded.windowStart),
+                                        loaded.messages.count)
+                        var history = Array(loaded.messages[start...])
+                        // The delivery above and this load ride the same disk
+                        // queue, so the message is normally in — the append
+                        // is the belt to that suspender.
+                        if !history.contains(where: { $0.id == userMessage.id }) {
+                            history.append(userMessage)
+                        }
+                        streamAssistantReply(for: origin, history: history, summary: loaded.summary)
+                    }
+                }
+            }
         } catch {
-            chatStore.statusText = nil
-            chatStore.setLoading(false)
-            chatStore.addMessage(text: String(format: L("panel.transcriptionFailed"), error.localizedDescription), isUser: false, messageType: .system)
-            // The recording file persists — Retry re-runs transcription + send.
-            pendingRetry = .transcription(audioURL)
+            if chatStore.conversation == origin {
+                chatStore.statusText = nil
+                chatStore.setLoading(false)
+                chatStore.addMessage(text: String(format: L("panel.transcriptionFailed"), error.localizedDescription), isUser: false, messageType: .system)
+                // The recording file persists — Retry re-runs transcription + send.
+                pendingRetry = .transcription(audioURL)
+            } else {
+                // No retry affordance while detached (retry resends the
+                // ON-SCREEN history) — the failure surfaces in the origin.
+                chatStore.deliver(
+                    ChatMessage(text: String(format: L("panel.transcriptionFailed"), error.localizedDescription),
+                                isUser: false, messageType: .system),
+                    to: origin
+                )
+            }
         }
     }
 }

@@ -49,6 +49,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -60,7 +61,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Psychology
@@ -149,6 +149,8 @@ fun ChatScreen(
     onStop: () -> Unit,
     onLoadOlder: () -> Unit,
     onAttachImage: (Uri) -> Unit,
+    /** Any non-image file (documents, archives…) staged as an attachment. */
+    onAttachFile: (Uri) -> Unit = {},
     onRemoveAttachment: (String) -> Unit,
     onStartRecording: () -> Boolean,
     onStopRecording: () -> Unit,
@@ -297,8 +299,16 @@ fun ChatScreen(
             }
     }
 
-    // Camera capture (FileProvider); the gallery picker lives in the top-bar
-    // ⋮ menu (MainActivity) since the paperclip moved out of the composer.
+    // The composer's attach button opens ONE sheet (gallery grid + camera +
+    // any file) — the Telegram model. The old split (photo picker in the ⋮
+    // menu, a separate agent-only file item) made "attach" mean two
+    // different things depending on the chat you were in.
+    var showAttachSheet by remember { mutableStateOf(false) }
+    // The sheet and the IME must not fight over the bottom of the screen:
+    // the keyboard goes down as the sheet comes up.
+    val composerKeyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+
+    // Camera capture (FileProvider) — launched from the sheet's camera tile.
     var cameraTarget by remember { mutableStateOf<Pair<Uri, File>?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
@@ -812,20 +822,18 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                // Camera inside the pill, bottom-anchored (Telegram's attach slot).
+                // Attach inside the pill, bottom-anchored (Telegram's attach
+                // slot): opens the sheet — recent photos, camera, any file.
                 IconButton(
                     onClick = {
-                        val dir = File(context.cacheDir, "camera").apply { mkdirs() }
-                        val file = File(dir, "capture-${System.currentTimeMillis()}.jpg")
-                        val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
-                        cameraTarget = uri to file
-                        cameraLauncher.launch(uri)
+                        composerKeyboard?.hide()
+                        showAttachSheet = true
                     },
                     modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
-                        Icons.Filled.PhotoCamera,
-                        contentDescription = stringResource(R.string.chat_camera),
+                        Icons.Filled.AttachFile,
+                        contentDescription = stringResource(R.string.chat_attach),
                         tint = if (palette.isDynamic) MaterialTheme.colorScheme.onSurfaceVariant
                         else palette.ink.copy(alpha = 0.85f),
                         modifier = Modifier.size(23.dp),
@@ -925,6 +933,22 @@ fun ChatScreen(
         }
     }
     }
+    }
+
+    if (showAttachSheet) {
+        AttachmentSheet(
+            onAttachImages = { uris -> uris.forEach(onAttachImage) },
+            onCamera = {
+                showAttachSheet = false
+                val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+                val file = File(dir, "capture-${System.currentTimeMillis()}.jpg")
+                val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
+                cameraTarget = uri to file
+                cameraLauncher.launch(uri)
+            },
+            onAttachFile = onAttachFile,
+            onDismiss = { showAttachSheet = false },
+        )
     }
 
     openArtifact?.let { artifact ->
@@ -1393,10 +1417,18 @@ private fun MessageBubble(
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 if (isUser) {
-                    if (message.text.isNotEmpty()) {
+                    // Agent file note ("Attached files…\n- path") renders as
+                    // inline images / chips, not raw paths — the text block
+                    // stays in the stored message for the agent to read
+                    // (AgentAttachNote is the shared cross-device contract).
+                    val attachSplit = remember(message.text, isHermes) {
+                        if (isHermes) com.aispotlight.android.hermes.AgentAttachNote.split(message.text)
+                        else com.aispotlight.android.hermes.AgentAttachNote.Split(message.text, emptyList())
+                    }
+                    if (attachSplit.display.isNotEmpty()) {
                         val body = @Composable {
                             Text(
-                                message.text,
+                                attachSplit.display,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = if (themed) palette.userText else androidx.compose.ui.graphics.Color.Unspecified,
                             )
@@ -1410,6 +1442,32 @@ private fun MessageBubble(
                             )
                         } else {
                             body()
+                        }
+                    }
+                    if (attachSplit.paths.isNotEmpty()) {
+                        // Images the courier put on the agent's host render
+                        // inline — that is what makes a photo sent from
+                        // ANOTHER device visible here (this phone holds no
+                        // pixels for it). The sending device already shows
+                        // its local attachment, so it skips this to avoid
+                        // showing the same image twice (desktop parity).
+                        val imagePaths = if (message.attachments.isEmpty()) {
+                            attachSplit.paths.filter {
+                                it.substringAfterLast('.', "").lowercase() in
+                                    com.aispotlight.android.hermes.HermesFileCourier.imageExtensions
+                            }
+                        } else {
+                            emptyList()
+                        }
+                        for (path in imagePaths) {
+                            AgentNoteImage(path, message.timestamp)
+                        }
+                        val filePaths = attachSplit.paths.filterNot { it in imagePaths }
+                        if (filePaths.isNotEmpty()) {
+                            AgentPathChips(
+                                text = "", message.timestamp, onOpenArtifact,
+                                explicitPaths = filePaths,
+                            )
                         }
                     }
                 } else {
@@ -2103,17 +2161,122 @@ private fun rememberAgentPathOpener(onOpenArtifact: (Artifact) -> Unit): (String
  * tap), everything else is saved to Downloads. Without the courier the chip
  * copies the path — the old consolation prize.
  */
+/**
+ * Inline render of an image the courier put on the agent's host (attach
+ * note path, user bubble): silently fetched into the app cache through the
+ * dashboard files API — the pixels live only on the agent's machine when
+ * the photo was sent from another device. Falls back to a copy-the-path
+ * chip when the courier can't run or the fetch fails.
+ */
+@Composable
+private fun AgentNoteImage(
+    path: String,
+    /** The mentioning message's timestamp — freshness the cache must satisfy. */
+    messageTimestamp: Long,
+) {
+    val context = LocalContext.current
+    val settings = remember(context) { com.aispotlight.android.settings.AppSettings.shared(context) }
+    val courier = com.aispotlight.android.hermes.HermesFileCourier
+    var copy by remember(path) { mutableStateOf(courier.fetchedCopy(path)) }
+    var failed by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(path, messageTimestamp) {
+        if (!courier.hasFreshCopy(path, messageTimestamp)) {
+            val fetched = courier.autoFetchArtifact(context, settings, path, messageTimestamp)
+            if (fetched != null) {
+                copy = fetched
+                failed = false
+            } else if (copy == null) {
+                failed = true
+            }
+        }
+    }
+    val file = copy
+    when {
+        file != null -> {
+            // Decode subsampled off the UI thread; lastModified in the key —
+            // a refresh overwrites the copy in place (same file, new bytes).
+            var bitmap by remember(path, file.lastModified()) {
+                mutableStateOf<android.graphics.Bitmap?>(null)
+            }
+            LaunchedEffect(path, file.lastModified()) {
+                bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+                    var sample = 1
+                    while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
+                    android.graphics.BitmapFactory.decodeFile(
+                        file.path,
+                        android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+                    )
+                }
+            }
+            bitmap?.let { decoded ->
+                // Same preview metrics as AttachmentThumbnail: own aspect
+                // ratio inside the chat column's width cap.
+                val aspect = decoded.width.toFloat() / decoded.height.toFloat()
+                val previewMaxWidth = (LocalChatContentWidth.current * 0.62f)
+                    .coerceIn(300.dp, 360.dp)
+                Image(
+                    decoded.asImageBitmap(),
+                    contentDescription = path.substringAfterLast('/'),
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .widthIn(max = previewMaxWidth)
+                        .heightIn(max = 320.dp)
+                        .aspectRatio(aspect)
+                        .clip(RoundedCornerShape(12.dp)),
+                )
+            }
+        }
+        failed -> {
+            // Honest fallback: the pixels are unreachable (courier not
+            // configured, file gone from the host) — a chip that copies
+            // the path instead of silently nothing.
+            val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+            androidx.compose.material3.AssistChip(
+                onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(path)) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.BrokenImage, contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+                label = {
+                    Text(
+                        path.substringAfterLast('/'),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                },
+            )
+        }
+        else -> Box(
+            Modifier
+                .size(width = 220.dp, height = 140.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(20.dp), strokeWidth = 2.dp,
+            )
+        }
+    }
+}
+
 @Composable
 private fun AgentPathChips(
     text: String,
     /** The mentioning message's timestamp — freshness the cache must satisfy. */
     messageTimestamp: Long,
     onOpenArtifact: (Artifact) -> Unit,
+    /** Bypass extraction: the caller already knows the paths (attach note). */
+    explicitPaths: List<String>? = null,
 ) {
     // Directories are dropped outright: the gateway is always remote from a
     // phone — nothing to fetch, nothing to open, the chip was pure noise.
-    val paths = remember(text) {
-        com.aispotlight.android.hermes.HermesFilePaths.extract(text)
+    val paths = remember(text, explicitPaths) {
+        explicitPaths ?: com.aispotlight.android.hermes.HermesFilePaths.extract(text)
             .filter { com.aispotlight.android.hermes.HermesFilePaths.isListableFile(it) }
     }
     if (paths.isEmpty()) return

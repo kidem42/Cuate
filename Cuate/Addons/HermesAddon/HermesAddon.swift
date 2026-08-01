@@ -41,7 +41,10 @@ final class HermesAddon: ObservableObject {
     ///   catch-up then ran DURING the run and inserted the gateway's rows
     ///   for the in-flight reply as duplicate bubbles (app.log 2026-07-29
     ///   12:40: catchUp between turn start and turn.end).
-    private var activeTurnKeys: [String: Int] = [:]
+    /// `@Published` so the sidebar's session rows can show a live "agent is
+    /// working here" wave: it changes once per turn start/end — a cheap
+    /// invalidation, nothing per-chunk rides on it.
+    @Published private var activeTurnKeys: [String: Int] = [:]
     var streamActive: Bool { !activeTurnKeys.isEmpty }
     func beginStreaming(conversationKey: String) {
         activeTurnKeys[conversationKey, default: 0] += 1
@@ -293,15 +296,29 @@ final class HermesAddon: ObservableObject {
             badgeFetchesInFlight.insert(session.id)
             Task { @MainActor in
                 defer { badgeFetchesInFlight.remove(session.id) }
+                let started = ContinuousClock.now
                 guard let rows = try? await transport().messages(sessionID: session.id) else { return }
+                // Perf telemetry (2026-07-31): this is a FULL-transcript
+                // fetch parsed on the main actor, one per unread session per
+                // count change — with dozens of sessions and background
+                // agents it was a suspected источник просадок скролла.
+                let elapsed = started.duration(to: .now)
+                let ms = Int(elapsed.components.seconds) * 1000
+                    + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
+                if ms > 50 {
+                    Diagnostics.log("hermes", "badge.fetch session=\(session.id) rows=\(rows.count) ms=\(ms)")
+                }
                 // Rows are append-only: the first `read` ones were on screen
                 // when the watermark was set — everything after is new.
                 // Visible = what the transcript renders as bubbles: user
                 // turns and assistant rows with actual text (tool results
                 // and bare tool-call shells stay out).
+                // User rows minus compaction artifacts — a context summary
+                // the gateway injected must not light the badge.
                 let visible = rows.suffix(max(0, rows.count - read)).filter {
-                    $0.role == "user" || ($0.role == "assistant"
-                        && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    ($0.role == "user" && HermesCompaction.visibleUserText($0.content) != nil)
+                        || ($0.role == "assistant"
+                            && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }.count
                 badgeComputedAt[session.id] = session.messageCount
                 // Never 0 while the raw count moved: an all-tool tail still
@@ -330,10 +347,19 @@ final class HermesAddon: ObservableObject {
             guard let conversationKey = bindings.first(where: { $0.value == session.id })?.key,
                   let role = roles.first else { continue }
             // Preview: the newest assistant text from the transcript tail.
+            // (session.preview alone echoed the TITLE — a1b384d; the full
+            // fetch stays until the parse moves off the main actor.)
             var preview = session.preview ?? ""
+            let previewStart = ContinuousClock.now
             if let rows = try? await transport().messages(sessionID: session.id),
                let lastReply = rows.last(where: { $0.role == "assistant" && !$0.content.isEmpty }) {
                 preview = lastReply.content
+                let elapsed = previewStart.duration(to: .now)
+                let ms = Int(elapsed.components.seconds) * 1000
+                    + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
+                if ms > 50 {
+                    Diagnostics.log("hermes", "poll.preview session=\(session.id) rows=\(rows.count) ms=\(ms)")
+                }
             }
             NotificationService.shared.postTurnCompleted(
                 roleID: role.id, roleName: role.displayName,

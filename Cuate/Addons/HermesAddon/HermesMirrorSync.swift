@@ -41,20 +41,77 @@ enum HermesMirrorSync {
               let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationID.storageKey) else {
             return true // nothing to sync yet — not an error
         }
+        // Coalesce concurrent triggers: onAppear, panel.show, the history-
+        // loaded hook and the 20s poll all fire around the same moments, and
+        // the telemetry showed the SAME session fetched 2–3× in parallel
+        // (15:41:54–56: three overlapping 1.5–3.7s fetches). One sync per
+        // session at a time; skippers return true — the in-flight pass
+        // delivers, and any tail it missed rides the next tick.
+        guard !inFlight.contains(sessionID) else { return true }
+        inFlight.insert(sessionID)
+        defer { inFlight.remove(sessionID) }
         do {
+            // Count gate (perf 2026-07-31): the transcript endpoint serves
+            // the FULL session (limit/offset ignored — fixtures) and, with
+            // the target MainActor-isolated by default, its JSON parse +
+            // merge run on the main thread — a stall that scales with the
+            // chat's length, repeating on the ~20s poll and every summon
+            // even when nothing changed. The sessions LIST is a few KB of
+            // metadata and carries `message_count` (append-only transcript,
+            // fixtures): unchanged count since the last merge ⇒ nothing to
+            // fetch. A session outside the first 50 rows falls through to
+            // the full fetch — the gate only ever SKIPS work it can prove
+            // redundant.
+            var gateCount: Int?
+            if let sessions = try? await HermesAddon.shared.transport().sessions(limit: 50),
+               let row = sessions.first(where: { $0.id == sessionID }) {
+                if lastMergedCounts[sessionID] == row.messageCount { return true }
+                gateCount = row.messageCount
+            }
+            let clock = ContinuousClock()
+            var mark = clock.now
             let rows = try await HermesAddon.shared.transport().messages(sessionID: sessionID)
+            let fetchMs = elapsedMs(since: &mark, clock: clock)
             // The user may have switched conversations during the fetch.
             guard store.conversation == conversationID, store.isHistoryLoaded else { return true }
             let (merged, changed) = merge(local: store.messages, gateway: rows, sessionID: sessionID)
+            let mergeMs = elapsedMs(since: &mark, clock: clock)
+            // The transcript just fetched is at LEAST as fresh as the count
+            // read before it — committing the earlier count can only err
+            // low, which re-fetches next tick (the safe direction).
+            if let gateCount { lastMergedCounts[sessionID] = gateCount }
             if changed {
                 store.applyAgentMerge(merged)
-                Diagnostics.log("hermes", "mirror.catchUp session=\(sessionID) rows=\(rows.count) merged=\(merged.count)")
+                Diagnostics.log("hermes", "mirror.catchUp session=\(sessionID) rows=\(rows.count) merged=\(merged.count) fetch=\(fetchMs)ms merge=\(mergeMs)ms")
+            } else if fetchMs + mergeMs > 50 {
+                // No-change syncs used to be invisible in the log while
+                // still paying the full parse — surface the slow ones.
+                Diagnostics.log("hermes", "mirror.catchUp.slow session=\(sessionID) rows=\(rows.count) fetch=\(fetchMs)ms merge=\(mergeMs)ms")
             }
             return true
         } catch {
             Diagnostics.log("hermes", "mirror.catchUp failed: \(String(error.localizedDescription.prefix(120)))")
             return false
         }
+    }
+
+    /// `message_count` at the last completed catch-up, per session — the
+    /// count gate above. In-memory on purpose: a fresh launch always syncs.
+    private static var lastMergedCounts: [String: Int] = [:]
+
+    /// Sessions with a catch-up mid-flight (concurrent-trigger coalescing).
+    private static var inFlight: Set<String> = []
+
+    /// Milliseconds since `mark`; advances `mark` to now (chained timings).
+    /// Fetch time includes the network wait — the parse share is what lands
+    /// on the main thread; merge time is pure main-thread work.
+    private static func elapsedMs(since mark: inout ContinuousClock.Instant,
+                                  clock: ContinuousClock) -> Int {
+        let now = clock.now
+        let duration = mark.duration(to: now)
+        mark = now
+        return Int(duration.components.seconds) * 1000
+            + Int(duration.components.attoseconds / 1_000_000_000_000_000)
     }
 
     /// Merges the local window with the gateway transcript.
@@ -78,9 +135,25 @@ enum HermesMirrorSync {
         // step summary attached to the NEXT content-bearing assistant row —
         // without this, a mirror rebuild (app restart) lost the whole tool
         // trail of a turn (e2e 2026-07-25).
-        let contentRows = gateway.filter {
-            ($0.role == "user" || $0.role == "assistant")
-                && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let contentRows: [HermesTranscriptMessage] = gateway.compactMap { row in
+            guard row.role == "user" || row.role == "assistant" else { return nil }
+            var content = row.content
+            if row.role == "user" {
+                // Compaction summaries ride the transcript as user rows and
+                // mirrored verbatim they render as OUR message (2026-08-01).
+                // Nil = fully synthetic — drop; a merged row keeps only its
+                // real user part (which also lets the claim pass text-match
+                // our local bubble).
+                guard let visible = HermesCompaction.visibleUserText(content) else { return nil }
+                content = visible
+            }
+            guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            if content == row.content { return row }
+            return HermesTranscriptMessage(
+                id: row.id, role: row.role, content: content,
+                toolName: row.toolName, toolCallID: row.toolCallID,
+                toolCallArguments: row.toolCallArguments, timestamp: row.timestamp
+            )
         }
         guard !contentRows.isEmpty else { return (local, false) }
         var stepsByRowID = stepSummaries(gateway: gateway)
@@ -164,12 +237,7 @@ enum HermesMirrorSync {
                         return true
                     }
                     guard isUser, !candidate.attachments.isEmpty else { return false }
-                    let stripped = gwText
-                        .replacingOccurrences(
-                            of: #"\[[^\]\n]{1,40}\]"#, with: "",
-                            options: .regularExpression)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    return stripped == localText
+                    return AgentAttachNote.normalizedForMatching(gwText) == localText
                 }
                 if !claimedLocal.contains(scan),
                    candidate.externalID == nil,
@@ -233,6 +301,14 @@ enum HermesMirrorSync {
         // "ок"-style answers never merge.
         var healed: [ChatMessage] = []
         for row in merged {
+            // Compaction summaries older builds imported as OUR bubbles:
+            // purge (their gateway rows are filtered out above, so nothing
+            // reinserts them).
+            if row.isUser, row.messageType != .system,
+               HermesCompaction.visibleUserText(row.text) == nil {
+                changed = true
+                continue
+            }
             if let previous = healed.last,
                !row.isUser, !previous.isUser,
                row.messageType != .system, previous.messageType != .system {

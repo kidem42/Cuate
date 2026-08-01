@@ -663,6 +663,18 @@ class AppSettings private constructor(context: Context) {
         prefs.edit().putString("generalConversationId", id).apply()
     }
 
+    /**
+     * The conversation on screen when the app was last left — an agent
+     * (Hermes) thread as readily as a preset chat. A cold start returns
+     * here instead of deriving the chat from the active preset, which can
+     * never point at an agent thread.
+     */
+    fun lastConversationId(): String? = prefs.getString("lastConversationId", null)
+
+    fun setLastConversationId(id: String) {
+        prefs.edit().putString("lastConversationId", id).apply()
+    }
+
     /** Stable conversation id for an isolated preset's dedicated chat. */
     fun isolatedConversationId(presetName: String): String? =
         prefs.getString("isolatedConvId.$presetName", null)

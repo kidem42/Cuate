@@ -131,7 +131,11 @@ enum HermesTransportError: LocalizedError {
 
 // MARK: - Transport
 
-struct HermesTransport {
+/// `nonisolated` (the target defaults to MainActor): the transport holds
+/// only value state and must not drag its work onto the main actor — the
+/// full-transcript JSON parse measured 0.5–3.7s per fetch (telemetry
+/// 2026-07-31) and, main-isolated, it stalled scrolling on every sync.
+nonisolated struct HermesTransport {
     let baseURL: URL
     let apiKey: String
 
@@ -155,6 +159,12 @@ struct HermesTransport {
 
     /// Runs a request and returns the parsed JSON object, mapping non-2xx
     /// onto `HermesTransportError.http`.
+    ///
+    /// `@concurrent` — under approachable concurrency a nonisolated async
+    /// func still runs on the CALLER's actor, and every caller here is
+    /// MainActor code; this hop is what actually takes the
+    /// `JSONSerialization` of megabyte transcripts off the main thread.
+    @concurrent
     private func json(_ method: String, _ path: String, body: [String: Any]? = nil,
                       query: [URLQueryItem] = []) async throws -> [String: Any] {
         var req = try request(method, path, body: body)
@@ -264,6 +274,7 @@ struct HermesTransport {
         return info
     }
 
+    @concurrent
     func sessions(limit: Int = 50, offset: Int = 0) async throws -> [HermesSessionInfo] {
         let object = try await json("GET", "api/sessions", query: [
             URLQueryItem(name: "limit", value: String(limit)),
@@ -290,6 +301,7 @@ struct HermesTransport {
                            body: ["model": model, "provider": provider])
     }
 
+    @concurrent
     func messages(sessionID: String) async throws -> [HermesTranscriptMessage] {
         let object = try await json("GET", "api/sessions/\(sessionID)/messages")
         let data = object["data"] as? [[String: Any]] ?? []

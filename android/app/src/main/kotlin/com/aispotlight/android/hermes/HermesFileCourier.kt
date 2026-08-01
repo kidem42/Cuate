@@ -37,6 +37,9 @@ object HermesFileCourier {
     /** Extensions the artifact viewer renders — the auto-fetch set. */
     val artifactExtensions = setOf("html", "htm", "md", "markdown")
 
+    /** Extensions rendered inline instead of as a chip (desktop parity). */
+    val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "heic")
+
     fun canFetchRemote(settings: AppSettings): Boolean =
         settings.hermesDashboardUrl.value.isNotEmpty() &&
             !ApiKeyStore.auxKey(ApiKeyStore.AuxKey.HERMES_DASHBOARD).isNullOrEmpty()

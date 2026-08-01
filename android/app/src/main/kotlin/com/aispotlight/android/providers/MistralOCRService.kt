@@ -23,16 +23,31 @@ object MistralOCRService {
         get() = ApiKeyStore.hasKey(ProviderID.MISTRAL)
 
     /** Runs OCR on a base64-encoded image and returns the extracted markdown. */
-    suspend fun extractText(imageBase64: String, mimeType: String): String {
+    suspend fun extractText(imageBase64: String, mimeType: String): String =
+        run(JSONObject().apply {
+            put("type", "image_url")
+            put("image_url", "data:$mimeType;base64,$imageBase64")
+        })
+
+    /**
+     * Extracts markdown from a base64-encoded document (PDF, Word, PowerPoint)
+     * — the `document_url` flavor of the same endpoint. Used when a document
+     * is attached to a built-in (non-agent) chat.
+     */
+    suspend fun extractDocumentText(base64: String, mimeType: String, filename: String): String =
+        run(JSONObject().apply {
+            put("type", "document_url")
+            put("document_url", "data:$mimeType;base64,$base64")
+            if (filename.isNotEmpty()) put("document_name", filename)
+        })
+
+    private suspend fun run(document: JSONObject): String {
         val apiKey = ApiKeyStore.key(ProviderID.MISTRAL)
             ?: throw ProviderException.missingAPIKey(ProviderID.MISTRAL)
 
         val body = JSONObject().apply {
             put("model", MODEL)
-            put("document", JSONObject().apply {
-                put("type", "image_url")
-                put("image_url", "data:$mimeType;base64,$imageBase64")
-            })
+            put("document", document)
         }
         val request = Request.Builder()
             .url(ENDPOINT)

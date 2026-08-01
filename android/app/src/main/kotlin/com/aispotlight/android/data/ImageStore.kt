@@ -15,14 +15,7 @@ import java.util.UUID
  */
 object ImageStore {
     private const val DIR = "images"
-    /** Longest image side sent to vision APIs — bounds token cost and upload size. */
-    private const val MAX_DIMENSION = 2048
 
-    /**
-     * Reads an image from a content Uri (gallery, camera), downscales it to at
-     * most 2048px on the long side, re-encodes as JPEG and persists it as a
-     * file. Returns the attachment row, or null when the Uri can't be decoded.
-     */
     /**
      * Imports an arbitrary (non-image) file verbatim for the agent courier:
      * copied into the files dir, no decoding, real mime from the resolver.
@@ -71,11 +64,19 @@ object ImageStore {
         }
     }
 
+    /**
+     * Imports an image from a content Uri (gallery, camera) VERBATIM — original
+     * bytes, EXIF and all, mirroring macOS `ChatAttachment.fileBacked`: the
+     * downscaled copy for chat models is produced separately at send time
+     * (`LLMImage.forModel`), so OCR and the image tools keep full quality.
+     * Returns the attachment row, or null when the Uri isn't a decodable image.
+     */
     fun importImage(context: Context, uri: Uri, filename: String? = null): ChatAttachment? {
         return try {
         val resolver = context.contentResolver
 
-        // Bounds-only pass to pick a power-of-two downsample factor.
+        // Bounds-only pass validates the payload IS an image and sniffs the
+        // real mime (the resolver's answer can be generic or missing).
         // NB: with inJustDecodeBounds the decode call itself ALWAYS returns
         // null (the dimensions land in the options object) — so only the
         // stream is null-checked here; decode success is judged by
@@ -85,48 +86,50 @@ object ImageStore {
         val boundsStream = resolver.openInputStream(uri) ?: return null
         boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_DIMENSION) sample *= 2
 
-        val options = BitmapFactory.Options().apply { inSampleSize = sample }
-        val bitmap = resolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, options)
-        } ?: return null
-
-        val scaled = scaleDown(bitmap)
-        val id = UUID.randomUUID().toString()
-        val relativePath = "$DIR/$id.jpg"
-        val file = File(context.filesDir, relativePath)
-        file.parentFile?.mkdirs()
-        file.outputStream().use { out ->
-            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        val mime = bounds.outMimeType ?: resolver.getType(uri) ?: "image/jpeg"
+        val ext = when (mime) {
+            "image/png" -> "png"
+            "image/webp" -> "webp"
+            "image/gif" -> "gif"
+            "image/heic", "image/heif" -> "heic"
+            else -> "jpg"
         }
-        if (scaled !== bitmap) bitmap.recycle()
+        val id = UUID.randomUUID().toString()
+        val relativePath = "$DIR/$id.$ext"
+        val target = File(context.filesDir, relativePath)
+        target.parentFile?.mkdirs()
+        // Verbatim byte copy; bounded like importFile so a rogue Uri can't
+        // fill the data dir.
+        var total = 0L
+        resolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { output ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > 64L * 1024 * 1024) {
+                        target.delete()
+                        return null
+                    }
+                    output.write(buffer, 0, read)
+                }
+            }
+        } ?: return null
 
         ChatAttachment(
             id = id,
-            filename = filename ?: "image.jpg",
-            mimeType = "image/jpeg",
+            filename = filename ?: "image.$ext",
+            mimeType = mime,
             filePath = relativePath,
         )
         } catch (e: Exception) {
-            // Revoked grant, vanished file, OOM on a huge image — log, fail
-            // soft (the caller surfaces the error banner).
+            // Revoked grant, vanished file — log, fail soft (the caller
+            // surfaces the error banner).
             com.aispotlight.android.core.Diagnostics.log("image", "import.failed ${e.message}")
             null
         }
-    }
-
-    private fun scaleDown(bitmap: Bitmap): Bitmap {
-        val longest = maxOf(bitmap.width, bitmap.height)
-        if (longest <= MAX_DIMENSION) return bitmap
-        val scale = MAX_DIMENSION.toFloat() / longest
-        return Bitmap.createScaledBitmap(
-            bitmap,
-            (bitmap.width * scale).toInt().coerceAtLeast(1),
-            (bitmap.height * scale).toInt().coerceAtLeast(1),
-            true,
-        )
     }
 
     fun file(context: Context, attachment: ChatAttachment): File =
@@ -139,7 +142,11 @@ object ImageStore {
         return Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
     }
 
-    /** Decoded bitmap for thumbnails (downsampled to roughly the target size). */
+    /**
+     * Decoded bitmap for thumbnails (downsampled to roughly the target size),
+     * EXIF orientation applied — stored originals keep the tag, and
+     * BitmapFactory ignores it.
+     */
     fun thumbnail(context: Context, attachment: ChatAttachment, targetPx: Int = 512): Bitmap? {
         val file = file(context, attachment)
         if (!file.exists()) return null
@@ -147,7 +154,39 @@ object ImageStore {
         BitmapFactory.decodeFile(file.path, bounds)
         var sample = 1
         while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= targetPx) sample *= 2
-        return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        val bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: return null
+        return com.aispotlight.android.core.bakeExifOrientation(bitmap, exifOrientation(file))
+    }
+
+    /**
+     * Upright pixel dimensions of the stored payload (EXIF rotation applied) —
+     * the mask editor needs its mask pixel-aligned with the image the eraser
+     * model receives.
+     */
+    fun pixelSize(context: Context, attachment: ChatAttachment): Pair<Int, Int>? {
+        val file = file(context, attachment)
+        if (!file.exists()) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        return when (exifOrientation(file)) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90,
+            android.media.ExifInterface.ORIENTATION_ROTATE_270,
+            android.media.ExifInterface.ORIENTATION_TRANSPOSE,
+            android.media.ExifInterface.ORIENTATION_TRANSVERSE,
+            -> bounds.outHeight to bounds.outWidth
+            else -> bounds.outWidth to bounds.outHeight
+        }
+    }
+
+    private fun exifOrientation(file: File): Int = try {
+        android.media.ExifInterface(file.path).getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_NORMAL,
+        )
+    } catch (_: Exception) {
+        android.media.ExifInterface.ORIENTATION_NORMAL
     }
 
     fun delete(context: Context, filePath: String) {
@@ -174,7 +213,9 @@ object ImageStore {
         if (attachment.mimeType == "image/png") return contentBase64(context, attachment)
         val file = file(context, attachment)
         if (!file.exists()) return ""
-        val bitmap = BitmapFactory.decodeFile(file.path) ?: return ""
+        val decoded = BitmapFactory.decodeFile(file.path) ?: return ""
+        // Re-encoding drops the EXIF tag, so the rotation must move into pixels.
+        val bitmap = com.aispotlight.android.core.bakeExifOrientation(decoded, exifOrientation(file))
         val out = java.io.ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)

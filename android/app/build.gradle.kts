@@ -22,8 +22,8 @@ android {
         applicationId = "com.aispotlight.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "2.2.0"
+        versionCode = 23
+        versionName = "2.5.0"
     }
 
     signingConfigs {
@@ -62,6 +62,7 @@ android {
         compose = true
     }
     sourceSets["main"].kotlin.srcDir("src/main/kotlin")
+    sourceSets["test"].kotlin.srcDir("src/test/kotlin")
 }
 
 dependencies {
@@ -86,4 +87,10 @@ dependencies {
     implementation("androidx.room:room-runtime:2.7.1")
     implementation("androidx.room:room-ktx:2.7.1")
     ksp("androidx.room:room-compiler:2.7.1")
+
+    // Contract tests (shared/fixtures at the repo root — see
+    // scripts/test-attach-note.sh). org.json is a stub in unit tests'
+    // android.jar, so the real JVM implementation rides along.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

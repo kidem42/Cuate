@@ -1488,41 +1488,41 @@ private fun HermesSection(settings: AppSettings) {
             item {
                 val options = modelOptions
                 if (options != null && options.providers.isNotEmpty()) {
-                    var lockMenuOpen by remember { mutableStateOf(false) }
-                    val currentLabel = modelLock.split("|").let {
-                        if (it.size == 2 && it[0].isNotEmpty()) "${it[0]} · ${it[1]}"
-                        else stringResource(R.string.hermes_model_agent_default)
-                    }
+                    var pickerOpen by remember { mutableStateOf(false) }
+                    val lockedPair = modelLock.split("|")
+                        .takeIf { it.size == 2 && it[0].isNotEmpty() }?.let { it[0] to it[1] }
+                    val currentLabel = lockedPair?.let { "${it.first} · ${it.second.substringAfterLast("/")}" }
+                        ?: stringResource(R.string.hermes_model_agent_default)
                     Column {
                         Text(
                             stringResource(R.string.hermes_model_lock),
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        Box {
-                            EclipseTextButton(currentLabel, onClick = { lockMenuOpen = true })
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = lockMenuOpen,
-                                onDismissRequest = { lockMenuOpen = false },
-                            ) {
-                                androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.hermes_model_agent_default)) },
-                                    onClick = {
-                                        lockMenuOpen = false
-                                        settings.setHermesModelLock("")
-                                    },
-                                )
-                                for (provider in options.providers) {
-                                    for (model in provider.models) {
-                                        androidx.compose.material3.DropdownMenuItem(
-                                            text = { Text("${provider.slug} · $model") },
-                                            onClick = {
-                                                lockMenuOpen = false
-                                                settings.setHermesModelLock("${provider.slug}|$model")
-                                            },
-                                        )
+                        EclipseTextButton(currentLabel, onClick = { pickerOpen = true })
+                        if (pickerOpen) {
+                            HermesModelPicker(
+                                options = options,
+                                selected = lockedPair,
+                                onPickAgentDefault = {
+                                    pickerOpen = false
+                                    settings.setHermesModelLock("")
+                                },
+                                onPick = { provider, model ->
+                                    pickerOpen = false
+                                    settings.setHermesModelLock("$provider|$model")
+                                },
+                                onRefresh = {
+                                    scope.launch {
+                                        modelOptions = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            try {
+                                                com.aispotlight.android.hermes.HermesChatService
+                                                    .transport(settings).modelOptions(refresh = true)
+                                            } catch (_: Exception) { modelOptions }
+                                        }
                                     }
-                                }
-                            }
+                                },
+                                onDismiss = { pickerOpen = false },
+                            )
                         }
                     }
                 }

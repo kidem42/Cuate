@@ -115,7 +115,117 @@ data class ModelInfo(
 
 // MARK: - Messages
 
-data class LLMImage(val mimeType: String, val base64: String)
+data class LLMImage(val mimeType: String, val base64: String) {
+    companion object {
+        /**
+         * Longest side beyond which cloud providers downscale server-side anyway
+         * (Anthropic caps at 1568px; OpenAI/Gemini tile below that). Pixels above
+         * this never reach the model — they only cost upload bytes and latency.
+         */
+        private const val MAX_MODEL_DIMENSION = 1568
+        /**
+         * Payloads at or under this many bytes pass through un-recoded when the
+         * pixels already fit — recompression would only lose quality.
+         */
+        private const val MAX_PASSTHROUGH_BYTES = 4 shl 20
+
+        /**
+         * Wire image for cloud providers — port of `LLMImage.forModel` on macOS:
+         * downscaled to fit [MAX_MODEL_DIMENSION] and re-encoded (JPEG for opaque
+         * images, PNG when alpha is present), EXIF orientation baked in. Small-enough
+         * images, non-images, GIFs (animation would be flattened) and anything
+         * undecodable pass through unchanged. Hermes inline images go through here
+         * too: original-size photos blow through reverse-proxy body limits as opaque
+         * 413s, and the gateway's model downscales to the same ceiling anyway.
+         */
+        fun forModel(mimeType: String, base64: String): LLMImage {
+            val original = LLMImage(mimeType, base64)
+            if (!mimeType.startsWith("image") || mimeType == "image/gif") return original
+            val bytes = try {
+                android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+            } catch (_: IllegalArgumentException) {
+                return original
+            }
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return original
+
+            val fitsPixels = maxOf(bounds.outWidth, bounds.outHeight) <= MAX_MODEL_DIMENSION
+            if (fitsPixels && bytes.size <= MAX_PASSTHROUGH_BYTES) return original
+
+            // Power-of-two pre-downsample bounds decode memory; the exact scale
+            // below lands on the ceiling (mirrors ImageIO thumbnailing on mac).
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_MODEL_DIMENSION) sample *= 2
+            val decoded = android.graphics.BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+            ) ?: return original
+            val longest = maxOf(decoded.width, decoded.height)
+            val scaled = if (longest <= MAX_MODEL_DIMENSION) decoded else {
+                val scale = MAX_MODEL_DIMENSION.toFloat() / longest
+                android.graphics.Bitmap.createScaledBitmap(
+                    decoded,
+                    (decoded.width * scale).toInt().coerceAtLeast(1),
+                    (decoded.height * scale).toInt().coerceAtLeast(1),
+                    true,
+                )
+            }
+            // Bake EXIF orientation into the pixels — the mac side does this via
+            // kCGImageSourceCreateThumbnailWithTransform.
+            val orientation = try {
+                java.io.ByteArrayInputStream(bytes).use {
+                    android.media.ExifInterface(it).getAttributeInt(
+                        android.media.ExifInterface.TAG_ORIENTATION,
+                        android.media.ExifInterface.ORIENTATION_NORMAL,
+                    )
+                }
+            } catch (_: Exception) {
+                android.media.ExifInterface.ORIENTATION_NORMAL
+            }
+            val upright = bakeExifOrientation(scaled, orientation)
+
+            val hasAlpha = upright.hasAlpha()
+            val out = java.io.ByteArrayOutputStream()
+            val encoded = if (hasAlpha) {
+                upright.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            } else {
+                upright.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            if (!encoded || out.size() == 0) return original
+            // Recode of an already-fitting (but heavy) image must actually shrink
+            // it; a downscale is kept regardless — fewer pixels is the point.
+            if (fitsPixels && out.size() >= bytes.size) return original
+            return LLMImage(
+                mimeType = if (hasAlpha) "image/png" else "image/jpeg",
+                base64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP),
+            )
+        }
+    }
+}
+
+/**
+ * Applies an EXIF orientation to decoded pixels (BitmapFactory ignores the
+ * tag). Returns the input bitmap unchanged for normal/unknown orientations.
+ */
+internal fun bakeExifOrientation(bitmap: android.graphics.Bitmap, orientation: Int): android.graphics.Bitmap {
+    val matrix = android.graphics.Matrix()
+    when (orientation) {
+        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+        android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+        android.media.ExifInterface.ORIENTATION_TRANSPOSE -> {
+            matrix.postRotate(90f); matrix.postScale(-1f, 1f)
+        }
+        android.media.ExifInterface.ORIENTATION_TRANSVERSE -> {
+            matrix.postRotate(270f); matrix.postScale(-1f, 1f)
+        }
+        else -> return bitmap
+    }
+    return android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+}
 
 data class LLMMessage(
     val role: Role,

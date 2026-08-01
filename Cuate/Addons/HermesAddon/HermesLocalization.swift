@@ -185,6 +185,7 @@ enum HermesAddonStrings {
         "hermes.sessions.delete": [.english: "Delete", .spanish: "Eliminar", .russian: "Удалить"],
         "hermes.sessions.refresh": [.english: "Refresh", .spanish: "Actualizar", .russian: "Обновить"],
         "hermes.sessions.empty": [.english: "No sessions on the gateway.", .spanish: "No hay sesiones en el gateway.", .russian: "На гейтвее нет сессий."],
+        "hermes.sessions.working": [.english: "The agent is working in this session…", .spanish: "El agente está trabajando en esta sesión…", .russian: "Агент работает в этой сессии…"],
         "hermes.sessions.messages": [.english: "%d messages", .spanish: "%d mensajes", .russian: "%d сообщений"],
 
         // MARK: Formatting briefing (per-session preamble)

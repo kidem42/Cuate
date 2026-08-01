@@ -246,12 +246,11 @@ enum HermesFileCourier {
     /// Extensions rendered inline instead of as a file pill.
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic"]
 
-    /// The message block the agent reads: header + one path per line.
+    /// The message block the agent reads — the canonical cross-device
+    /// form (AgentAttachNote is the shared contract; localized headers
+    /// broke the Android↔Mac mirror, 2026-08-01).
     static func note(for paths: [String]) -> String {
-        let header = paths.count == 1
-            ? AGL("agent.attach.fileNote.header")
-            : AGL("agent.attach.filesNote.header")
-        return header + "\n" + paths.map { "- \($0)" }.joined(separator: "\n")
+        AgentAttachNote.compose(paths: paths)
     }
 
     /// One multipart upload into `~/cuate-uploads/<name>` on the agent's

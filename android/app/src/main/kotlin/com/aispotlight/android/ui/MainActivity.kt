@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -113,6 +112,9 @@ class MainActivity : ComponentActivity() {
                     // Shared voice note / audio file → transcript into the input.
                     stream != null && type.startsWith("audio/") ->
                         viewModel.importSharedAudio(stream, type)
+                    // Shared document (PDF, Word, …) → pending file attachment.
+                    stream != null && !type.startsWith("text/") ->
+                        viewModel.attachFile(stream)
                     else ->
                         sharedText.value = intent.getStringExtra(Intent.EXTRA_TEXT)
                 }
@@ -121,7 +123,13 @@ class MainActivity : ComponentActivity() {
                 val streams = androidx.core.content.IntentCompat.getParcelableArrayListExtra(
                     intent, Intent.EXTRA_STREAM, android.net.Uri::class.java
                 )
-                streams?.forEach { viewModel.attachImage(it) }
+                // Mixed batches (images + documents): route each Uri by its
+                // RESOLVED mime — the intent's own type may be a wildcard.
+                streams?.forEach { uri ->
+                    val mime = contentResolver.getType(uri) ?: intent.type ?: ""
+                    if (mime.startsWith("image/")) viewModel.attachImage(uri)
+                    else viewModel.attachFile(uri)
+                }
             }
             Intent.ACTION_PROCESS_TEXT ->
                 sharedText.value = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
@@ -177,6 +185,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     val hermesSessionColors by settings.hermesSessionColors.collectAsStateWithLifecycle()
     val hermesSessionModels by settings.hermesSessionModels.collectAsStateWithLifecycle()
     val hermesSessionEfforts by settings.hermesSessionEfforts.collectAsStateWithLifecycle()
+    val hermesCreating by viewModel.hermesCreating.collectAsStateWithLifecycle()
 
     // The Hermes sessions sidebar (desktop 4.0 parity: create / rename /
     // pin / color / delete / unread) lives in a drawer; the hamburger and
@@ -192,6 +201,17 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     // until the next role switch (e2e 2026-07-27).
     androidx.compose.runtime.LaunchedEffect(drawerState.isOpen) {
         if (drawerState.isOpen && hermesConfigured) viewModel.syncHermesSessions()
+    }
+
+    // "New session" from the drawer keeps it open to host the spinner; the
+    // drawer closes itself once the create lands (either way) and the new
+    // thread is on screen.
+    var closeDrawerAfterCreate by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(hermesCreating) {
+        if (!hermesCreating && closeDrawerAfterCreate) {
+            closeDrawerAfterCreate = false
+            drawerState.close()
+        }
     }
 
     // Agent banners need POST_NOTIFICATIONS on 13+ — ask once, when the
@@ -221,6 +241,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
             onStop = { viewModel.stopStreaming() },
             onLoadOlder = { viewModel.loadOlderPage() },
             onAttachImage = { viewModel.attachImage(it) },
+            onAttachFile = { viewModel.attachFile(it) },
             onRemoveAttachment = { viewModel.removePendingAttachment(it) },
             onStartRecording = { viewModel.startRecording() },
             onStopRecording = { viewModel.stopRecordingAndTranscribe() },
@@ -252,24 +273,22 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
 
     // Session model + reasoning effort for the ⋮ menu (moved out of the
     // composer 2026-07-27 — the chips row ate screen height for controls
-    // touched once per session).
+    // touched once per session). The stored pair may lack the provider
+    // ("|model" — learned from the gateway session list, which only knows
+    // the model): show what we have.
     val hermesModelLabel = viewModel.activeHermesSessionId
-        ?.let { hermesSessionModels[it] }?.replace("|", " · ")
+        ?.let { hermesSessionModels[it] }?.split("|")
+        ?.filter { it.isNotEmpty() }?.joinToString(" · ")?.ifEmpty { null }
     val hermesEffort = viewModel.activeHermesSessionId
         ?.let { hermesSessionEfforts[it] } ?: ""
 
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
+    var showModelPicker by rememberSaveable { mutableStateOf(false) }
 
-    // System Photo Picker (no permission needed) — fired from the ⋮ menu.
-    val attachPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4)
-    ) { uris ->
-        uris.forEach { viewModel.attachImage(it) }
-    }
-
-    // SAF document picker (agent chats): ANY files, several at once — the
-    // courier uploads them to the agent's host (desktop 4.2 mechanics).
+    // SAF document picker: ANY files, several at once. In agent chats the
+    // courier uploads them to the agent's host (desktop 4.2 mechanics); in
+    // built-in chats documents are extracted to text for the model.
     val filePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -440,37 +459,6 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                     onDismissRequest = { menuOpen = false },
                 ) {
                     when (menuPage) {
-                    "model" -> {
-                        androidx.compose.material3.DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
-                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_menu_model)) },
-                            onClick = { menuPage = "main" },
-                        )
-                        androidx.compose.material3.HorizontalDivider()
-                        val providers = hermesModelOptions?.providers.orEmpty()
-                        for (provider in providers) {
-                            for (model in provider.models) {
-                                androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text("${provider.slug} · $model") },
-                                    trailingIcon = {
-                                        if (hermesModelLabel == "${provider.slug} · $model") {
-                                            Icon(Icons.Filled.Check, contentDescription = null)
-                                        }
-                                    },
-                                    onClick = {
-                                        menuOpen = false
-                                        viewModel.setActiveSessionModel(provider.slug, model)
-                                    },
-                                )
-                            }
-                        }
-                        if (providers.isEmpty()) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_model_agent_default)) },
-                                onClick = { menuOpen = false },
-                            )
-                        }
-                    }
                     "effort" -> {
                         androidx.compose.material3.DropdownMenuItem(
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
@@ -496,35 +484,38 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                         }
                     }
                     else -> {
-                    // Attach images (the paperclip moved out of the composer).
+                    // ONE attach item, every chat: any file. Photos have their
+                    // own richer route — the composer's attach sheet (gallery
+                    // grid + camera). Splitting "image" from "file" here made
+                    // attach mean two different things per chat kind.
                     androidx.compose.material3.DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null) },
                         text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_attach)) },
                         onClick = {
                             menuOpen = false
-                            attachPicker.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
-                            )
+                            filePicker.launch(arrayOf("*/*"))
                         },
                     )
                     if (isHermesActive) {
-                        // ANY files to the agent (SAF picker; images still go
-                        // through the photo picker item above).
-                        androidx.compose.material3.DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null) },
-                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_attach_file)) },
-                            onClick = {
-                                menuOpen = false
-                                filePicker.launch(arrayOf("*/*"))
-                            },
-                        )
                         // Agent threads: the gateway owns the history — the
                         // clear action becomes new session / delete session.
                         androidx.compose.material3.DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_new_session)) },
+                            enabled = !hermesCreating,
+                            leadingIcon = {
+                                if (hermesCreating) {
+                                    androidx.compose.material3.CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Icon(Icons.Filled.Add, contentDescription = null)
+                                }
+                            },
+                            text = {
+                                Text(androidx.compose.ui.res.stringResource(
+                                    if (hermesCreating) com.aispotlight.android.R.string.hermes_creating_session
+                                    else com.aispotlight.android.R.string.hermes_new_session
+                                ))
+                            },
                             onClick = {
                                 menuOpen = false
                                 viewModel.newHermesSession()
@@ -539,21 +530,27 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                                 viewModel.loadChatFiles()
                             },
                         )
-                        // Session model + reasoning effort (nested pages) —
-                        // moved out of the composer chips row.
+                        // Session model opens the structured picker dialog
+                        // (providers → vendors → models, search); the effort
+                        // stays a nested page — it's 4 rows.
                         androidx.compose.material3.DropdownMenuItem(
                             leadingIcon = { Icon(Icons.Outlined.Psychology, contentDescription = null) },
                             text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.hermes_menu_model)) },
                             trailingIcon = {
                                 Text(
-                                    hermesModelLabel ?: "",
+                                    hermesModelLabel?.substringAfterLast("/") ?: "",
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     modifier = Modifier.widthIn(max = 120.dp),
                                 )
                             },
-                            onClick = { menuPage = "model" },
+                            onClick = {
+                                menuOpen = false
+                                showModelPicker = true
+                                // The catalog is live and mutable — re-read on open.
+                                viewModel.refreshHermesModelOptions()
+                            },
                         )
                         if (settings.hermesEffortLevels.isNotEmpty()) {
                             androidx.compose.material3.DropdownMenuItem(
@@ -589,20 +586,9 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                         },
                     )
                     }
-                    // Share the conversation as a markdown transcript.
-                    androidx.compose.material3.DropdownMenuItem(
-                        leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
-                        text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.action_share)) },
-                        onClick = {
-                            menuOpen = false
-                            val transcript = viewModel.exportTranscript()
-                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(android.content.Intent.EXTRA_TEXT, transcript)
-                            }
-                            context.startActivity(android.content.Intent.createChooser(intent, activeTitle))
-                        },
-                    )
+                    // Sharing is a per-MESSAGE action (long-press a bubble):
+                    // a whole-transcript export had no reader — nobody sends
+                    // a markdown dump of an entire conversation.
                     androidx.compose.material3.HorizontalDivider()
                     androidx.compose.material3.DropdownMenuItem(
                         leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
@@ -641,9 +627,14 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                     viewModel.openHermesConversation(it)
                 },
                 onNewSession = {
-                    scope.launch { drawerState.close() }
+                    // The drawer STAYS open: it hosts the create spinner
+                    // (closing it instantly hid all progress — the invisible
+                    // wait bred repeat taps). It closes itself when the
+                    // session is ready and the thread opens.
+                    closeDrawerAfterCreate = true
                     viewModel.newHermesSession()
                 },
+                creatingSession = hermesCreating,
                 onRename = { id, title -> viewModel.renameHermesConversation(id, title) },
                 onTogglePin = { settings.toggleHermesSessionPin(it) },
                 onSetColor = { id, hex -> settings.setHermesSessionColor(id, hex) },
@@ -688,6 +679,26 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                     Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.action_cancel))
                 }
             },
+        )
+    }
+
+    // Session model picker: provider sections, vendor subgroups, search.
+    if (showModelPicker) {
+        // Provider may be unknown ("|model" from the session list) — the
+        // picker then matches the check mark by model alone.
+        val lockedPair = viewModel.activeHermesSessionId
+            ?.let { hermesSessionModels[it] }?.split("|")
+            ?.takeIf { it.size == 2 && it[1].isNotEmpty() }?.let { it[0] to it[1] }
+        HermesModelPicker(
+            options = hermesModelOptions,
+            selected = lockedPair,
+            onPickAgentDefault = null,
+            onPick = { provider, model ->
+                showModelPicker = false
+                viewModel.setActiveSessionModel(provider, model)
+            },
+            onRefresh = { viewModel.refreshHermesModelOptions(force = true) },
+            onDismiss = { showModelPicker = false },
         )
     }
 

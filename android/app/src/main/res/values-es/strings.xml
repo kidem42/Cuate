@@ -1,8 +1,12 @@
 <resources>
     <string name="chat_placeholder">Pregunta lo que quieras…</string>
     <string name="chat_load_earlier">Cargar mensajes anteriores</string>
-    <string name="chat_attach">Adjuntar imagen</string>
-    <string name="chat_camera">Tomar foto</string>
+    <string name="chat_attach">Adjuntar archivo…</string>
+    <string name="chat_camera">Cámara</string>
+    <string name="attach_gallery">Todas las fotos</string>
+    <string name="attach_any_file">Archivo</string>
+    <string name="attach_allow_photos">Permitir acceso a las fotos</string>
+    <string name="attach_confirm">Adjuntar (%1$d)</string>
     <string name="chat_send">Enviar</string>
     <string name="chat_stop">Detener</string>
     <string name="chat_dictate">Dictar</string>
@@ -167,7 +171,7 @@
     <string name="voice_hide_transcript">Ocultar texto</string>
     <string name="settings_tts_voice">Voz</string>
     <string name="settings_tts_speed">Velocidad: %1$s×</string>
-    <string name="attach_failed">No se pudo leer la imagen; prueba con otra.</string>
+    <string name="attach_failed">No se pudo leer el archivo; prueba con otro.</string>
     <string name="action_copy">Copiar</string>
     <string name="action_select_text">Seleccionar texto</string>
     <string name="image_extract_text">Extraer texto (OCR)</string>
@@ -179,7 +183,6 @@
     <!-- Hermes Agent addon -->
     <string name="hermes_role">Agente Hermes</string>
     <string name="hermes_new_session">Nueva sesión</string>
-    <string name="hermes_attach_file">Adjuntar archivo…</string>
     <string name="hermes_sessions">Sesiones</string>
     <string name="hermes_rename">Renombrar sesión</string>
     <string name="hermes_pin_session">Fijar sesión</string>
@@ -204,6 +207,15 @@
     <string name="hermes_key_saved">Clave guardada ✓</string>
     <string name="hermes_model_lock">Modelo para nuevas sesiones</string>
     <string name="hermes_model_agent_default">Como esté configurado en el agente</string>
+    <string name="hermes_creating_session">Creando sesión…</string>
+    <string name="hermes_model_active">Activa: %1$s</string>
+    <string name="hermes_model_search">Buscar modelos</string>
+    <string name="hermes_model_refresh">Actualizar el catálogo</string>
+    <string name="hermes_model_current">actual</string>
+    <string name="hermes_model_empty">No hay modelos disponibles — revisa la conexión con el gateway.</string>
+    <string name="hermes_reconnecting">Conexión perdida — recuperando la respuesta…</string>
+    <string name="hermes_run_channel">Actividad del agente</string>
+    <string name="hermes_run_notification">El agente está trabajando…</string>
     <string name="hermes_dashboard">Panel de Hermes (subida de archivos)</string>
     <string name="hermes_dashboard_url">URL del panel</string>
     <string name="hermes_dashboard_token">Token del panel</string>

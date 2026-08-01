@@ -178,6 +178,16 @@ enum AgentGatewayStrings {
             .spanish: "No se pudo cargar la imagen del agente",
             .russian: "Картинку от агента загрузить не удалось"
         ],
+        "agent.image.copy": [
+            .english: "Copy Image",
+            .spanish: "Copiar imagen",
+            .russian: "Скопировать изображение"
+        ],
+        "agent.image.save": [
+            .english: "Save to Downloads",
+            .spanish: "Guardar en Descargas",
+            .russian: "Сохранить в «Загрузки»"
+        ],
 
         // MARK: Notifications (§7.1)
         "agent.notif.reply": [
@@ -212,16 +222,10 @@ enum AgentGatewayStrings {
             .spanish: "El agente está trabajando…",
             .russian: "Агент работает…"
         ],
-        "agent.attach.fileNote.header": [
-            .english: "Attached file (read it from your host):",
-            .spanish: "Archivo adjunto (léelo desde tu host):",
-            .russian: "Приложен файл (прочитай его со своей машины):"
-        ],
-        "agent.attach.filesNote.header": [
-            .english: "Attached files (read them from your host):",
-            .spanish: "Archivos adjuntos (léelos desde tu host):",
-            .russian: "Приложены файлы (прочитай их со своей машины):"
-        ],
+        // agent.attach.*Note.header: REMOVED — the note is agent-facing
+        // and now always canonical English (AgentAttachNote is the shared
+        // cross-device contract; the legacy localized headers are frozen
+        // in its acceptedHeaders set).
         // MARK: Pinned messages (Telegram-style, agent chats)
         "agent.pin.pin": [
             .english: "Pin message",

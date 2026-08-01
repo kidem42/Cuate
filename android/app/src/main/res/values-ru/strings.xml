@@ -1,8 +1,12 @@
 <resources>
     <string name="chat_placeholder">Спросите что угодно…</string>
     <string name="chat_load_earlier">Показать более ранние сообщения</string>
-    <string name="chat_attach">Прикрепить изображение</string>
-    <string name="chat_camera">Сделать фото</string>
+    <string name="chat_attach">Прикрепить файл…</string>
+    <string name="chat_camera">Камера</string>
+    <string name="attach_gallery">Все фото</string>
+    <string name="attach_any_file">Файл</string>
+    <string name="attach_allow_photos">Разрешить доступ к фото</string>
+    <string name="attach_confirm">Прикрепить (%1$d)</string>
     <string name="chat_send">Отправить</string>
     <string name="chat_stop">Стоп</string>
     <string name="chat_dictate">Диктовка</string>
@@ -167,7 +171,7 @@
     <string name="voice_hide_transcript">Скрыть текст</string>
     <string name="settings_tts_voice">Голос</string>
     <string name="settings_tts_speed">Скорость: %1$s×</string>
-    <string name="attach_failed">Не удалось прочитать изображение — попробуйте другое.</string>
+    <string name="attach_failed">Не удалось прочитать файл — попробуйте другой.</string>
     <string name="action_copy">Копировать</string>
     <string name="action_select_text">Выделить текст</string>
     <string name="image_extract_text">Извлечь текст (OCR)</string>
@@ -179,7 +183,6 @@
     <!-- Hermes Agent addon -->
     <string name="hermes_role">Hermes-агент</string>
     <string name="hermes_new_session">Новая сессия</string>
-    <string name="hermes_attach_file">Прикрепить файл…</string>
     <string name="hermes_sessions">Сессии</string>
     <string name="hermes_rename">Переименовать сессию</string>
     <string name="hermes_pin_session">Закрепить сессию</string>
@@ -204,6 +207,15 @@
     <string name="hermes_key_saved">Ключ сохранён ✓</string>
     <string name="hermes_model_lock">Модель для новых сессий</string>
     <string name="hermes_model_agent_default">Как настроено у агента</string>
+    <string name="hermes_creating_session">Создаю сессию…</string>
+    <string name="hermes_model_active">Активна: %1$s</string>
+    <string name="hermes_model_search">Поиск моделей</string>
+    <string name="hermes_model_refresh">Обновить каталог</string>
+    <string name="hermes_model_current">текущий</string>
+    <string name="hermes_model_empty">Модели недоступны — проверьте подключение к гейтвею.</string>
+    <string name="hermes_reconnecting">Связь прервалась — восстанавливаю ответ…</string>
+    <string name="hermes_run_channel">Работа агента</string>
+    <string name="hermes_run_notification">Агент работает…</string>
     <string name="hermes_dashboard">Дашборд Hermes (загрузка файлов)</string>
     <string name="hermes_dashboard_url">URL дашборда</string>
     <string name="hermes_dashboard_token">Токен дашборда</string>
