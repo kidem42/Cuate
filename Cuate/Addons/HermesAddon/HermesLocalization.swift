@@ -186,6 +186,12 @@ enum HermesAddonStrings {
         "hermes.sessions.refresh": [.english: "Refresh", .spanish: "Actualizar", .russian: "Обновить"],
         "hermes.sessions.empty": [.english: "No sessions on the gateway.", .spanish: "No hay sesiones en el gateway.", .russian: "На гейтвее нет сессий."],
         "hermes.sessions.working": [.english: "The agent is working in this session…", .spanish: "El agente está trabajando en esta sesión…", .russian: "Агент работает в этой сессии…"],
+        "hermes.sessions.creating": [.english: "Creating session…", .spanish: "Creando sesión…", .russian: "Создаю сессию…"],
+        "hermes.sessions.createFailed": [
+            .english: "Couldn't create the session — the gateway didn't respond. Check the connection and try again.",
+            .spanish: "No se pudo crear la sesión: el gateway no respondió. Revisa la conexión e inténtalo de nuevo.",
+            .russian: "Не удалось создать сессию — гейтвей не ответил. Проверьте соединение и попробуйте ещё раз."
+        ],
         "hermes.sessions.messages": [.english: "%d messages", .spanish: "%d mensajes", .russian: "%d сообщений"],
 
         // MARK: Formatting briefing (per-session preamble)

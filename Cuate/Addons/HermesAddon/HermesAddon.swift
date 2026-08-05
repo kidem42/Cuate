@@ -75,7 +75,25 @@ final class HermesAddon: ObservableObject {
     private var badgeComputedAt: [String: Int] = [:]
     private var badgeFetchesInFlight: Set<String> = []
 
-    private init() {}
+    private init() {
+        // A Mac waking from sleep still wears last night's connection state
+        // (green chip, no banner) while the network is only coming up — the
+        // first sidebar action then fails with zero explanation (2026-08-03:
+        // "new session" looked like a dead button). Re-probe shortly after
+        // wake so the chip/banner turn honest within seconds; the 30s
+        // background poll keeps self-healing until the gateway answers.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                let addon = HermesAddon.shared
+                guard addon.isAvailable else { return }
+                // Interfaces need a beat — probing at t=0 fails every time.
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await addon.probe()
+            }
+        }
+    }
 
     // MARK: - Availability
 

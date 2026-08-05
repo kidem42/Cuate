@@ -45,6 +45,14 @@ struct HermesSidebarView: View {
     /// Inline rename state (context menu → «Переименовать»).
     @State private var renamingSessionID: String?
     @State private var renameDraft = ""
+    /// "New session" in flight / failed. The create is a network round-trip
+    /// that a wake-from-sleep Mac loses silently — the click looked like a
+    /// no-op, got repeated, and the user was left guessing (2026-08-03).
+    /// The button shows a spinner while working and an honest line when the
+    /// gateway didn't answer; re-entry is guarded so impatient clicks can't
+    /// queue duplicate sessions.
+    @State private var creatingSession = false
+    @State private var createSessionFailed = false
 
     var body: some View {
         ScrollView {
@@ -266,11 +274,28 @@ struct HermesSidebarView: View {
             Button {
                 startNewSession()
             } label: {
-                Label(HL("hermes.sessions.new"), systemImage: "plus.circle")
-                    .font(.system(size: 11))
-                    .foregroundColor(palette.ink)
+                HStack(spacing: 5) {
+                    if creatingSession {
+                        ProgressView().controlSize(.mini)
+                        Text(HL("hermes.sessions.creating"))
+                            .font(.system(size: 11))
+                            .foregroundColor(palette.secondaryText)
+                    } else {
+                        Label(HL("hermes.sessions.new"), systemImage: "plus.circle")
+                            .font(.system(size: 11))
+                            .foregroundColor(palette.ink)
+                    }
+                }
             }
             .buttonStyle(PlainButtonStyle())
+            .disabled(creatingSession)
+
+            if createSessionFailed {
+                Label(HL("hermes.sessions.createFailed"), systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundColor(palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             // The open thread's session (each session = its own conversation).
             let boundID = ChatWindowBridge.chatStore.flatMap {
@@ -424,8 +449,25 @@ struct HermesSidebarView: View {
     /// Creates a fresh gateway session, binds the role's chat to it and
     /// mirrors it in (same route the "continue here" flow takes).
     private func startNewSession() {
+        guard !creatingSession else { return }
+        creatingSession = true
+        createSessionFailed = false
         Task {
-            guard let info = try? await addon.transport().createSession(title: "Cuate — \(role.displayName)") else { return }
+            defer { creatingSession = false }
+            let info: HermesSessionInfo
+            do {
+                info = try await addon.transport().createSession(title: "Cuate — \(role.displayName)")
+            } catch {
+                // NOT swallowed (the old `try?` made the click a silent
+                // no-op right after wake, before the network was back):
+                // the row above the list says what happened, the log says
+                // why, and a re-probe turns the connection banner honest —
+                // its state was still last night's green.
+                createSessionFailed = true
+                Diagnostics.log("hermes", "session.create.fail \(String(error.localizedDescription.prefix(120)))")
+                await addon.probe()
+                return
+            }
             // Placeholder name: the first message in this thread renames it
             // (a button has no text to name the session after).
             HermesSettings.shared.markAwaitingTitle(info.id)
