@@ -57,6 +57,24 @@ struct ChatTranscriptView: NSViewRepresentable {
         return engine
     }
 
+    /// The transcript greedily fills whatever the layout offers — so say
+    /// exactly that, cheaply. Without this override SwiftUI measures the
+    /// engine through AppKit (`measureMin:max:ideal:`), which runs an Auto
+    /// Layout solve over EVERY hosted row on EVERY graph transaction; with a
+    /// long window that solve reached ~100% of a core, and worse, its result
+    /// could oscillate and feed the next transaction — a self-sustaining
+    /// layout loop that burned CPU for hours in a HIDDEN panel
+    /// (hang-20260803-191709, Energy Impact 5300+ while idle).
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TranscriptEngineView,
+                      context: Context) -> CGSize? {
+        // Finite proposals are taken verbatim (min probe 0 → we shrink,
+        // concrete → we fill). Unspecified/infinite axes get a sane floor —
+        // the panel always proposes concrete sizes, this is just a backstop.
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 480
+        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? 320
+        return CGSize(width: width, height: height)
+    }
+
     func updateNSView(_ engine: TranscriptEngineView, context: Context) {
         controller.engine = engine
         let coordinator = context.coordinator

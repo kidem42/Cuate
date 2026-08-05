@@ -139,6 +139,25 @@ final class TranscriptEngineView: NSScrollView {
     /// NOT move is the DOCUMENT changing under a stationary viewport, never
     /// the user scrolling.
     private var lastObservedOriginY: CGFloat = 0
+    /// Freshest row set that arrived while the panel was ordered out. A
+    /// hidden window must not pay for reconciliation, row body evaluation
+    /// and Auto Layout — that work ran at full tilt off screen and, combined
+    /// with the measure loop (see ChatTranscriptView.sizeThatFits), burned a
+    /// core for hours (2026-08-03). ONLY the view work is deferred: stores,
+    /// stream slots, Hermes mirror sync and agent turns keep running —
+    /// showing the panel flushes this in one coalesced apply.
+    private var pendingWhileHidden: (items: [TranscriptItem], resetToken: String)?
+    /// The document changed under the frozen (hidden) viewport with no row
+    /// update pending — the live streaming bubble grows PAST `apply` (its
+    /// SwiftUI content observes the stream model directly). The flush at
+    /// show must re-assert the pin exactly once for that case.
+    private var needsPinReassertOnShow = false
+
+    /// "On screen" for the freeze: attached to a window that is ordered in.
+    /// `isVisible` (not occlusion) on purpose — it flips synchronously with
+    /// orderFront/orderOut, so a summon never shows a stale frame while
+    /// WindowServer's occlusion callback is still in flight.
+    private var isWindowOnScreen: Bool { window?.isVisible == true }
 
     // MARK: Init
 
@@ -205,6 +224,55 @@ final class TranscriptEngineView: NSScrollView {
         reportContentFits()
     }
 
+    // MARK: Hidden-panel freeze
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Track our own window's ordering in/out. Re-subscribed per window —
+        // the engine lives in one panel for its whole life, but stay correct
+        // if that ever changes.
+        NotificationCenter.default.removeObserver(
+            self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowOcclusionChanged),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        flushPendingIfVisible()
+    }
+
+    @objc private func windowOcclusionChanged(_ note: Notification) {
+        flushPendingIfVisible()
+    }
+
+    /// Synchronous backstop: runs before the first frame of a freshly
+    /// ordered-in window draws, so a summon can never flash frozen content
+    /// even if no notification has landed yet.
+    override func viewWillDraw() {
+        flushPendingIfVisible()
+        super.viewWillDraw()
+    }
+
+    private func flushPendingIfVisible() {
+        guard isWindowOnScreen else { return }
+        if let pending = pendingWhileHidden {
+            pendingWhileHidden = nil
+            needsPinReassertOnShow = false
+            // The apply re-asserts the pin itself (and re-anchors when the
+            // user had scrolled away).
+            apply(items: pending.items, resetToken: pending.resetToken)
+        } else if needsPinReassertOnShow {
+            // One-shot, only for the "grew while hidden" transition — this
+            // hook also runs on every ordinary draw (viewWillDraw), where a
+            // blanket re-assert would snap the viewport mid-glide and kill
+            // animated scrolls.
+            needsPinReassertOnShow = false
+            layoutSubtreeIfNeeded()
+            if isPinnedToBottom { scrollToBottomInstant() }
+            reportContentFits()
+        }
+    }
+
     // MARK: Applying row updates (point updates, not diff-the-world)
 
     /// Reconciles the transcript to `items`. Rows are matched by id: kept
@@ -214,6 +282,14 @@ final class TranscriptEngineView: NSScrollView {
     /// (conversation switch) the transcript is rebuilt and pinned to the
     /// bottom.
     func apply(items: [TranscriptItem], resetToken newToken: String) {
+        // Hidden panel: park the freshest set and do nothing. Every path
+        // that puts the window back on screen flushes it (viewDidMoveToWindow,
+        // occlusion change, viewWillDraw) before the first visible frame.
+        guard isWindowOnScreen else {
+            pendingWhileHidden = (items, newToken)
+            return
+        }
+        pendingWhileHidden = nil
         let isReset = newToken != resetToken
         resetToken = newToken
 
@@ -432,6 +508,12 @@ final class TranscriptEngineView: NSScrollView {
     /// While pinned, the viewport follows instantly — THE streaming
     /// auto-follow, with no animation to retarget and nothing to race.
     @objc private func documentFrameChanged(_ note: Notification) {
+        // Hidden panel: the streaming bubble can still grow the document off
+        // screen — don't chase it, the flush at show re-asserts the pin.
+        guard isWindowOnScreen else {
+            if isPinnedToBottom { needsPinReassertOnShow = true }
+            return
+        }
         if isPinnedToBottom {
             scrollToBottomInstant()
         }
@@ -469,6 +551,13 @@ final class TranscriptEngineView: NSScrollView {
         let originY = contentView.bounds.origin.y
         let originMoved = abs(originY - lastObservedOriginY) > 0.5
         lastObservedOriginY = originY
+        // Hidden panel: keep the baselines fresh (above) but classify
+        // nothing — there is no user hand off screen, and pin/backfill
+        // decisions from stale geometry would be wrong anyway.
+        guard isWindowOnScreen else {
+            lastViewportSize = contentView.bounds.size
+            return
+        }
         // A bounds SIZE change is geometry, not scrolling: the composer grew
         // (file pills, slash suggestions, recording bar), the pinned bar
         // toggled, the window resized. Re-assert the pin instead of
