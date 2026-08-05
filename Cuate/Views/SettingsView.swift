@@ -65,6 +65,10 @@ struct SettingsView: View {
     @State private var accessibilityGranted = true
     @State private var screenGranted = true
     @State private var micGranted = true
+    // Panel-switcher rows are drag-reorderable: the name being dragged and the
+    // row currently under the cursor (which draws the insertion line).
+    @State private var draggingPreset: String?
+    @State private var dropTargetPreset: String?
 
     var body: some View {
         // System Settings-style layout: translucent sidebar with the sections,
@@ -1328,38 +1332,103 @@ struct SettingsView: View {
             }
 
             // Per preset: visibility in the panel switcher + isolated chat.
+            // The row order IS the order everywhere else (panel menu, chip
+            // row, prompt picker) — drag a row to change it.
             ForEach(settings.allPresets) { preset in
-                HStack(spacing: 6) {
-                    if let icon = settings.presetIcon(named: preset.name) {
-                        Text(icon)
-                    }
-                    Text(preset.isBuiltIn ? preset.name : "\(preset.name) (\(L("prompts.custom")))")
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { settings.isPresetShownInSwitcher(named: preset.name) },
-                        set: { settings.setPresetShownInSwitcher($0, named: preset.name) }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .frame(width: 64)
-                    Toggle("", isOn: Binding(
-                        get: { settings.isPresetIsolated(named: preset.name) },
-                        set: { settings.setPresetIsolated($0, named: preset.name) }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .frame(width: 64)
-                    .help(L("switcher.isolatedHelp"))
-                }
+                switcherRow(preset)
             }
         } header: {
             Text(L("switcher.header"))
         } footer: {
-            Text(L("switcher.footer") + "\n\n" + L("switcher.isolatedFooter"))
+            Text(L("switcher.orderFooter") + "\n\n" + L("switcher.footer")
+                 + "\n\n" + L("switcher.isolatedFooter"))
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+
+    private func switcherRow(_ preset: AppSettings.PromptPreset) -> some View {
+        HStack(spacing: 6) {
+            // Drag handle: only this leading group starts a drag, so a grab
+            // near the switches never flips one by accident.
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .opacity(0.5)
+                if let icon = settings.presetIcon(named: preset.name) {
+                    Text(icon)
+                }
+                Text(preset.isBuiltIn ? preset.name : "\(preset.name) (\(L("prompts.custom")))")
+            }
+            .contentShape(Rectangle())
+            .help(L("switcher.dragHelp"))
+            .onDrag {
+                draggingPreset = preset.name
+                return NSItemProvider(object: preset.name as NSString)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { settings.isPresetShownInSwitcher(named: preset.name) },
+                set: { settings.setPresetShownInSwitcher($0, named: preset.name) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .frame(width: 64)
+            Toggle("", isOn: Binding(
+                get: { settings.isPresetIsolated(named: preset.name) },
+                set: { settings.setPresetIsolated($0, named: preset.name) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .frame(width: 64)
+            .help(L("switcher.isolatedHelp"))
+        }
+        // The whole row accepts the drop, not just the handle — the cursor is
+        // wherever the user aimed, and a four-row list has no room to be picky.
+        .contentShape(Rectangle())
+        // The target is marked by tinting the ROW, not by a line at its edge:
+        // a Form cell pads its content, so an "insertion line" drawn on the
+        // content bounds never lands on the separator the user sees (e2e
+        // 2026-08-05). The row highlight cannot be misaligned, and it says
+        // exactly what the drop does — the dragged preset takes this place.
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(
+                    dropTargetPreset == preset.name && draggingPreset != preset.name ? 0.22 : 0
+                ))
+                .padding(.vertical, -3)
+                .padding(.horizontal, -6)
+        )
+        // Classic onDrag/onDrop pair, and the payload never leaves Swift: the
+        // dragged name is already in `draggingPreset`, so there is no async
+        // item-provider round trip to lose the drop to. A text drag from
+        // another app finds no name and is refused.
+        .onDrop(of: [.text], isTargeted: Binding(
+            get: { dropTargetPreset == preset.name },
+            set: { targeted in
+                if targeted {
+                    dropTargetPreset = preset.name
+                } else if dropTargetPreset == preset.name {
+                    dropTargetPreset = nil
+                }
+            }
+        )) { _ in
+            guard let dragged = draggingPreset else {
+                dropTargetPreset = nil
+                return false
+            }
+            // Clear the drag state FIRST: the highlight and the reorder then
+            // land in the same frame instead of the tint lingering under the
+            // row that just moved away.
+            draggingPreset = nil
+            dropTargetPreset = nil
+            withAnimation(.snappy(duration: 0.2)) {
+                settings.movePreset(named: dragged, onto: preset.name)
+            }
+            return true
         }
     }
 

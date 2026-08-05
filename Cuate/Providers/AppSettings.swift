@@ -581,6 +581,14 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         didSet { defaults.set(Array(isolatedPresets), forKey: "isolatedPresets") }
     }
 
+    /// User-chosen row order, by preset name (Settings → Panel Switcher, drag
+    /// a row). Partial by design: names it does not mention keep their natural
+    /// place, so a built-in added by an app update or a freshly saved custom
+    /// preset shows up at the end instead of disappearing. Empty = untouched.
+    @Published private(set) var presetOrder: [String] {
+        didSet { defaults.set(presetOrder, forKey: "presetOrder") }
+    }
+
     private init() {
         // An agent provider must never be the conventional chat provider —
         // roles are selected via activeAgentRoleID, not this field.
@@ -651,6 +659,7 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         presetSwitcherStyle = PresetSwitcherStyle(rawValue: defaults.string(forKey: "presetSwitcherStyle") ?? "") ?? .menu
         hiddenPresets = Set(defaults.stringArray(forKey: "hiddenPresets") ?? [])
         isolatedPresets = Set(defaults.stringArray(forKey: "isolatedPresets") ?? [])
+        presetOrder = defaults.stringArray(forKey: "presetOrder") ?? []
         activePresetName = defaults.string(forKey: "activePresetName") ?? Self.builtInPresets[0].name
         systemPrompt = defaults.string(forKey: "systemPrompt") ?? Self.builtInPresets[0].text
 
@@ -689,10 +698,35 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
 
     // MARK: - Preset management
 
+    /// Every preset in display order — the ONE source of order for the
+    /// settings list, the prompt picker and the panel switcher (menu and chip
+    /// row alike, where the first five chips are the visible ones).
     var allPresets: [PromptPreset] {
-        Self.builtInPresets + customPresets.keys.sorted().map {
+        let natural = Self.builtInPresets + customPresets.keys.sorted().map {
             PromptPreset(name: $0, text: customPresets[$0] ?? "", isBuiltIn: false)
         }
+        guard !presetOrder.isEmpty else { return natural }
+        var remaining = Dictionary(uniqueKeysWithValues: natural.map { ($0.name, $0) })
+        var ordered = presetOrder.compactMap { remaining.removeValue(forKey: $0) }
+        // Whatever the stored order never mentioned (new built-in after an
+        // update, preset saved on another Mac) keeps its natural slot at the
+        // end — nothing can fall out of the list because of a stale order.
+        ordered += natural.filter { remaining[$0.name] != nil }
+        return ordered
+    }
+
+    /// Drag-to-reorder: puts `name` where `target` currently sits, matching
+    /// List semantics — dragging down lands after the target row, dragging up
+    /// lands before it.
+    func movePreset(named name: String, onto target: String) {
+        guard name != target else { return }
+        var names = allPresets.map(\.name)
+        guard let from = names.firstIndex(of: name),
+              let to = names.firstIndex(of: target) else { return }
+        names.remove(at: from)
+        guard let anchor = names.firstIndex(of: target) else { return }
+        names.insert(name, at: from < to ? anchor + 1 : anchor)
+        presetOrder = names
     }
 
     /// Presets the panel switcher offers: the non-hidden ones, plus the active
@@ -783,6 +817,7 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         presetIcons.removeValue(forKey: name)
         hiddenPresets.remove(name)
         isolatedPresets.remove(name)
+        presetOrder.removeAll { $0 == name }
         if activePresetName == name {
             applyPreset(named: Self.builtInPresets[0].name)
         }
