@@ -32,13 +32,34 @@ actor PlaudClient {
     nonisolated static let webAppURL = "https://web.plaud.ai/"
 
     struct PlaudError: LocalizedError {
+        /// WHY the call failed. The UI and the tool layer branch on this —
+        /// never on the message text: "the grant is dead" (only a fresh
+        /// sign-in helps) and "Plaud is down right now" (the tokens are fine,
+        /// retry later) demand opposite reactions.
+        enum Kind {
+            case generic
+            case sessionExpired
+            case transient
+        }
+
         let message: String
+        var kind: Kind = .generic
         var errorDescription: String? { message }
 
         /// Marker for a user-initiated abort of the OAuth flow — the UI
         /// resets silently instead of showing an error banner.
         static let cancelledMessage = "Cancelled."
         var isCancellation: Bool { message == Self.cancelledMessage }
+        var isSessionExpired: Bool { kind == .sessionExpired }
+    }
+
+    /// The one error every dead-grant path throws — the tokens are already
+    /// gone by the time a caller sees it.
+    private static var sessionExpiredError: PlaudError {
+        PlaudError(
+            message: "Plaud session expired — reconnect the account in Settings → Plaud.",
+            kind: .sessionExpired
+        )
     }
 
     // MARK: - Token set
@@ -97,6 +118,21 @@ actor PlaudClient {
         cachedTokens = nil
         loadedFromKeychain = true
         APIKeyStore.remove(aux: .plaud)
+    }
+
+    /// The stored grant is dead: drop it AND tell the UI, so the settings
+    /// card stops claiming a live account and offers a reconnect instead.
+    ///
+    /// Before 4.7 a rejected refresh only threw — the blob stayed in the
+    /// Keychain, `hasTokens` kept answering "connected", the green checkmark
+    /// lied indefinitely and every chat turn re-attached tools that could
+    /// only fail (observed 2026-08-05: 8 days idle → refresh 401).
+    private func invalidateSession() {
+        let hadTokens = cachedTokens != nil || APIKeyStore.hasKey(aux: .plaud)
+        clearTokens()
+        guard hadTokens else { return }
+        Diagnostics.log("plaud", "session.expired tokens dropped")
+        Task { @MainActor in PlaudAddon.shared.handleSessionExpired() }
     }
 
     // MARK: - OAuth: authorization (PKCE)
@@ -172,11 +208,34 @@ actor PlaudClient {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = Self.formEncode(["refresh_token": refreshToken])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            // Offline says nothing about the grant — keep the tokens.
+            Diagnostics.log("plaud", "oauth.refresh network error")
+            throw PlaudError(
+                message: "Plaud is unreachable — check the connection and try again.",
+                kind: .transient
+            )
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
             Diagnostics.log("plaud", "oauth.refresh failed status=\(status)")
-            throw PlaudError(message: "Session expired — reconnect Plaud in Settings.")
+            // Same split as the reference client (@plaud-ai/mcp): 5xx is
+            // THEIR outage and must never log the user out; anything else is
+            // invalid_grant — the refresh token is spent, revoked or past its
+            // ~week-long TTL, and no retry will ever bring it back.
+            if status >= 500 {
+                throw PlaudError(
+                    message: "Plaud backend error (HTTP \(status)) — the account stays connected, try again later.",
+                    kind: .transient
+                )
+            }
+            invalidateSession()
+            throw Self.sessionExpiredError
         }
         try saveTokenResponse(data, fallbackRefresh: refreshToken)
         Diagnostics.log("plaud", "oauth.refresh success")
@@ -204,16 +263,39 @@ actor PlaudClient {
         }
         if let expires = tokens.expiresAt, Date().timeIntervalSince1970 > expires - 60 {
             guard let refreshToken = tokens.refreshToken else {
-                clearTokens()
-                throw PlaudError(message: "Session expired — reconnect Plaud in Settings.")
+                invalidateSession()
+                throw Self.sessionExpiredError
             }
             try await refresh(refreshToken)
             guard let refreshed = cachedTokens else {
-                throw PlaudError(message: "Session expired — reconnect Plaud in Settings.")
+                invalidateSession()
+                throw Self.sessionExpiredError
             }
             return refreshed.accessToken
         }
         return tokens.accessToken
+    }
+
+    // MARK: - Session upkeep
+
+    /// Rotates the token pair while the app runs, well before the access
+    /// token dies. Plaud's refresh token expires on roughly the same
+    /// week-long clock as the access token, so a Mac left alone for a week
+    /// comes back to a grant nothing can revive — the only prevention is
+    /// touching it earlier. Called at launch and every few hours.
+    ///
+    /// A no-op while the token still has more than a day to live, so a live
+    /// session costs about one refresh per week.
+    func keepAliveIfNeeded() async {
+        guard let tokens = loadTokens(), let refreshToken = tokens.refreshToken else { return }
+        let margin: TimeInterval = 24 * 3600
+        if let expires = tokens.expiresAt, Date().timeIntervalSince1970 < expires - margin {
+            return
+        }
+        // The failure is already classified inside refresh(): a dead grant
+        // invalidated the session (and told the UI), a transient one left the
+        // tokens alone for the next tick.
+        try? await refresh(refreshToken)
     }
 
     // MARK: - Logout
@@ -245,8 +327,8 @@ actor PlaudClient {
             // Stale access token mid-lifetime (revoked or clock skew):
             // one forced refresh, then retry once.
             guard let refreshToken = loadTokens()?.refreshToken else {
-                clearTokens()
-                throw PlaudError(message: "Session expired — reconnect Plaud in Settings.")
+                invalidateSession()
+                throw Self.sessionExpiredError
             }
             try await refresh(refreshToken)
             let fresh = try await validAccessToken()
@@ -257,6 +339,11 @@ actor PlaudClient {
         guard status == 200 else {
             Diagnostics.log("plaud", "api.error path=\(path) status=\(status)")
             switch status {
+            case 401:
+                // A token minted seconds ago is already rejected — the whole
+                // grant is gone (access revoked in the Plaud app).
+                invalidateSession()
+                throw Self.sessionExpiredError
             case 404: throw PlaudError(message: "Recording not found — the ID may be wrong.")
             case 500: throw PlaudError(message: "Plaud backend error (often an invalid ID).")
             default: throw PlaudError(message: "Plaud API error (HTTP \(status)).")

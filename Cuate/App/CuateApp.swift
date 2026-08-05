@@ -107,6 +107,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // ImageAddon — self-contained; all code lives in Addons/ImageAddon.
         ImageAddon.shared.start()
 
+        // PlaudAddon: keep the OAuth grant rotating. Their refresh token dies
+        // on a ~week clock, and a Mac that goes a week without asking the
+        // model about a recording used to come back to a dead account that
+        // still looked connected.
+        PlaudAddon.shared.startSessionUpkeep()
+
         // Agent notifications (AgentGateway addons): categories must register
         // before the first banner or its buttons don't render. Permission is
         // NOT requested here — that happens when an agent addon is enabled.

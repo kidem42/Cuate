@@ -17,6 +17,9 @@ final class PlaudAddon {
 
     private let settings = PlaudSettings.shared
 
+    /// Keeps the grant rotating while the app runs (see `startSessionUpkeep`).
+    private var upkeepTimer: Timer?
+
     private init() {}
 
     /// Tools attach only when the addon is on AND an account is connected.
@@ -38,6 +41,7 @@ final class PlaudAddon {
             }
         }
         settings.isConnected = PlaudClient.hasTokens
+        settings.needsReauth = false
         // Best-effort profile fetch — a failure here must not fail connect.
         if let user = try? await PlaudClient.shared.currentUser() {
             settings.setAccount(
@@ -57,6 +61,7 @@ final class PlaudAddon {
     func disconnect() async {
         await PlaudClient.shared.logout()
         settings.isConnected = PlaudClient.hasTokens
+        settings.needsReauth = false
         settings.clearAccount()
     }
 
@@ -64,6 +69,63 @@ final class PlaudAddon {
     /// external key changes).
     func refreshConnectionState() {
         settings.isConnected = PlaudClient.hasTokens
+        if settings.isConnected { settings.needsReauth = false }
+    }
+
+    // MARK: - Session health
+
+    /// The client dropped a rejected grant: flip the card to "reconnect"
+    /// instead of leaving a green checkmark over a dead account. The account
+    /// name/avatar stay — the reconnect prompt names who to sign back in as.
+    func handleSessionExpired() {
+        settings.isConnected = false
+        settings.needsReauth = true
+    }
+
+    /// Verifies the stored session against Plaud (one profile call) and
+    /// refreshes the account card. Cheap, and the only way the settings
+    /// indicator can tell "connected" from "the Keychain still has a blob".
+    func verifyConnection() async {
+        // `hasTokens` is a cache-only read: a cold Keychain cache answers
+        // "no key" and would flip a perfectly good account to "not connected".
+        await APIKeyStore.warmIfNeeded()
+        guard settings.enabled, PlaudClient.hasTokens else {
+            refreshConnectionState()
+            return
+        }
+        if let user = try? await PlaudClient.shared.currentUser() {
+            settings.setAccount(
+                name: user["nickname"] as? String,
+                email: user["email"] as? String,
+                avatarURL: user["avatar"] as? String
+            )
+        }
+        // A dead grant already cleared the Keychain inside the client — this
+        // is what turns that into "Session expired" on screen.
+        refreshConnectionState()
+    }
+
+    /// Launch hook: rotate the grant now and every few hours after. Plaud's
+    /// refresh token dies on a ~week clock, so an app that only ever touches
+    /// Plaud when the model asks loses the session over any quiet week
+    /// (2026-08-05: 8 days idle → refresh 401 → account silently dead).
+    func startSessionUpkeep() {
+        guard upkeepTimer == nil else { return }
+        let timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
+            Task { @MainActor in await PlaudAddon.shared.maintainSession() }
+        }
+        // Nobody is waiting on this — let the system coalesce it.
+        timer.tolerance = 600
+        upkeepTimer = timer
+        Task { @MainActor in await maintainSession() }
+    }
+
+    private func maintainSession() async {
+        guard settings.enabled else { return }
+        await APIKeyStore.warmIfNeeded()
+        guard PlaudClient.hasTokens else { return }
+        await PlaudClient.shared.keepAliveIfNeeded()
+        refreshConnectionState()
     }
 
     // MARK: - Deep link

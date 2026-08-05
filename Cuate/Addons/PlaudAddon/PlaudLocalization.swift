@@ -45,6 +45,21 @@ enum PlaudAddonStrings {
             .russian: "Не подключено — ассистент пока не видит записи."
         ],
         "plaud.cancel": [.english: "Cancel", .spanish: "Cancelar", .russian: "Отмена"],
+        "plaud.expired": [
+            .english: "Plaud session expired",
+            .spanish: "La sesión de Plaud ha caducado",
+            .russian: "Сессия Plaud истекла"
+        ],
+        "plaud.expired.hint": [
+            .english: "Plaud no longer accepts the stored sign-in, so the assistant cannot reach your recordings. Reconnect to restore access — nothing else is lost.",
+            .spanish: "Plaud ya no acepta el inicio de sesión guardado, así que el asistente no puede acceder a tus grabaciones. Vuelve a conectar para restaurar el acceso — no se pierde nada más.",
+            .russian: "Plaud больше не принимает сохранённый вход, поэтому ассистент не видит записи. Переподключитесь, чтобы вернуть доступ — остальное не потеряно."
+        ],
+        "plaud.reconnect": [
+            .english: "Reconnect Plaud Account…",
+            .spanish: "Reconectar cuenta de Plaud…",
+            .russian: "Переподключить аккаунт Plaud…"
+        ],
         "plaud.copyLink": [.english: "Copy Sign-in Link", .spanish: "Copiar enlace de acceso", .russian: "Скопировать ссылку входа"],
         "plaud.copyLink.hint": [
             .english: "…to sign in from a different browser.",
@@ -98,7 +113,18 @@ enum PlaudAddonStrings {
 
         // Preview window
         "plaud.preview.transcriptTab": [.english: "Transcript", .spanish: "Transcripción", .russian: "Транскрипт"],
+        "plaud.preview.polishTab": [
+            .english: "Transcript (clean)",
+            .spanish: "Transcripción (limpia)",
+            .russian: "Транскрипт (чистовой)"
+        ],
+        "plaud.preview.outlineTab": [.english: "Outline", .spanish: "Esquema", .russian: "Оглавление"],
         "plaud.preview.audio": [.english: "Play audio", .spanish: "Reproducir audio", .russian: "Воспроизвести аудио"],
+        "plaud.preview.audioPending": [
+            .english: "Audio is still being prepared by Plaud — tap again in a few minutes.",
+            .spanish: "Plaud aún está preparando el audio; inténtalo de nuevo en unos minutos.",
+            .russian: "Plaud ещё готовит аудио — нажмите ещё раз через пару минут."
+        ],
         "plaud.preview.loading": [.english: "Loading from Plaud…", .spanish: "Cargando desde Plaud…", .russian: "Загрузка из Plaud…"],
         "plaud.preview.seekHelp": [
             .english: "Play from this moment",

@@ -65,6 +65,17 @@ final class PlaudSettings: ObservableObject {
         }
     }
 
+    /// Plaud rejected the stored grant and the tokens are gone: the account
+    /// section shows a "session expired, reconnect" card instead of the
+    /// neutral "not connected" one. Persisted — the user usually meets the
+    /// dead session in a later launch than the one that discovered it.
+    @Published var needsReauth: Bool {
+        didSet {
+            guard oldValue != needsReauth else { return }
+            defaults.set(needsReauth, forKey: "plaudAddon.needsReauth")
+        }
+    }
+
     func setAccount(name: String?, email: String?, avatarURL: String?) {
         accountName = name
         accountEmail = email
@@ -85,5 +96,6 @@ final class PlaudSettings: ObservableObject {
         accountName = defaults.string(forKey: "plaudAddon.accountName")
         accountEmail = defaults.string(forKey: "plaudAddon.accountEmail")
         accountAvatarURL = defaults.string(forKey: "plaudAddon.accountAvatarURL")
+        needsReauth = defaults.bool(forKey: "plaudAddon.needsReauth")
     }
 }

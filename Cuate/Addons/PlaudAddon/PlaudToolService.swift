@@ -78,6 +78,11 @@ enum PlaudToolService {
                             "type": "string",
                             "description": "The recording ID from \(findToolName)."
                         ],
+                        "version": [
+                            "type": "string",
+                            "enum": ["verbatim", "clean", "outline"],
+                            "description": "Which version to read. \"verbatim\" (default) is the raw transcript — use it whenever exact wording matters (\"who said exactly what\", quotes). \"clean\" is Plaud's AI-cleaned transcript: same speakers and timecodes, fillers and stumbles removed, roughly a quarter shorter — better for summaries and for long recordings that would otherwise be truncated. \"outline\" is a short structural overview of the recording. Not every recording has every version; the result says which ones exist."
+                        ],
                         "from_min": [
                             "type": "integer",
                             "description": "Optional: skip segments before this minute of the recording."
@@ -163,8 +168,20 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
 
     // MARK: - Dispatch
 
+    /// The grant died mid-turn (or before it). Retrying is pointless — only
+    /// a browser sign-in fixes it — so the result spells out both the stop
+    /// and the one thing the user has to do; otherwise the model just burns
+    /// tool turns and the user gets an answer that never mentions Plaud.
+    private static let sessionExpiredResult = """
+    Plaud session expired: the saved sign-in is no longer valid and the account has been disconnected. \
+    Do NOT retry this or any other Plaud tool in this conversation. \
+    Tell the user, in their language, that the Plaud session expired and that they need to reconnect the account in Settings → Plaud, \
+    then answer whatever else you can without Plaud data.
+    """
+
     static func run(_ call: ToolCall) async -> String {
         guard PlaudAddon.shared.isAvailable else {
+            if PlaudSettings.shared.needsReauth { return sessionExpiredResult }
             return "Plaud is not connected (addon disabled or account not linked)."
         }
         do {
@@ -174,6 +191,8 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
             case transcriptToolName: return try await transcript(call.arguments)
             default: return "Unknown Plaud tool: \(call.name)"
             }
+        } catch let error as PlaudClient.PlaudError where error.isSessionExpired {
+            return sessionExpiredResult
         } catch {
             return "Plaud request failed: \(error.localizedDescription)"
         }
@@ -299,6 +318,7 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
             // here, inside the same tool call, is not an optimization but a
             // correctness requirement.
             let content = await PlaudClient.resolveContent(of: item)
+                .map(PlaudFormat.noteMarkdown(fromRaw:))
             sections.append("## Tab: \(tabName)\n" + (content?.isEmpty == false
                 ? content!
                 : "(this tab has no content)"))
@@ -329,50 +349,76 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
         guard let fileID = args["file_id"] as? String, !fileID.isEmpty else {
             return "Missing \"file_id\" — find it with \(findToolName)."
         }
+        let requested = (args["version"] as? String).flatMap(PlaudSourceBlock.from(publicName:))
+            ?? .transaction
         let file = try await PlaudClient.shared.getFile(fileID)
         let header = fileHeader(file)
         let recordingName = file["name"] as? String ?? "(untitled)"
         updateCachedMeta(fileID: fileID, file: file)
         let sourceList = file["source_list"] as? [[String: Any]] ?? []
-        guard let transaction = sourceList.first(where: { ($0["data_type"] as? String) == "transaction" }) else {
+        let available = PlaudSourceBlock.displayOrder.filter { block in
+            sourceList.contains { ($0["data_type"] as? String) == block.rawValue }
+        }
+        guard !available.isEmpty else {
             registerChip(fileID: fileID, title: recordingName, kind: .unprocessed)
             return header + "\nThis recording has no transcript — it is not processed yet. Processing starts in the Plaud app (\(PlaudClient.webAppURL)) and uses the user's Plaud credits."
         }
-        guard let raw = await PlaudClient.resolveContent(of: transaction),
-              let segments = PlaudFormat.transcriptSegments(fromRaw: raw) else {
+        guard let block = available.first(where: { $0 == requested }),
+              let item = sourceList.first(where: { ($0["data_type"] as? String) == block.rawValue }) else {
+            // Plaud fills the versions per recording — say what IS there
+            // instead of letting the model conclude the recording is empty.
+            return header + "\nThe \"\(requested.publicName)\" version does not exist for this recording. Available: \(available.map(\.publicName).joined(separator: ", ")). Call again with one of those."
+        }
+        guard let raw = await PlaudClient.resolveContent(of: item) else {
             return header + "\nTranscript content could not be loaded — try again."
+        }
+        // `outline` (and anything Plaud changes later) may be prose rather
+        // than an utterance list — serve it as-is instead of failing.
+        guard let segments = PlaudFormat.transcriptSegments(fromRaw: raw) else {
+            PlaudNoteCache.writeTab(
+                fileID: fileID, tabName: block.title, content: raw, slug: block.slug
+            )
+            registerChip(fileID: fileID, title: recordingName, kind: .note)
+            var result = header + "\n\(block.publicName):\n" + raw
+            if result.count > maxTranscriptChars {
+                result = String(result.prefix(maxTranscriptChars)) + "\n[Truncated]"
+            }
+            return result
         }
 
         let fromMs = (args["from_min"] as? Int).map { Double($0) * 60_000 }
         let toMs = (args["to_min"] as? Int).map { Double($0) * 60_000 }
         var lines: [String] = []
-        for segment in segments {
-            let start = segment["start_time"] as? Double ?? 0
-            if let fromMs, start < fromMs { continue }
-            if let toMs, start > toMs { break }
-            let speaker = segment["speaker"] as? String
-                ?? segment["original_speaker"] as? String
-                ?? "Speaker"
-            let content = segment["content"] as? String ?? ""
-            lines.append("[\(clockString(ms: start))] \(speaker): \(content)")
+        for row in PlaudFormat.rows(from: segments) {
+            if let fromMs, row.startMs < fromMs { continue }
+            if let toMs, row.startMs > toMs { break }
+            let time = clockString(ms: row.startMs)
+            // The outline has no speakers — labelling its topics "Speaker:"
+            // told the model a lie about the shape of the data.
+            lines.append(row.speaker.map { "[\(time)] \($0): \(row.text)" }
+                ?? "[\(time)] \(row.text)")
         }
         guard !lines.isEmpty else {
             return header + "\nNo transcript segments in the requested minute range."
         }
-        var result = header + "\nTranscript"
+        var result = header + "\nTranscript (\(block.publicName))"
         if fromMs != nil || toMs != nil {
             result += " (minutes \(args["from_min"] as? Int ?? 0)–\((args["to_min"] as? Int).map(String.init) ?? "end"))"
         }
         result += ":\n" + lines.joined(separator: "\n")
         if result.count > maxTranscriptChars {
             result = String(result.prefix(maxTranscriptChars))
-                + "\n[Truncated — use from_min/to_min to fetch a narrower slice]"
+                + "\n[Truncated — use from_min/to_min to fetch a narrower slice"
+                + (block == .transaction && available.contains(.transactionPolish)
+                   ? ", or read version=\"clean\" which is shorter]" : "]")
         }
         // The chip always carries the FULL transcript regardless of the
         // range/budget the model requested — the preview is for the human.
-        PlaudNoteCache.writeTranscript(
+        PlaudNoteCache.writeSegmentTab(
             fileID: fileID,
-            content: PlaudFormat.transcriptMarkdown(from: segments),
+            slug: block.slug,
+            title: block.title,
+            markdown: PlaudFormat.transcriptMarkdown(from: segments),
             rawSegments: raw
         )
         registerChip(fileID: fileID, title: recordingName, kind: .note)

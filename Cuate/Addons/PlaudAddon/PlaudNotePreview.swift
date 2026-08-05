@@ -89,6 +89,9 @@ private final class PlaudAudioPlayer: ObservableObject {
     @Published var durationSeconds: Double = 0
     @Published var loading = false
     @Published var available = true
+    /// Shown next to the transport when a tap could not produce audio for a
+    /// reason worth naming (Plaud has not signed the mp3 yet).
+    @Published var notice: String?
 
     private var player: AVPlayer?
     private var timeObserver: Any?
@@ -108,12 +111,25 @@ private final class PlaudAudioPlayer: ObservableObject {
         if let player { return player }
         loading = true
         defer { loading = false }
-        guard let file = try? await PlaudClient.shared.getFile(fileID),
-              let presigned = file["presigned_url"] as? String,
-              let url = URL(string: presigned) else {
-            available = false
+        guard let file = try? await PlaudClient.shared.getFile(fileID) else {
+            // A failed request says nothing about the audio — leave the
+            // control alone so the next tap can try again.
             return nil
         }
+        guard let presigned = file["presigned_url"] as? String,
+              let url = URL(string: presigned) else {
+            // Plaud signs the mp3 lazily: on an otherwise-synced recording a
+            // missing URL is their transient signing hiccup (their own client
+            // says "retry in a few minutes"), NOT "this recording is silent".
+            // Hiding the player forever was wrong — keep it, note why, and
+            // let the next tap re-ask.
+            let synced = (file["duration"] as? Double ?? 0) > 0
+                || !(file["source_list"] as? [[String: Any]] ?? []).isEmpty
+            available = synced
+            notice = synced ? PLL("plaud.preview.audioPending") : nil
+            return nil
+        }
+        notice = nil
         let item = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: item)
         timeObserver = newPlayer.addPeriodicTimeObserver(
@@ -258,7 +274,8 @@ private struct PlaudNotePreviewView: View {
     struct Segment: Identifiable {
         let id = UUID()
         let startMs: Double
-        let speaker: String
+        /// nil in the outline — it has topics, not speakers.
+        let speaker: String?
         let text: String
     }
 
@@ -266,7 +283,9 @@ private struct PlaudNotePreviewView: View {
     @State private var tabs: [Tab] = []
     @State private var selected: String = ""
     @State private var contents: [String: String] = [:]
-    @State private var segments: [Segment] = []
+    /// Utterance rows per tab — the transcript blocks render as clickable
+    /// timecodes, everything else as Markdown.
+    @State private var segmentsByTab: [String: [Segment]] = [:]
     @State private var refreshing = false
     @StateObject private var audio: PlaudAudioPlayer
 
@@ -276,7 +295,9 @@ private struct PlaudNotePreviewView: View {
         _audio = StateObject(wrappedValue: PlaudAudioPlayer(fileID: fileID))
     }
 
-    private static let transcriptSlug = "transcript"
+    /// The verbatim transcript's slug — one definition, so the legacy-cache
+    /// fold-in below can never drift from the block enum.
+    private static let transcriptSlug = PlaudSourceBlock.transaction.slug
 
     var body: some View {
         VStack(spacing: 0) {
@@ -381,6 +402,13 @@ private struct PlaudNotePreviewView: View {
                     : (meta?.duration ?? ""))
                     .font(.caption.monospacedDigit())
                     .foregroundColor(.secondary)
+                if let notice = audio.notice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 12)
@@ -392,8 +420,8 @@ private struct PlaudNotePreviewView: View {
 
     @ViewBuilder
     private var content: some View {
-        if selected == Self.transcriptSlug, !segments.isEmpty {
-            transcriptList
+        if let rows = segmentsByTab[selected], !rows.isEmpty {
+            transcriptList(rows)
         } else if let text = contents[selected], !text.isEmpty {
             ScrollView {
                 MarkdownBlocksView(text: text, linkColor: .accentColor, style: .document)
@@ -425,10 +453,10 @@ private struct PlaudNotePreviewView: View {
 
     /// Transcript as rows with CLICKABLE timecodes — a click streams the
     /// audio from that exact moment.
-    private var transcriptList: some View {
+    private func transcriptList(_ rows: [Segment]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(segments) { segment in
+                ForEach(rows) { segment in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Button(PlaudFormat.clockString(ms: segment.startMs)) {
                             audio.seek(toMs: segment.startMs)
@@ -438,9 +466,13 @@ private struct PlaudNotePreviewView: View {
                         .foregroundColor(.accentColor)
                         .help(PLL("plaud.preview.seekHelp"))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(segment.speaker)
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.secondary)
+                            // No speaker caption for the outline — there is
+                            // nobody speaking, only the topic of that stretch.
+                            if let speaker = segment.speaker {
+                                Text(speaker)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                            }
                             Text(segment.text)
                                 .font(.body)
                                 .textSelection(.enabled)
@@ -461,35 +493,48 @@ private struct PlaudNotePreviewView: View {
         meta = PlaudNoteCache.meta(fileID: fileID)
         if let name = meta?.name, !name.isEmpty { audio.nowPlayingTitle = name }
         var list: [Tab] = (meta?.tabs ?? []).map { Tab(slug: $0.slug, title: $0.title) }
-        segments = Self.parseSegments(PlaudNoteCache.transcriptSegmentsRaw(fileID: fileID))
-        let transcriptText = PlaudNoteCache.transcriptContent(fileID: fileID)
-        if !segments.isEmpty || transcriptText?.isEmpty == false {
-            // Transcript is ALWAYS the leftmost tab — fixed position, so
-            // muscle memory works across recordings.
-            list.insert(Tab(slug: Self.transcriptSlug, title: PLL("plaud.preview.transcriptTab")), at: 0)
-            contents[Self.transcriptSlug] = transcriptText
+
+        // Caches written before the transcript became an ordinary tab keep it
+        // outside `tabs` — fold it in so old chips do not lose their text.
+        var segmentSlugs = Set(meta?.segmentTabs ?? [])
+        if meta?.hasTranscript == true {
+            segmentSlugs.insert(Self.transcriptSlug)
+            if !list.contains(where: { $0.slug == Self.transcriptSlug }) {
+                list.append(Tab(slug: Self.transcriptSlug, title: PLL("plaud.preview.transcriptTab")))
+            }
         }
-        for tab in list where tab.slug != Self.transcriptSlug {
-            contents[tab.slug] = PlaudNoteCache.tabContent(fileID: fileID, slug: tab.slug)
+
+        var loadedContents: [String: String] = [:]
+        var loadedSegments: [String: [Segment]] = [:]
+        for tab in list {
+            loadedContents[tab.slug] = PlaudNoteCache.tabContent(fileID: fileID, slug: tab.slug)
+            if segmentSlugs.contains(tab.slug),
+               let raw = PlaudNoteCache.segmentsRaw(fileID: fileID, slug: tab.slug) {
+                loadedSegments[tab.slug] = Self.parseSegments(raw)
+            }
         }
-        tabs = list
-        if selected.isEmpty || !list.contains(where: { $0.slug == selected }) {
+        contents = loadedContents
+        segmentsByTab = loadedSegments
+
+        // Transcript blocks lead in a FIXED order (clean, verbatim, outline)
+        // so muscle memory works across recordings; Plaud's own note tabs
+        // follow in their original order.
+        let blockSlugs = PlaudSourceBlock.displayOrder.map(\.slug)
+        let leading = blockSlugs.compactMap { slug in list.first { $0.slug == slug } }
+        tabs = leading + list.filter { !blockSlugs.contains($0.slug) }
+
+        if selected.isEmpty || !tabs.contains(where: { $0.slug == selected }) {
             // Default to the first NOTE tab (summary reads first); the
-            // transcript stays one click away on the left.
-            selected = list.first(where: { $0.slug != Self.transcriptSlug })?.slug
-                ?? list.first?.slug ?? ""
+            // transcripts stay one click away on the left.
+            selected = tabs.first(where: { PlaudSourceBlock.from(slug: $0.slug) == nil })?.slug
+                ?? tabs.first?.slug ?? ""
         }
     }
 
     private static func parseSegments(_ raw: String?) -> [Segment] {
         guard let raw, let parsed = PlaudFormat.transcriptSegments(fromRaw: raw) else { return [] }
-        return parsed.map { segment in
-            Segment(
-                startMs: segment["start_time"] as? Double ?? 0,
-                speaker: segment["speaker"] as? String
-                    ?? segment["original_speaker"] as? String ?? "Speaker",
-                text: segment["content"] as? String ?? ""
-            )
+        return PlaudFormat.rows(from: parsed).map {
+            Segment(startMs: $0.startMs, speaker: $0.speaker, text: $0.text)
         }
     }
 
@@ -512,18 +557,35 @@ private struct PlaudNotePreviewView: View {
                 ?? item["data_type"] as? String
                 ?? "Note"
             if let content = await PlaudClient.resolveContent(of: item), !content.isEmpty {
-                PlaudNoteCache.writeTab(fileID: fileID, tabName: tabName, content: content)
+                PlaudNoteCache.writeTab(
+                    fileID: fileID,
+                    tabName: tabName,
+                    content: PlaudFormat.noteMarkdown(fromRaw: content)
+                )
             }
         }
-        if let sourceList = file["source_list"] as? [[String: Any]],
-           let transaction = sourceList.first(where: { ($0["data_type"] as? String) == "transaction" }),
-           let raw = await PlaudClient.resolveContent(of: transaction),
-           let parsed = PlaudFormat.transcriptSegments(fromRaw: raw) {
-            PlaudNoteCache.writeTranscript(
-                fileID: fileID,
-                content: PlaudFormat.transcriptMarkdown(from: parsed),
-                rawSegments: raw
-            )
+        // Every version Plaud made for this recording, not just the verbatim
+        // one: the cleaned-up transcript and the outline become their own
+        // tabs when they exist, and quietly stay absent when they don't.
+        let sourceList = file["source_list"] as? [[String: Any]] ?? []
+        for block in PlaudSourceBlock.allCases {
+            guard let item = sourceList.first(where: { ($0["data_type"] as? String) == block.rawValue }),
+                  let raw = await PlaudClient.resolveContent(of: item), !raw.isEmpty else { continue }
+            if let parsed = PlaudFormat.transcriptSegments(fromRaw: raw) {
+                PlaudNoteCache.writeSegmentTab(
+                    fileID: fileID,
+                    slug: block.slug,
+                    title: block.title,
+                    markdown: PlaudFormat.transcriptMarkdown(from: parsed),
+                    rawSegments: raw
+                )
+            } else {
+                // Prose rather than utterances (the outline usually) — still
+                // a perfectly good tab.
+                PlaudNoteCache.writeTab(
+                    fileID: fileID, tabName: block.title, content: raw, slug: block.slug
+                )
+            }
         }
         loadFromDisk()
     }
