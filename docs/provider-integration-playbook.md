@@ -1,117 +1,117 @@
-# Плейбук: интеграция нового LLM-провайдера
+# Playbook: integrating a new LLM provider
 
-**Версия кода:** 3.5+ (после внедрения учёта затрат)
-**Назначение:** пошаговый чек-лист для добавления нового чат-провайдера в Cuate — от enum'а до вкладки «Расходы». Порядок шагов = порядок зависимостей; после каждого блока указано, чем проверять.
+**Code version:** 3.5+ (after spend tracking landed)
+**Purpose:** a step-by-step checklist for adding a new chat provider to Cuate — from the enum to the "Costs" tab. The order of the steps is the order of the dependencies; each block ends with what to verify it against.
 
-Все пути — относительно `Cuate/Cuate/`.
+All paths are relative to `Cuate/Cuate/`.
 
 ---
 
-## 0. Выбор пути реализации
+## 0. Choosing the implementation path
 
-| Ситуация | Путь | Референс |
+| Situation | Path | Reference |
 |---|---|---|
-| API совместимо с OpenAI chat/completions (большинство: DeepSeek, Kimi, Mistral…) | Новый статический инстанс `OpenAICompatibleProvider` с своим base URL | `Providers/OpenAICompatibleProvider.swift:11-30` |
-| Своё уникальное API | Отдельный файл-провайдер | `Providers/GeminiProvider.swift` (простой), `Providers/AnthropicProvider.swift` (с кэш-брейкпоинтами) |
-| Агрегатор с каталогом моделей и ручным вводом слага | Как OpenRouter: `usesManualModelEntry`, каталог `ModelInfo` | `fetchModelCatalog`, `OpenAICompatibleProvider.swift:447` |
+| The API is OpenAI chat/completions compatible (most of them: DeepSeek, Kimi, Mistral…) | A new static instance of `OpenAICompatibleProvider` with its own base URL | `Providers/OpenAICompatibleProvider.swift:11-30` |
+| A unique API of its own | A separate provider file | `Providers/GeminiProvider.swift` (simple), `Providers/AnthropicProvider.swift` (with cache breakpoints) |
+| An aggregator with a model catalog and manual slug entry | Like OpenRouter: `usesManualModelEntry`, a `ModelInfo` catalog | `fetchModelCatalog`, `OpenAICompatibleProvider.swift:447` |
 
-## 1. Идентификатор провайдера — `Providers/ProviderCore.swift`
+## 1. The provider identifier — `Providers/ProviderCore.swift`
 
-Добавить case в `enum ProviderID` и заполнить **все** switch'и (компилятор подсветит):
+Add a case to `enum ProviderID` and fill in **every** switch (the compiler will point them out):
 
-- `displayName` — имя в UI;
-- `usesManualModelEntry` — true только для агрегаторов без выпадающего списка;
-- `supportsVision` — грубый пер-провайдерный дефолт (пер-модельные исключения — шаг 6);
-- `badgeLetter` + `brandColorHex` — бейдж и фирменный цвет (цвет также красит провайдера на графиках «Расходов»);
-- `apiKeyURL` — страница создания ключа (открывается из настроек);
-- `modelCatalogURL` — только для агрегаторов;
-- `preferredDefaultModels` — предпочтительные модели, лучшая первой. Матчинг: точное совпадение id или префикс датированного снапшота («claude-sonnet-5» → «claude-sonnet-5-20250929»). Предпочитать rolling-алиасы `-latest`.
+- `displayName` — the name in the UI;
+- `usesManualModelEntry` — true only for aggregators with no dropdown;
+- `supportsVision` — a coarse per-provider default (per-model exceptions are step 6);
+- `badgeLetter` + `brandColorHex` — the badge and the brand color (the color also tints the provider on the "Costs" charts);
+- `apiKeyURL` — the key-creation page (opened from settings);
+- `modelCatalogURL` — aggregators only;
+- `preferredDefaultModels` — the preferred models, best first. Matching: an exact id match or the prefix of a dated snapshot ("claude-sonnet-5" → "claude-sonnet-5-20250929"). Prefer the rolling `-latest` aliases.
 
-## 2. Реализация `LLMProvider`
+## 2. Implementing `LLMProvider`
 
-Протокол (`ProviderCore.swift`): `streamChat` / `fetchModels` / `validateKey` (дефолт — «валиден, если умеет листить модели»; для провайдеров с публичным `/models` переопределить, как OpenRouter → `/api/v1/key`).
+The protocol (`ProviderCore.swift`): `streamChat` / `fetchModels` / `validateKey` (the default is "valid if it can list models"; for providers with a public `/models`, override it the way OpenRouter does → `/api/v1/key`).
 
-`streamChat` обязан:
-1. Стримить через общий `HTTPClient.sseStream` (фильтрует `data:`-кадры, режет `[DONE]`).
-2. Yield'ить `.text(chunk)` по мере прихода текста.
-3. Собирать фрагментированные tool-вызовы и отдавать `.toolCalls([...])` одним событием в конце (web search работает через function calling у всех).
-4. **Отдавать `.usage(TokenUsage)`** перед `finish()` — см. шаг 3.
-5. Мапить ошибки через `ProviderError.fromHTTP` (сырые тела ответов не должны доходить до UI).
+`streamChat` must:
+1. Stream through the shared `HTTPClient.sseStream` (it filters `data:` frames and cuts `[DONE]`).
+2. Yield `.text(chunk)` as text arrives.
+3. Accumulate fragmented tool calls and emit `.toolCalls([...])` as a single event at the end (web search works through function calling on all of them).
+4. **Emit `.usage(TokenUsage)`** before `finish()` — see step 3.
+5. Map errors through `ProviderError.fromHTTP` (raw response bodies must never reach the UI).
 
-Не забыть: `maxTokens`-кап, если у провайдера есть модельные лимиты (`AnthropicProvider.maxTokensCap`, клампы DeepSeek/Gemini в `ChatService.streamReply`).
+Don't forget: the `maxTokens` cap, if the provider has per-model limits (`AnthropicProvider.maxTokensCap`, the DeepSeek/Gemini clamps in `ChatService.streamReply`).
 
-## 3. Захват usage (учёт затрат) — ОБЯЗАТЕЛЬНО
+## 3. Capturing usage (spend tracking) — MANDATORY
 
-Каждый провайдер обязан отдать `.usage(TokenUsage)` — иначе расходы пользователя по нему будут считаться грубой оценкой. Нормализация полей:
+Every provider must emit `.usage(TokenUsage)` — otherwise the user's spend on it will only ever be a rough estimate. Field normalization:
 
-| Поле `TokenUsage` | Семантика |
+| `TokenUsage` field | Semantics |
 |---|---|
-| `inputTokens` | **НЕкэшированный** вход (если API даёт только total — вычесть cached) |
-| `outputTokens` | Весь выход, включая reasoning |
-| `cacheReadTokens` | Прочитано из кэша (тарифицируется дешевле: Anthropic ×0.1, DeepSeek ≈1/50) |
-| `cacheWriteTokens` | Запись в кэш (Anthropic ×1.25; у остальных обычно 0) |
-| `reasoningTokens` | Справочно; уже входят в `outputTokens` |
+| `inputTokens` | **NON-cached** input (if the API only gives a total — subtract cached) |
+| `outputTokens` | The whole output, reasoning included |
+| `cacheReadTokens` | Read from cache (billed cheaper: Anthropic ×0.1, DeepSeek ≈1/50) |
+| `cacheWriteTokens` | Written to cache (Anthropic ×1.25; usually 0 elsewhere) |
+| `reasoningTokens` | Informational; already included in `outputTokens` |
 
-Чек-лист ловушек (каждая уже случилась на существующих провайдерах):
+A checklist of traps (every one of them has already happened on an existing provider):
 
-- [ ] **Usage-кадр приходит с пустым `choices`/без контента** — парсить `usage` ДО guard'ов на контент (OpenAI-совместимые: финальный чанк с `include_usage`; Gemini: usage-only последний чанк — читается до guard'а `candidates`).
-- [ ] **Кумулятивность** — если провайдер шлёт usage несколько раз (Anthropic `message_delta`, Gemini каждый чанк), хранить последнее значение, не суммировать.
-- [ ] **Флаг в запросе** — OpenAI-совместимым нужен `stream_options: {"include_usage": true}`. Слать только проверенным: непроверенный параметр может дать 4xx. Проверить живым запросом; если провайдер шлёт usage сам (Mistral, Kimi) — флаг не нужен.
-- [ ] **Разбивка кэша** — искать поля вида `cache_read_input_tokens`, `prompt_cache_hit_tokens`/`miss`, `cached_tokens` в `prompt_tokens_details`, `cachedContentTokenCount`.
-- [ ] `yield(.usage(...))` строго до `continuation.finish()`, и только если `!usage.isEmpty`.
+- [ ] **The usage frame arrives with an empty `choices`/no content** — parse `usage` BEFORE the content guards (OpenAI-compatible: the final chunk with `include_usage`; Gemini: a usage-only last chunk — read before the `candidates` guard).
+- [ ] **Cumulativeness** — if a provider sends usage several times (Anthropic `message_delta`, Gemini on every chunk), keep the last value, don't sum them.
+- [ ] **The request flag** — OpenAI-compatible providers need `stream_options: {"include_usage": true}`. Send it only to verified ones: an unverified parameter can return a 4xx. Check with a live request; if the provider sends usage on its own (Mistral, Kimi), the flag isn't needed.
+- [ ] **The cache breakdown** — look for fields like `cache_read_input_tokens`, `prompt_cache_hit_tokens`/`miss`, `cached_tokens` in `prompt_tokens_details`, `cachedContentTokenCount`.
+- [ ] `yield(.usage(...))` strictly before `continuation.finish()`, and only if `!usage.isEmpty`.
 
-Агрегацию по итерациям агент-цикла и запись в леджер делает `ChatService` — в провайдере ничего больше не нужно. При обрыве стрима usage не придёт — `ChatService.recordSpend` сам запишет оценку с флагом `isEstimate`.
+Aggregation across agent-loop iterations and writing to the ledger is done by `ChatService` — nothing more is needed in the provider. If the stream breaks, usage never arrives — `ChatService.recordSpend` writes an estimate flagged `isEstimate` on its own.
 
-## 4. Прайсинг — `Providers/PricingCatalog.swift`
+## 4. Pricing — `Providers/PricingCatalog.swift`
 
-1. Добавить модели провайдера в `snapshotJSON` (USD **за один токен**, поля LiteLLM: `input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost`, `cache_creation_input_token_cost`).
-2. Ключ таблицы матчится по «точное совпадение → самый длинный префикс», поэтому семейство можно покрыть одним ключом («claude-sonnet-4» покрывает 4.5/4.6), но следить за коллизиями («gpt-5» и «gpt-5.5» — длинный префикс побеждает).
-3. В `mapLiteLLMKey` добавить маппинг префикса LiteLLM-каталога на наш `ProviderID` — тогда еженедельное авто-обновление цен подхватит провайдера.
-4. Если провайдер отдаёт цены в собственном каталоге моделей (как OpenRouter `pricing`) — пробросить их в `ModelInfo.promptPricePerToken`/`completionPricePerToken` и научить `ChatService.recordSpend` их предпочитать.
+1. Add the provider's models to `snapshotJSON` (USD **per single token**, LiteLLM fields: `input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost`, `cache_creation_input_token_cost`).
+2. The table key matches by "exact match → longest prefix", so a family can be covered by one key ("claude-sonnet-4" covers 4.5/4.6), but watch for collisions ("gpt-5" and "gpt-5.5" — the longer prefix wins).
+3. In `mapLiteLLMKey` add a mapping from the LiteLLM catalog prefix to our `ProviderID` — then the weekly automatic price update will pick the provider up.
+4. If the provider returns prices in its own model catalog (like OpenRouter's `pricing`) — forward them into `ModelInfo.promptPricePerToken`/`completionPricePerToken` and teach `ChatService.recordSpend` to prefer them.
 
-Нет цены → не страшно: леджер запишет токены с `costUSD = nil`, UI покажет «нет цены». Но снапшот лучше заполнить.
+No price is not a disaster: the ledger records the tokens with `costUSD = nil` and the UI shows "no price". Still, better to fill the snapshot in.
 
-## 5. Регистрация — `Providers/AppSettings.swift`
+## 5. Registration — `Providers/AppSettings.swift`
 
-`ProviderRegistry.provider(for:)` — вернуть инстанс для нового case (единственное место, компилятор напомнит).
+`ProviderRegistry.provider(for:)` — return an instance for the new case (the only place, and the compiler will remind you).
 
 ## 6. Capabilities
 
-- `ModelCapabilities.supportsReasoningControl` (`ProviderCore.swift`) — эвристика по слагу, если у провайдера есть reasoning-модели;
-- пер-модельные особенности vision/tools — `AppSettings.modelSupportsVision/Tools/ReasoningControl` (для агрегаторов — из каталога `ModelInfo`);
-- клампы параметров (например, `max_tokens ≤ 8192`) — в `ChatService.streamReply` (`providerTokenCap`).
+- `ModelCapabilities.supportsReasoningControl` (`ProviderCore.swift`) — a slug heuristic, if the provider has reasoning models;
+- per-model vision/tools quirks — `AppSettings.modelSupportsVision/Tools/ReasoningControl` (for aggregators, from the `ModelInfo` catalog);
+- parameter clamps (for example `max_tokens ≤ 8192`) — in `ChatService.streamReply` (`providerTokenCap`).
 
-## 7. UI и локализация
+## 7. UI and localization
 
-- Ключ API: слот появляется автоматически из `ProviderID.allCases` в Keys-секции; проверить, что `validateKey` даёт вменяемую ошибку на мусорный ключ.
-- Строки: новые ключи в `App/Localization.swift` — **все три языка** (en/es/ru), английский — фолбэк.
-- Тултипы `.help` на новые контролы — правило проекта (см. `docs/TECH-DEBT.md`, фикс 3.5).
-- Бейдж: буква+цвет уже заданы в шаге 1; отдельных ассетов не нужно (`Views/ProviderBadge.swift`).
+- The API key: the slot appears automatically from `ProviderID.allCases` in the Keys section; check that `validateKey` gives a sensible error for a junk key.
+- Strings: new keys go into `App/Localization.swift` — **all three languages** (en/es/ru), English is the fallback.
+- `.help` tooltips on new controls — a project rule (see `docs/TECH-DEBT.md`, the 3.5 fix).
+- The badge: the letter and color were already set in step 1; no separate assets are needed (`Views/ProviderBadge.swift`).
 
-## 8. e2e-чеклист перед коммитом
+## 8. e2e checklist before committing
 
-Сборка — только `./scripts/make-dmg.sh` для дистрибутива; для проверки компиляции достаточно raw `xcodebuild build`.
+Builds — only `./scripts/make-dmg.sh` for a distributable; a raw `xcodebuild build` is enough to check that it compiles.
 
-- [ ] `fetchModels` наполняет дропдаун; `preferredDefaultModels` выбирает вменяемый дефолт;
-- [ ] обычный стрим: текст идёт чанками, финиш чистый;
-- [ ] tool-цикл: web search вызывается и результат скармливается обратно (если модель умеет tools);
-- [ ] vision: картинка уходит (или корректный OCR-фолбэк для не-vision);
-- [ ] **usage**: в логах `Diagnostics` есть `spend.append … est=false` с ненулевыми токенами; повторный запрос в том же чате показывает `cacheRead > 0` (если у провайдера есть кэш);
-- [ ] **цена**: запись в леджере с `costUSD != nil`, число сходится с ручным расчётом (токены × прайс);
-- [ ] отмена генерации: запись с `est=true`, приложение не падает;
-- [ ] невалидный ключ: человекочитаемая ошибка в чате;
-- [ ] вкладка «Расходы»: провайдер появился на графиках со своим фирменным цветом.
+- [ ] `fetchModels` fills the dropdown; `preferredDefaultModels` picks a sensible default;
+- [ ] an ordinary stream: text arrives in chunks, the finish is clean;
+- [ ] the tool loop: web search is called and the result is fed back (if the model can do tools);
+- [ ] vision: the image goes out (or a correct OCR fallback for non-vision);
+- [ ] **usage**: the `Diagnostics` log has `spend.append … est=false` with non-zero tokens; a repeat request in the same chat shows `cacheRead > 0` (if the provider has a cache);
+- [ ] **price**: a ledger record with `costUSD != nil`, and the number matches a manual calculation (tokens × price);
+- [ ] cancelling generation: a record with `est=true`, and the app doesn't crash;
+- [ ] an invalid key: a human-readable error in the chat;
+- [ ] the "Costs" tab: the provider shows up on the charts in its brand color.
 
 ---
 
-## Приложение: карта файлов учёта затрат
+## Appendix: map of the spend-tracking files
 
-| Что | Где |
+| What | Where |
 |---|---|
 | `TokenUsage`, `LLMStreamEvent.usage` | `Providers/ProviderCore.swift` |
-| Захват usage по провайдерам | `AnthropicProvider.swift` (message_start/delta), `OpenAICompatibleProvider.swift` (chat/completions + /responses), `GeminiProvider.swift` (usageMetadata) |
-| Цены | `Providers/PricingCatalog.swift` (снапшот + LiteLLM-обновление + OpenRouter live) |
-| Леджер и агрегаты | `Models/SpendLedger.swift` (`SDSpendRecord`, `SpendLedger`, `SpendStore`) |
-| Запись chat/summary + оценка при обрыве | `Providers/ChatService.swift` (`recordSpend`) |
-| Запись OCR / STT / поиск / картинки | `MistralOCRService.swift`, `TranscriptionService.swift`, `BraveSearchService.swift` (поиск: $0.005/запрос по тарифу Base AI, `isEstimate` — фри-тир реально бесплатен), `Addons/ImageAddon/Core/ImageTaskRunner.swift` |
-| UI | `Views/CostsSettingsView.swift`, вкладка `costs` в `Views/SettingsView.swift` |
+| Per-provider usage capture | `AnthropicProvider.swift` (message_start/delta), `OpenAICompatibleProvider.swift` (chat/completions + /responses), `GeminiProvider.swift` (usageMetadata) |
+| Prices | `Providers/PricingCatalog.swift` (snapshot + LiteLLM update + OpenRouter live) |
+| The ledger and aggregates | `Models/SpendLedger.swift` (`SDSpendRecord`, `SpendLedger`, `SpendStore`) |
+| Writing chat/summary + the estimate on a break | `Providers/ChatService.swift` (`recordSpend`) |
+| Writing OCR / STT / search / images | `MistralOCRService.swift`, `TranscriptionService.swift`, `BraveSearchService.swift` (search: $0.005/request on the Base AI plan, `isEstimate` — the free tier really is free), `Addons/ImageAddon/Core/ImageTaskRunner.swift` |
+| UI | `Views/CostsSettingsView.swift`, the `costs` tab in `Views/SettingsView.swift` |

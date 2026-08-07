@@ -4,8 +4,8 @@ import SwiftUI
 /// blurred aurora ribbons breathing across the panel's top, twinkling stars
 /// (dark only) and a shooting star streaking down-left once every 12 s.
 struct AuroraDecorations: View {
-    /// Мировое время: ленты и звёзды остаются, падающие звёзды — только в чате
-    /// (штрих поперёк данных читался бы как артефакт).
+    /// World Time: ribbons and stars stay, shooting stars are chat-only
+    /// (a streak across the data would read as an artifact).
     var worldTime: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     private var dark: Bool { colorScheme == .dark }
@@ -37,8 +37,8 @@ struct AuroraDecorations: View {
                             .offset(x: geo.size.width * star.x, y: star.y)
                     }
                     if !worldTime {
-                        // Две падающие звезды на сдвинутых циклах: каждая
-                        // вспыхивает в СЛУЧАЙНОЙ точке всего окна.
+                        // Two shooting stars on offset cycles: each flares at a
+                        // RANDOM point anywhere in the window.
                         ShootingStar(area: geo.size, cycle: 12, seed: 0)
                         ShootingStar(area: geo.size, cycle: 12, seed: 7)
                     }
@@ -73,7 +73,7 @@ private struct AuroraRibbon: View {
         TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
             let t = (context.date.timeIntervalSinceReferenceDate + phase)
                 .truncatingRemainder(dividingBy: period) / period
-            // Один плавный цикл: 0 → 1/3 → 2/3 → 1 (как 0/33/66/100% в CSS).
+            // One smooth cycle: 0 → 1/3 → 2/3 → 1 (like 0/33/66/100% in CSS).
             let angle = t * 2 * .pi
             let drift = sin(angle) * 14
             let swell = 1 + sin(angle + .pi / 3) * 0.10
@@ -126,11 +126,11 @@ private struct ShootingStar: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let raw = context.date.timeIntervalSinceReferenceDate + seed * cycle / 2
-            let pass = (raw / cycle).rounded(.down)              // номер пролёта
+            let pass = (raw / cycle).rounded(.down)              // flyby index
             let t = raw.truncatingRemainder(dividingBy: cycle) / cycle
-            let p = max(0, (t - visibleFrom) / (1 - visibleFrom))   // 0…1 полёта
+            let p = max(0, (t - visibleFrom) / (1 - visibleFrom))   // 0…1 of the flight
             let opacity = p == 0 ? 0 : (p < 0.2 ? p * 5 * 0.9 : 0.9 * (1 - (p - 0.2) / 0.8))
-            // Псевдослучайная точка старта этого пролёта (fract-sin hash).
+            // Pseudo-random start point for this flyby (fract-sin hash).
             let rx = hash(pass * 12.9898 + seed)
             let ry = hash(pass * 78.233 + seed * 3)
             let startX = area.width * (0.18 + 0.72 * rx)

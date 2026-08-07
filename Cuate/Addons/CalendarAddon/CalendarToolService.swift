@@ -359,7 +359,7 @@ You have calendar and reminder tools backed by the user's own macOS Calendar. To
                 event.endDate = end
             } else {
                 // Reminder-style events (alert requested, no explicit end) stay
-                // short — a "напомни..." must not block an hour of the calendar.
+                // short — a "remind me to..." must not block an hour of the calendar.
                 let defaultMinutes = args["alert_minutes_before"] != nil ? 15.0 : 60.0
                 event.endDate = start.addingTimeInterval(defaultMinutes * 60)
             }

@@ -1831,7 +1831,8 @@ struct FeatureTitle: View {
         }
     }
 
-    /// "Автосвитчер (бета)" → ("Автосвитчер", "бета"); no marker → (raw, nil).
+    /// "Autoswitcher (beta)" → ("Autoswitcher", "beta"); no marker → (raw, nil).
+    /// The marker is matched in every localized spelling the titles use.
     static func split(_ raw: String) -> (title: String, beta: String?) {
         guard let range = raw.range(
             of: #"\s*\((beta|бета)\)\s*$"#,

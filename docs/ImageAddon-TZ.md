@@ -1,88 +1,88 @@
-# ТЗ: Аддон обработки и генерации изображений (ImageAddon)
+# Spec: image processing and generation addon (ImageAddon)
 
-Версия 1.0 · 17.07.2026 · Основание: `docs/ImageAddon-Model-Research.md`
+Version 1.0 · 2026-07-17 · Based on: `docs/ImageAddon-Model-Research.md`
 
 ---
 
-## 1. Цель
+## 1. Goal
 
-Добавить в Cuate аддон для операций над изображениями через облачные AI-API:
+Add an addon to Cuate for image operations through cloud AI APIs:
 
-- **P1 (первый релиз):** Апскейл · Удаление фона · Удаление объектов (object cleanup)
-- **P2 (второй релиз):** Генерация и редактирование изображений по промпту
+- **P1 (first release):** Upscale · Background removal · Object removal (object cleanup)
+- **P2 (second release):** Prompt-based image generation and editing
 
-Аддон строится по существующему паттерну LayoutFix: самодостаточная папка `Addons/ImageAddon/`, минимальные хуки в хост.
+The addon follows the existing LayoutFix pattern: a self-contained `Addons/ImageAddon/` folder with minimal hooks into the host.
 
-## 2. Ограничения продукта
+## 2. Product constraints
 
-- Приложение — Spotlight-панель: открывается хоткеем, закрывается при потере фокуса. **Никаких отдельных окон.** Весь UI — внутри плавающей панели.
-- Функция удаления объектов нигде в UI/маркетинге не называется «watermark remover». Формулировка: «Удаляет лишние объекты, надписи, дефекты». (Причина: DMCA §1202 + ToS провайдеров, см. ресерч §5.)
-- Ключи — только в Keychain через существующий `APIKeyStore`. Изображения не сохраняются на серверах приложения (у нас их нет) — только прямые вызовы API провайдеров.
+- The app is a Spotlight panel: it opens on a hotkey and closes on focus loss. **No separate windows.** The whole UI lives inside the floating panel.
+- The object-removal function is never called a "watermark remover" anywhere in the UI or marketing. The wording is: "Removes unwanted objects, text and defects." (Reason: DMCA §1202 + the providers' ToS, see research §5.)
+- Keys live only in the Keychain through the existing `APIKeyStore`. Images are never stored on the app's servers (we have none) — only direct calls to the providers' APIs.
 
-## 3. Провайдеры и модели
+## 3. Providers and models
 
-### 3.1. Матрица «функция → провайдер → модель»
+### 3.1. The "function → provider → model" matrix
 
-Пользователь на вкладке настроек выбирает провайдера и модель **для каждой функции отдельно** (как сейчас для голоса).
+On the settings tab the user picks a provider and a model **separately for each function** (as they do for voice today).
 
-| Функция | Провайдер (выбор) | Модели | Дефолт |
+| Function | Provider (choice) | Models | Default |
 |---|---|---|---|
-| Апскейл | fal.ai | Recraft Crisp · Topaz Upscale · SeedVR2 · Real-ESRGAN | Recraft Crisp ($0.004) |
-| Удаление фона | fal.ai | Bria RMBG-2.0 · BiRefNet v2 | Bria RMBG-2.0 ($0.018) |
-| Удаление объектов | fal.ai | Bria Eraser (маска) · fal object-removal (по тексту) | Bria Eraser |
-| Генерация (P2) | **fal.ai / OpenAI / Gemini** | fal: Nano Banana 2, GPT Image 2, Seedream 4.5, FLUX.2; OpenAI direct: gpt-image-2, gpt-image-1.5; Gemini direct: gemini-3.1-flash-image (NB2), gemini-3-pro-image | fal.ai + Nano Banana 2 |
+| Upscale | fal.ai | Recraft Crisp · Topaz Upscale · SeedVR2 · Real-ESRGAN | Recraft Crisp ($0.004) |
+| Background removal | fal.ai | Bria RMBG-2.0 · BiRefNet v2 | Bria RMBG-2.0 ($0.018) |
+| Object removal | fal.ai | Bria Eraser (mask) · fal object-removal (by text) | Bria Eraser |
+| Generation (P2) | **fal.ai / OpenAI / Gemini** | fal: Nano Banana 2, GPT Image 2, Seedream 4.5, FLUX.2; OpenAI direct: gpt-image-2, gpt-image-1.5; Gemini direct: gemini-3.1-flash-image (NB2), gemini-3-pro-image | fal.ai + Nano Banana 2 |
 
-Принцип для генерации: **можно через агрегатор, можно напрямую.** У пользователей Cuate уже есть ключи OpenAI/Gemini в `APIKeyStore` — прямой путь работает без нового ключа. fal.ai — один новый ключ, закрывает всё (наценки к прайсу разработчиков нет, см. ресерч §6).
+The principle for generation: **either through an aggregator or directly.** Cuate users already have OpenAI/Gemini keys in `APIKeyStore`, so the direct path works with no new key. fal.ai is one new key that covers everything (with no markup over the developers' pricing, see research §6).
 
-### 3.1a. Каталог моделей с описаниями для UI
+### 3.1a. The model catalog with UI descriptions
 
-Каждая модель в пикере отображается с бейджем класса и краткой подписью (одна строка). Тексты локализуются (EN/ES/RU):
+Every model in the picker is shown with a class badge and a short one-line caption. The texts are localized (EN/ES/RU):
 
-**Апскейл**
+**Upscale**
 
-| Модель | Бейдж | Подпись в UI | Цена |
+| Model | Badge | UI caption | Price |
 |---|---|---|---|
-| Recraft Crisp | Стандарт | Быстро и чисто, без «дорисовок». Лучший выбор по умолчанию | $0.004 |
-| Topaz Upscale | Премиум | Максимальное качество фото, огромные разрешения (до 512 MP) | ~$0.08–0.15 |
-| SeedVR2 | Качество | Топ по мнению сообщества; медленнее, лучше для сложных фото | ~$0.02–0.05 |
-| Real-ESRGAN | Бюджет | Самый дешёвый, годится для простых картинок | ~$0.0025 |
+| Recraft Crisp | Standard | Fast and clean, with no invented detail. The best default | $0.004 |
+| Topaz Upscale | Premium | Maximum photo quality, huge resolutions (up to 512 MP) | ~$0.08–0.15 |
+| SeedVR2 | Quality | The community's top pick; slower, better for difficult photos | ~$0.02–0.05 |
+| Real-ESRGAN | Budget | The cheapest, fine for simple images | ~$0.0025 |
 
-**Удаление фона**
+**Background removal**
 
-| Модель | Бейдж | Подпись в UI | Цена |
+| Model | Badge | UI caption | Price |
 |---|---|---|---|
-| Bria RMBG-2.0 | Стандарт | Точные края, безопасна для коммерческого использования | $0.018 |
-| BiRefNet v2 | Бюджет | Открытая SOTA-модель, почти бесплатно | ~$0.002 |
+| Bria RMBG-2.0 | Standard | Precise edges, safe for commercial use | $0.018 |
+| BiRefNet v2 | Budget | The open SOTA model, almost free | ~$0.002 |
 
-**Удаление объектов**
+**Object removal**
 
-| Модель | Бейдж | Подпись в UI | Цена |
+| Model | Badge | UI caption | Price |
 |---|---|---|---|
-| Bria Eraser | Стандарт | Аккуратное удаление по выделению (маске) | ~$0.04 |
-| Recraft Erase | Бюджет | Дешёвое удаление по маске | $0.002 |
-| fal object-removal | Умный | Опишите текстом, что удалить — без выделения | ~$0.01–0.04 |
+| Bria Eraser | Standard | Careful removal of what you select (a mask) | ~$0.04 |
+| Recraft Erase | Budget | Cheap mask-based removal | $0.002 |
+| fal object-removal | Smart | Describe what to remove in words — no selection needed | ~$0.01–0.04 |
 
-**Генерация (P2)**
+**Generation (P2)**
 
-| Модель | Бейдж | Подпись в UI | Цена/img |
+| Model | Badge | UI caption | Price/img |
 |---|---|---|---|
-| Nano Banana 2 (Google) | Стандарт | Лучший баланс цены и качества, сильное редактирование | ~$0.067 |
-| GPT Image 2 (OpenAI) | Премиум | Топ-качество и текст на картинках; дороже, строгий фильтр | $0.05–0.21 |
-| Seedream 4.5 | Свобода | Почти без цензуры, сильное редактирование | ~$0.04 |
-| FLUX.2 | Баланс | Надёжный, без случайных отказов, помегапиксельная цена | ~$0.03/MP |
-| Nano Banana 2 Lite | Бюджет | Быстрая и дешёвая версия NB2 | ~$0.034 |
+| Nano Banana 2 (Google) | Standard | The best balance of price and quality, strong at editing | ~$0.067 |
+| GPT Image 2 (OpenAI) | Premium | Top quality and text inside images; pricier, strict filter | $0.05–0.21 |
+| Seedream 4.5 | Freedom | Almost no censorship, strong at editing | ~$0.04 |
+| FLUX.2 | Balance | Reliable, no random refusals, priced per megapixel | ~$0.03/MP |
+| Nano Banana 2 Lite | Budget | The fast, cheap version of NB2 | ~$0.034 |
 
-Бейджи — фиксированный enum: `Бюджет / Стандарт / Качество / Премиум / Умный / Свобода` (в коде: `ImageModelTier`). Каталог (id, имя, бейдж, подпись, цена) — часть статического каталога в `FalProvider.swift` (см. §5).
+The badges are a fixed enum: `Budget / Standard / Quality / Premium / Smart / Freedom` (in code: `ImageModelTier`). The catalog (id, name, badge, caption, price) is part of the static catalog in `FalProvider.swift` (see §5).
 
-### 3.2. API-ключи
+### 3.2. API keys
 
-- Новый ключ: `AuxKey.fal` (расширить `enum AuxKey` в `Providers/APIKeyStore.swift`; сейчас там `brave, deepgram`).
-- Для генерации напрямую — переиспользуются существующие ключи `ProviderID.openai` / `ProviderID.gemini`.
-- В UI настроек аддона: поле ключа fal.ai с masked-отображением + ссылка на fal.ai/dashboard/keys (по паттерну существующей вкладки Keys).
+- A new key: `AuxKey.fal` (extend `enum AuxKey` in `Providers/APIKeyStore.swift`; today it holds `brave, deepgram`).
+- For direct generation the existing `ProviderID.openai` / `ProviderID.gemini` keys are reused.
+- In the addon's settings UI: the fal.ai key field with masked display + a link to fal.ai/dashboard/keys (following the pattern of the existing Keys tab).
 
-### 3.3. Протокол вызовов
+### 3.3. The call protocol
 
-Всё внутри `Addons/ImageAddon/`, хост не трогаем:
+Everything lives inside `Addons/ImageAddon/`; the host is left alone:
 
 ```swift
 enum ImageFunction { case upscale, removeBackground, objectCleanup, generate }
@@ -97,166 +97,166 @@ protocol ImageOperationProvider {
 struct ImageRequest {
     let function: ImageFunction
     let model: String
-    let inputImage: Data?          // nil для generate
-    let maskImage: Data?           // objectCleanup по маске
-    let prompt: String?            // generate / object-removal по тексту
-    let params: [String: Any]      // scale factor, output format и т.п.
+    let inputImage: Data?          // nil for generate
+    let maskImage: Data?           // mask-based objectCleanup
+    let prompt: String?            // generate / text-based object-removal
+    let params: [String: Any]      // scale factor, output format, etc.
 }
 
 struct ImageResult { let image: Data; let mimeType: String; let costUSD: Double? }
 ```
 
-- **fal.ai клиент:** REST `https://queue.fal.run/{model_id}` (submit → poll status → fetch result). Изображения передаются base64 data-URI или загрузкой на fal storage (`https://fal.run/storage/upload`). Заголовок `Authorization: Key <FAL_KEY>`. Таймаут: 120 с, поллинг 1 с.
-- **OpenAI direct (P2):** `POST /v1/images/generations` и `/v1/images/edits` (gpt-image-2).
-- **Gemini direct (P2):** `generateContent` с `responseModalities: ["IMAGE"]` (образец SSE-клиента — `GeminiProvider.swift`).
-- Переиспользуем `HTTPClient` из `ProviderCore.swift` где возможно; ошибки — свой `ImageAddonError` (нет ключа, лимит, контент-фильтр, слишком большой файл, таймаут, сетевые).
+- **The fal.ai client:** REST `https://queue.fal.run/{model_id}` (submit → poll status → fetch result). Images are passed as base64 data-URIs or uploaded to fal storage (`https://fal.run/storage/upload`). The header is `Authorization: Key <FAL_KEY>`. Timeout: 120 s, polling every 1 s.
+- **OpenAI direct (P2):** `POST /v1/images/generations` and `/v1/images/edits` (gpt-image-2).
+- **Gemini direct (P2):** `generateContent` with `responseModalities: ["IMAGE"]` (an SSE client to copy from — `GeminiProvider.swift`).
+- Reuse `HTTPClient` from `ProviderCore.swift` where possible; errors get their own `ImageAddonError` (no key, rate limit, content filter, file too large, timeout, network).
 
 ## 4. UX
 
-### 4.1. Точки входа (P1)
+### 4.1. Entry points (P1)
 
-Изображение попадает в панель четырьмя путями (первые два — новые, доработка `ChatWindow.swift`):
+An image reaches the panel by four routes (the first two are new and require work in `ChatWindow.swift`):
 
-1. **Кнопка «Прикрепить файл»** рядом с полем ввода → `NSOpenPanel` (jpg/png/webp/heic). ⚠️ Открытие системного диалога не должно закрыть панель — на время диалога отключить авто-hide по потере фокуса (диалог — child окно панели).
-2. **Drag&drop** файла на панель и **⌘V** картинки из буфера → `ChatAttachment` (сейчас отсутствуют — добавить).
-3. Существующие скриншоты (полный/область).
-4. Контекст: картинка уже прикреплена как `pendingAttachment`.
+1. **An "Attach file" button** next to the input field → `NSOpenPanel` (jpg/png/webp/heic). ⚠️ Opening the system dialog must not close the panel — disable auto-hide on focus loss for the duration of the dialog (the dialog is a child window of the panel).
+2. **Drag & drop** of a file onto the panel and **⌘V** of an image from the clipboard → `ChatAttachment` (both missing today — to be added).
+3. The existing screenshots (full screen / area).
+4. Context: an image is already attached as `pendingAttachment`.
 
-> **Актуализация (2026-07-26).** Композер принимает до **5 изображений** батчем
-> (`pendingAttachments`, все пути: диалог с мультивыбором, ⌘V, drag&drop,
-> скриншоты). Тулбар действий ниже показывается **только при одном вложении** —
-> несколько сворачиваются в ряд миниатюр с по-штучным удалением и уходят в модель
-> одним сообщением (vision-провайдеры — content parts, non-vision — OCR каждого).
-> В агентских беседах (Hermes) тулбар и OCR дополнительно за опт-ином
-> «Функции приложения» (см. private/AGENT-ADDONS-NOTES.md §12, внутренние заметки).
+> **Update (2026-07-26).** The composer accepts up to **5 images** as a batch
+> (`pendingAttachments`, on every route: the multi-select dialog, ⌘V, drag & drop,
+> screenshots). The actions toolbar below is shown **only for a single attachment** —
+> several collapse into a row of thumbnails with per-item removal and go to the model
+> as one message (vision providers get content parts, non-vision ones get OCR of each).
+> In agent conversations (Hermes) the toolbar and OCR are additionally behind the
+> "App features" opt-in (see private/AGENT-ADDONS-NOTES.md §12, internal notes).
 
-### 4.2. Действия над изображением
+### 4.2. Actions on an image
 
-При появлении image-аттача в превью (`PendingAttachmentPreview`) — ряд кнопок-действий (только если аддон включён и есть ключ):
+When an image attachment appears in the preview (`PendingAttachmentPreview`) — a row of action buttons (only if the addon is on and a key is present):
 
 ```
-[Апскейл ▾] [Убрать фон] [Удалить объекты] [Извлечь текст (OCR — существующее)]
+[Upscale ▾] [Remove background] [Remove objects] [Extract text (OCR — existing)]
 ```
 
-- **Апскейл**: клик — запуск с дефолтным ×2; ▾ — выбор ×2/×4/макс (зависит от модели).
-- **Убрать фон**: один клик, результат PNG с альфой.
-- **Удалить объекты**: превью разворачивается в инлайн-редактор внутри панели: кисть для маски (слайдер размера, undo, сброс) + альтернативно текстовое поле «что удалить» (режим object-removal по тексту). Кнопка «Применить».
-- Слэш-команды в поле ввода как альтернатива: `/upscale`, `/bg`, `/cleanup` (действуют на текущий аттач).
+- **Upscale**: a click runs the default ×2; ▾ offers ×2/×4/max (depending on the model).
+- **Remove background**: one click, the result is a PNG with alpha.
+- **Remove objects**: the preview expands into an inline editor inside the panel: a mask brush (size slider, undo, reset) plus, alternatively, a "what to remove" text field (the text-based object-removal mode). An "Apply" button.
+- Slash commands in the input field as an alternative: `/upscale`, `/bg`, `/cleanup` (they act on the current attachment).
 
-### 4.3. Результат
+### 4.3. The result
 
-- Результат добавляется в чат как сообщение ассистента с `ChatAttachment` (рендер уже работает через `AttachmentPreviewBubble`).
-- Под результатом кнопки: **Сохранить** (NSSavePanel, тот же трюк с фокусом), **Копировать** (NSPasteboard), **Повторить с другой моделью ▾**, для cleanup — **Продолжить редактирование** (результат становится новым входом).
-- Во время обработки: спиннер + статус в существующем `statusText` («Апскейл ×4, Topaz…»), отмена — крестиком.
-- Имя файла результата: `<исходное>-upscaled.png` / `-nobg.png` / `-cleaned.png`.
+- The result is added to the chat as an assistant message with a `ChatAttachment` (rendering already works through `AttachmentPreviewBubble`).
+- Buttons under the result: **Save** (NSSavePanel, the same focus trick), **Copy** (NSPasteboard), **Retry with another model ▾**, and for cleanup — **Continue editing** (the result becomes the new input).
+- While processing: a spinner + status in the existing `statusText` ("Upscale ×4, Topaz…"), cancelled with the ×.
+- The result's file name: `<source>-upscaled.png` / `-nobg.png` / `-cleaned.png`.
 
-### 4.4. Генерация (P2)
+### 4.4. Generation (P2)
 
-- Слэш-команда `/img <промпт>` прямо в чате ИЛИ переключатель режима в панели (сегмент-контрол «Чат | Изображение» рядом с полем ввода).
-- В режиме изображения: поле промпта, выбор соотношения сторон (1:1, 3:2, 2:3, 16:9*), количество (1–4), выбранная модель бейджем (клик — быстрая смена).
-- Редактирование: если прикреплена картинка + промпт → режим edit (для моделей с поддержкой: NB2, GPT Image 2, FLUX.2).
-- Результаты — в чат, те же действия (Сохранить/Копировать/Вариации).
-- *16:9 недоступен у gpt-image-2 (максимум 1536×1024) — скрывать опцию в зависимости от модели.
+- The `/img <prompt>` slash command right in the chat OR a mode switch in the panel (a "Chat | Image" segmented control next to the input field).
+- In image mode: a prompt field, an aspect-ratio choice (1:1, 3:2, 2:3, 16:9*), a count (1–4), and the chosen model as a badge (a click switches it quickly).
+- Editing: if an image is attached plus a prompt → edit mode (for models that support it: NB2, GPT Image 2, FLUX.2).
+- Results go into the chat with the same actions (Save/Copy/Variations).
+- *16:9 is unavailable on gpt-image-2 (1536×1024 max) — hide the option depending on the model.
 
-### 4.4a. Параметры операций (быстрые, в момент вызова)
+### 4.4a. Operation parameters (quick ones, at call time)
 
-Философия: один клик с разумными дефолтами; тонкие ручки моделей скрыты. Доступные параметры per функция:
+The philosophy: one click with sensible defaults; the models' fine-grained knobs stay hidden. Available parameters per function:
 
-| Функция | Параметр | Значения | Дефолт |
+| Function | Parameter | Values | Default |
 |---|---|---|---|
-| Апскейл | Фактор | ×2 / ×4 / макс. модели | ×2 |
-| Апскейл | Улучшить лица | on/off (только Topaz, Real-ESRGAN) | off |
-| Удаление фона | — (без параметров) | | |
-| Удаление объектов | Режим | маска (кисть) / текстовое описание | маска |
-| Удаление объектов | Размер кисти | слайдер 10–100 px | 40 |
-| Генерация (P2) | Аспект | 1:1, 3:2, 2:3, 16:9* | 1:1 |
-| Генерация (P2) | Количество | 1–4 | 1 |
+| Upscale | Factor | ×2 / ×4 / the model's max | ×2 |
+| Upscale | Enhance faces | on/off (Topaz and Real-ESRGAN only) | off |
+| Background removal | — (no parameters) | | |
+| Object removal | Mode | mask (brush) / text description | mask |
+| Object removal | Brush size | slider 10–100 px | 40 |
+| Generation (P2) | Aspect | 1:1, 3:2, 2:3, 16:9* | 1:1 |
+| Generation (P2) | Count | 1–4 | 1 |
 
-Ограничение: вход × фактор апскейла не должен превышать потолок выбранной модели (Recraft ~16 MP, SeedVR2 ~ 8K, Topaz до 512 MP) — недоступные факторы дизейблятся.
+Constraint: the input × the upscale factor must not exceed the chosen model's ceiling (Recraft ~16 MP, SeedVR2 ~8K, Topaz up to 512 MP) — unavailable factors are disabled.
 
-### 4.4b. Форматы и лимиты входа
+### 4.4b. Input formats and limits
 
-| Формат | Поведение |
+| Format | Behavior |
 |---|---|
-| JPG, PNG, WebP | Отправляются провайдеру как есть (без перекодирования — сохраняем качество) |
-| HEIC, TIFF | Локальная конверсия в PNG (ImageIO) перед отправкой, прозрачно для пользователя |
-| GIF | Берётся первый кадр, плашка-предупреждение |
-| SVG, PDF, видео | Не поддерживаются (для PDF — существующий OCR-путь) |
+| JPG, PNG, WebP | Sent to the provider as-is (no re-encoding — quality is preserved) |
+| HEIC, TIFF | Converted locally to PNG (ImageIO) before sending, transparently to the user |
+| GIF | The first frame is taken, with a warning banner |
+| SVG, PDF, video | Not supported (for PDF there is the existing OCR path) |
 
-Лимит входа: 25 MP / 20 MB → автодаунскейл с предупреждением. Выход: PNG (дефолт, для фона — всегда PNG с альфой) / JPEG / WebP по настройке.
+Input limit: 25 MP / 20 MB → auto-downscale with a warning. Output: PNG (the default, and always PNG with alpha for background removal) / JPEG / WebP, per the setting.
 
-### 4.5. Настройки (вкладка «Изображения»)
+### 4.5. Settings (the "Images" tab)
 
-По паттерну LayoutFix: `case imageAddon` в `SettingsTab`, вкладка видна при включённом аддоне, master-toggle в General.
+Following the LayoutFix pattern: `case imageAddon` in `SettingsTab`, the tab is visible when the addon is on, and there is a master toggle in General.
 
-Содержимое вкладки:
-1. Ключ fal.ai (masked, ссылка на получение).
-2. Секции по функциям: Апскейл / Фон / Объекты / Генерация — в каждой пикер провайдера (где применимо) и модели. Каждая модель в пикере — с бейджем класса (Бюджет/Стандарт/Премиум…) и краткой подписью + ценой за операцию (см. §3.1a). Для генерации пикер провайдера: fal.ai / OpenAI (напрямую) / Gemini (напрямую); список моделей зависит от выбранного провайдера.
-3. Опции: формат вывода (PNG/JPEG/WebP), «копировать результат в буфер автоматически» (off), лимит размера входа (дефолт 25 MP / 20 MB — даунскейл с предупреждением).
-4. Счётчик расходов за сессию/месяц (сумма `costUSD`, локально в UserDefaults).
+The tab's contents:
+1. The fal.ai key (masked, with a link to get one).
+2. Per-function sections: Upscale / Background / Objects / Generation — each with a provider picker (where applicable) and a model picker. Every model in the picker carries its class badge (Budget/Standard/Premium…) plus a short caption and the price per operation (see §3.1a). For generation the provider picker offers: fal.ai / OpenAI (direct) / Gemini (direct); the model list depends on the chosen provider.
+3. Options: output format (PNG/JPEG/WebP), "copy the result to the clipboard automatically" (off), the input size limit (default 25 MP / 20 MB — downscale with a warning).
+4. A spend counter for the session/month (the sum of `costUSD`, kept locally in UserDefaults).
 
-## 5. Архитектура кода
+## 5. Code architecture
 
 ```
 Addons/ImageAddon/
-├── ImageAddon.swift              // singleton, start(), регистрация в UI-хуках
+├── ImageAddon.swift              // singleton, start(), registration in the UI hooks
 ├── ImageAddonSettings.swift      // ObservableObject, UserDefaults "imageAddon.*"
-├── ImageAddonSettingsView.swift  // вкладка настроек + EnableToggle
+├── ImageAddonSettingsView.swift  // the settings tab + EnableToggle
 ├── ImageAddonLocalization.swift  // IAL("key"), EN/ES/RU
 ├── Core/
-│   ├── ImageOperationProvider.swift  // протокол + модели запросов/ответов
-│   ├── ImageTaskRunner.swift         // очередь задач, статусы, отмена, cost-учёт
+│   ├── ImageOperationProvider.swift  // the protocol + request/response models
+│   ├── ImageTaskRunner.swift         // the task queue, statuses, cancellation, cost tracking
 │   └── ImageAddonError.swift
 ├── Providers/
-│   ├── FalProvider.swift             // queue.fal.run клиент + каталог моделей
+│   ├── FalProvider.swift             // the queue.fal.run client + the model catalog
 │   ├── OpenAIImageProvider.swift     // P2
 │   └── GeminiImageProvider.swift     // P2
 └── Views/
-    ├── AttachmentActionsBar.swift    // кнопки над превью аттача
-    ├── MaskEditorView.swift          // кисть/маска для cleanup
+    ├── AttachmentActionsBar.swift    // the buttons above the attachment preview
+    ├── MaskEditorView.swift          // the brush/mask for cleanup
     └── GenerationModeView.swift      // P2
 ```
 
-Хуки в хост (минимум, по образцу LayoutFix):
+Hooks into the host (kept minimal, modelled on LayoutFix):
 1. `CuateApp.applicationDidFinishLaunching` → `ImageAddon.shared.start()`.
-2. `SettingsView.swift` → `case imageAddon` + вкладка + toggle в General.
-3. `ChatWindow.swift` → `AttachmentActionsBar` под `PendingAttachmentPreview`; drag&drop/⌘V/кнопка «Прикрепить» (эти три полезны и вне аддона — оформить как доработку хоста).
+2. `SettingsView.swift` → `case imageAddon` + the tab + a toggle in General.
+3. `ChatWindow.swift` → `AttachmentActionsBar` under `PendingAttachmentPreview`; drag & drop/⌘V/the "Attach" button (these three are useful outside the addon too — treat them as host work).
 4. `APIKeyStore.swift` → `AuxKey.fal`.
 
-Каталог моделей fal — статический в `FalProvider.swift` (id эндпоинта, имя, функция, цена, параметры), обновляется релизами приложения.
+The fal model catalog is static, in `FalProvider.swift` (endpoint id, name, function, price, parameters), and updated with app releases.
 
-## 6. Обработка ошибок и крайние случаи
+## 6. Error handling and edge cases
 
-| Случай | Поведение |
+| Case | Behavior |
 |---|---|
-| Нет ключа fal | Кнопки действий видны, клик → тултип со ссылкой на настройки |
-| Контент-фильтр провайдера | Сообщение «Модель отклонила изображение» + совет сменить модель (Seedream мягче) |
-| Вход > лимита | Автодаунскейл до 25 MP с плашкой-предупреждением |
-| HEIC/TIFF вход | Конверсия в PNG локально (ImageIO) перед отправкой |
-| Таймаут/5xx | 1 автоповтор, затем ошибка с кнопкой «Повторить» |
-| Панель закрылась во время обработки | Задача продолжается в фоне; результат появится в чате при следующем открытии (persist через `ChatStore`) |
-| Большой результат в chat.json | Результаты > 8 MB писать в `Application Support/Cuate/images/`, в `ChatAttachment` — файловая ссылка (расширение модели: опциональное поле `fileURL`) |
+| No fal key | The action buttons stay visible; a click shows a tooltip linking to settings |
+| The provider's content filter | The message "The model rejected the image" + advice to switch models (Seedream is more lenient) |
+| Input over the limit | Auto-downscale to 25 MP with a warning banner |
+| HEIC/TIFF input | Converted to PNG locally (ImageIO) before sending |
+| Timeout/5xx | 1 auto-retry, then an error with a "Retry" button |
+| The panel closed mid-processing | The task continues in the background; the result appears in the chat on the next open (persisted through `ChatStore`) |
+| A large result in chat.json | Results over 8 MB are written to `Application Support/Cuate/images/`, and `ChatAttachment` holds a file reference (a model extension: an optional `fileURL` field) |
 
-## 7. Нефункциональные требования
+## 7. Non-functional requirements
 
-- Локализация EN/ES/RU с первого релиза (паттерн `IAL`).
-- Логирование через `Diagnostics.log("ImageAddon", …)`: старт/финиш операции, модель, длительность, размер, стоимость; без содержимого изображений.
-- Никакой телеметрии наружу.
-- Латентность UI: панель не блокируется, все вызовы async, отмена — cancel запроса.
+- EN/ES/RU localization from the first release (the `IAL` pattern).
+- Logging through `Diagnostics.log("ImageAddon", …)`: operation start/finish, model, duration, size, cost; never image content.
+- No telemetry leaves the machine.
+- UI latency: the panel never blocks, every call is async, and cancelling cancels the request.
 
-## 8. Этапность и приёмка
+## 8. Stages and acceptance
 
-**Этап 1 — инфраструктура:** папка аддона, настройки, вкладка, ключ fal, `FalProvider` + один вызов (апскейл Recraft Crisp), attach-кнопка/DnD/⌘V.
-✔ Приёмка: прикрепил PNG → «Апскейл» → результат в чате → «Сохранить» работает.
+**Stage 1 — infrastructure:** the addon folder, settings, the tab, the fal key, `FalProvider` + one call (Recraft Crisp upscale), the attach button/DnD/⌘V.
+✔ Acceptance: attach a PNG → "Upscale" → the result appears in the chat → "Save" works.
 
-**Этап 2 — P1 целиком:** удаление фона, cleanup (маска + текст), выбор моделей в настройках, слэш-команды, cost-счётчик, ошибки/лимиты.
-✔ Приёмка: все три функции на реальных ключах, смена модели меняет результат, маска работает в панели без потери фокуса.
+**Stage 2 — all of P1:** background removal, cleanup (mask + text), model choice in settings, slash commands, the cost counter, errors/limits.
+✔ Acceptance: all three functions on real keys, switching the model changes the result, the mask works in the panel without losing focus.
 
-**Этап 3 — P2 генерация:** режим «Изображение», `/img`, три провайдера (fal / OpenAI direct / Gemini direct), edit с референсом.
-✔ Приёмка: генерация через каждый из трёх провайдеров своим ключом; edit прикреплённой картинки; корректные ограничения аспектов по моделям.
+**Stage 3 — P2 generation:** the "Image" mode, `/img`, three providers (fal / OpenAI direct / Gemini direct), edit with a reference.
+✔ Acceptance: generation through each of the three providers on its own key; editing an attached image; correct per-model aspect constraints.
 
-## 9. Открытые вопросы
+## 9. Open questions
 
-1. Нужна ли история операций отдельно от чата (галерея результатов)? — пока нет, чат = история.
-2. Batch-обработка нескольких файлов — вне scope v1.
-3. Локальные модели (SeedVR2/BiRefNet на Apple Silicon, без API) — потенциальный P3, в ТЗ не входит.
+1. Do we need an operation history separate from the chat (a result gallery)? — not for now, the chat is the history.
+2. Batch processing of several files — out of scope for v1.
+3. Local models (SeedVR2/BiRefNet on Apple Silicon, no API) — a potential P3, not part of this spec.

@@ -216,7 +216,7 @@ enum HermesMirrorSync {
                 let candidate = localRows[scan]
                 // Text match — OR the gateway's media placeholders against
                 // our attachment send: Hermes keeps no pixels, its transcript
-                // says "проверь еще [screenshot]" where we hold "проверь еще"
+                // says "check again [screenshot]" where we hold "check again"
                 // + the real attachment. Bracketed tokens are stripped before
                 // comparing, which covers attachment-only sends ("" left) AND
                 // text+image sends — the latter came back as a duplicate
@@ -230,7 +230,7 @@ enum HermesMirrorSync {
                     // a new one. Without containment matching the run came
                     // back as a second bubble holding the other half of the
                     // text (e2e 2026-07-27). Bounded by length so two short
-                    // "ок" turns can't claim each other.
+                    // "ok" turns can't claim each other.
                     if !isUser, !localText.isEmpty, !gwText.isEmpty,
                        min(localText.count, gwText.count) >= 40,
                        localText.contains(gwText) || gwText.contains(localText) {
@@ -298,7 +298,7 @@ enum HermesMirrorSync {
         // the user's message between them. Keep the fuller copy and move
         // the gateway identity/steps onto it when only the dropped one had
         // them. Bounded like the claim containment (≥40 chars) so short
-        // "ок"-style answers never merge.
+        // "ok"-style answers never merge.
         var healed: [ChatMessage] = []
         for row in merged {
             // Compaction summaries older builds imported as OUR bubbles:

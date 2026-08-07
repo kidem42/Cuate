@@ -245,10 +245,10 @@ struct ThemePalette {
     /// Composer send/mic button shape: nil → circle; a value → rounded square
     /// of that corner radius (Blueprint uses 6).
     var composerButtonRadius: CGFloat? = nil
-    /// Monospaced timestamps (Blueprint's mono-таймстампы).
+    /// Monospaced timestamps (Blueprint's mono timestamps).
     var timestampMono: Bool = false
     /// Reference-cross marks in the four panel corners (Blueprint's
-    /// крестики-реперы). nil → none.
+    /// registration crosses). nil → none.
     var cornerMarkColor: Color? = nil
     /// Composer top divider. nil → system `Divider`; set → a themed line
     /// (dashed for Blueprint) in this color/width/dash.
@@ -256,7 +256,7 @@ struct ThemePalette {
     /// Panel border override. nil → accent @0.3 hairline; set → 1px in this color.
     var panelBorder: Color? = nil
     /// Blinking block caret after the composer placeholder (Terminal's signature
-    /// «мигающий курсор»). nil/false → none.
+    /// blinking cursor). nil/false → none.
     var placeholderCaret: Bool = false
     /// Neon glow cast around the whole panel (Synthwave). nil → none.
     var panelGlow: Color? = nil
@@ -323,8 +323,8 @@ struct ThemePalette {
 
     /// Attaches the semi-transparent glass-panel tint to a base palette.
     // MARK: Yule
-    // Хвоя + красный акцент + золото; гирлянда-лампочки и снег в декорациях
-    // (YuleDecorations), send — круг с золотым ободком (sendRim).
+    // Conifer + red accent + gold; garland bulbs and snow in the decorations
+    // (YuleDecorations), send — a circle with a gold rim (sendRim).
     static let yuleDark = ThemePalette(
         backgroundStyle: radial([hex(0x1c3a28), hex(0x0f2718), hex(0x071108)]),
         userFill: AnyShapeStyle(rgba(196, 60, 72, 0.50)), userText: hex(0xfff0ef),
@@ -375,8 +375,8 @@ struct ThemePalette {
     )
 
     // MARK: Aurora
-    // Полярная ночь: арктический индиго, ленты сияния (AuroraDecorations),
-    // мята #4AE3B5 → фиолет #7D6CFF; send — круг-градиент с paperplane.
+    // Polar night: arctic indigo, aurora ribbons (AuroraDecorations),
+    // mint #4AE3B5 → violet #7D6CFF; send — a gradient circle with a paperplane.
     static let auroraDark = ThemePalette(
         backgroundStyle: linearV([hex(0x050f1e), hex(0x081827), hex(0x0a2230)]),
         userFill: linear120([rgba(61, 220, 176, 0.42), rgba(125, 108, 255, 0.42)]), userText: hex(0xeafff7),
@@ -771,7 +771,7 @@ extension EnvironmentValues {
 // MARK: - Panel surface
 
 /// Fade-out mask for the background pattern (World Time's Blueprint variant A,
-/// «чистое поле»): the pattern stays at full strength on the panel's margins —
+/// "clean field"): the pattern stays at full strength on the panel's margins —
 /// the row-header column and the top bar — and fades to nothing where the data
 /// grid begins, so the 24pt drafting grid never fights the table's own lines.
 /// The two gradient rectangles are unioned (ZStack alpha compositing).
@@ -1008,7 +1008,7 @@ struct ThemeDecorations: View {
 }
 
 /// Blueprint's engineering reference crosses: a small `+` reper in each of the
-/// four panel corners (a signature detail — «крестики-реперы в углах»). Inset
+/// four panel corners (a signature detail — registration crosses in the corners). Inset
 /// matches the design spec (8pt horizontal, 6pt vertical); purely decorative.
 struct BlueprintCornerMarks: View {
     let color: Color

@@ -1,225 +1,234 @@
 # Cuate for Android
 
-Android-порт Cuate: тот же мульти-провайдерный AI-чат, но в форме обычного
-мобильного приложения (на macOS это hotkey-панель с быстрым доступом; на
-телефоне — ассистент-чат с теми же функциями).
+The Android port of Cuate: the same multi-provider AI chat, but in the shape of
+an ordinary mobile app (on macOS it is a hotkey panel for quick access; on a
+phone it is an assistant chat with the same features).
 
-## Статус: 2.2.0 — Cuate + Hermes Agent; функционально — полный порт (кроме системной диктовки)
+## Status: 2.2.0 — Cuate + Hermes Agent; functionally a complete port (except system dictation)
 
-Готовый к установке APK: `dist/Cuate-2.2.0.apk` (release, minified,
-подписан ключом из `release.keystore`; keystore и `keystore.properties`
-в git не попадают — храните их локально, они нужны для обновлений с той же
-подписью). Сборка релиза — только через `scripts/make-apk.sh` (бамп версии,
-подпись, выкладка в `dist/`).
+A ready-to-install APK: `dist/Cuate-2.2.0.apk` (release, minified, signed with
+the key from `release.keystore`; the keystore and `keystore.properties` are kept
+out of git — store them locally, they are required for updates carrying the same
+signature). Release builds go **only** through `scripts/make-apk.sh` (version
+bump, signing, publishing into `dist/`).
 
-Добавлено в 2.2 (Hermes Agent — порт десктопных 4.0–4.2):
+Added in 2.2 (Hermes Agent — a port of desktop 4.0–4.2):
 
-- **Сайдбар сессий** — дравер слева (свайп от края, гамбургер или строка роли
-  в свитчере): создание, переименование, закрепление, цвета и удаление
-  сессий, unread-точки — полный набор десктопного сайдбара.
-- **Переключатель модели и усилия в композере** — чипы над полем ввода:
-  re-lock модели сессии парой provider·model из `/api/model/options` и
-  reasoning effort (minimal…ultra) per-request через
+- **The session sidebar** — a left drawer (an edge swipe, the hamburger or the
+  role row in the switcher): creating, renaming, pinning, coloring and deleting
+  sessions, unread dots — the full set from the desktop sidebar.
+- **A model and effort switcher in the composer** — chips above the input field:
+  re-locking the session's model with a provider·model pair from
+  `/api/model/options`, and per-request reasoning effort (minimal…ultra) through
   `model_options.reasoning_effort`.
 
-- **Роль в свитчере**: подключённый self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-  появляется в меню пресетов (🪽) со своими тредами-сессиями; тред живёт как
-  обычная беседа (Room-зеркало, two-pane, оффлайн-чтение). Телефон — всегда
-  удалённый клиент: локального гейтвея и one-click setup (4.3) нет по
-  определению, в настройках вместо них SSH-блок с копи-кнопкой.
-- **Транспорт по живым фикстурам** (`hermes/HermesTransport.kt`):
-  capabilities-гейтинг, сессии CRUD + PATCH-rename, обязательный model lock
-  после создания (иначе 404 на каждый ход), транскрипт, SSE-стрим хода с
-  диспатчем по data-строке (грабли `.lines`), скиллы, тулсеты, стоп рана.
-- **Стрим хода**: дельты + авторитетный `assistant.completed` (interim-сообщения
-  клеятся пустой строкой, не заменяются), статус-пилюля инструментов,
-  `_thinking` не показывается как тулза; стоп-кнопка гасит ран и на гейтвее.
-- **Журнал шагов** — свёртываемый под ответом (tool · status · duration),
-  строится и вживую, и из транскрипта; тап по шагу лениво подгружает
-  команду/вывод/exit-код из гейтвея (drill-down 4.2).
-- **Файлы агенту**: SAF-пикер «любые файлы, по несколько» в ⋮-меню;
-  картинки уходят инлайн (OpenAI-parts, проверено фикстурами), остальные —
-  через файловый API дашборда Hermes в `~/cuate-uploads/` (свой URL+токен);
-  без настроенного дашборда — честное системное предупреждение.
-- **Файлы от агента — обратный курьер** (порт десктопной 4.4): упомянутые в
-  ответе пути скачиваются с хоста агента через тот же файловый API дашборда.
-  HTML/Markdown тихо автозагружаются в кэш и материализуются карточкой-превью
-  (свежее упоминание пути перекачивает копию — правка файла агентом видна);
-  тап по HTML открывает **системный браузер** (WebView морил CDN-страницы —
-  карты Leaflet и т.п.), Markdown — встроенное превью; прочие файлы по тапу
-  уезжают в Downloads. Пути кликабельны и прямо в тексте ответа; каталоги
-  чипами не показываются (скачивать нечего). Без дашборда — прежний фолбэк
-  «тап = копия пути». ⋮ → «Файлы этого чата» собирает все пути беседы +
-  группу «Отправленные вами».
-- **Закреплённые сообщения** (все чаты, десктопная механика 1:1): пин по
-  долгому тапу, бар со сниппетом и k/n, тап ведёт к показанному пину и лишь
-  затем циклит, ✕ открепляет; порядок — порядок закрепления; пины вне окна
-  сами подгружаются.
-- **Сессии**: названия из первого сообщения (и на гейтвее), список зеркалится
-  (включая созданные из Telegram/CLI), unread-точки на тредах с внешней
-  активностью, ватермарка `hermesSyncedSeq` исключает дубли собственных ходов.
-  Открытие шторки сверяет список с гейтвеем: сессии, удалённые с другой
-  поверхности (десктоп, CLI), исчезают и здесь; открытый тред всегда
-  приземляется на последнее сообщение.
-- **Модель сессии и уровень размышлений** — в ⋮-меню топбара (вложенные
-  страницы с текущим значением), а не чипами под композером: строка у
-  клавиатуры больше не съедает экран.
-- **Уведомления**: баннер о завершении рана, когда приложение свёрнуто или
-  открыт другой тред (канал «Agent», разрешение запрашивается при первом
-  входе в роль).
-- `/`-автокомплит скиллов агента с описаниями; ключи — в Android Keystore;
-  Room-миграция 3→4 (история сохраняется).
+- **A role in the switcher**: a connected self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+  appears in the presets menu (🪽) with its own session threads; a thread behaves
+  like an ordinary conversation (a Room mirror, two-pane, offline reading). The
+  phone is always a remote client: a local gateway and one-click setup (4.3) are
+  impossible by definition, and settings offer an SSH block with a copy button
+  instead.
+- **A transport built from live fixtures** (`hermes/HermesTransport.kt`):
+  capability gating, session CRUD + PATCH rename, the mandatory model lock after
+  creation (without it every turn 404s), the transcript, the SSE turn stream
+  dispatched on the data line (the `.lines` trap), skills, toolsets, run stop.
+- **The turn stream**: deltas + the authoritative `assistant.completed` (interim
+  messages are glued with a blank line, not replaced), a tool status pill, and
+  `_thinking` is never shown as a tool; the stop button kills the run on the
+  gateway too.
+- **The step log** — collapsible under the reply (tool · status · duration),
+  built both live and from the transcript; tapping a step lazily loads the
+  command/output/exit code from the gateway (the 4.2 drill-down).
+- **Files to the agent**: a SAF picker for "any files, several at a time" in the
+  ⋮ menu; images go inline (OpenAI parts, verified against the fixtures), and
+  everything else goes through the Hermes dashboard's file API into
+  `~/cuate-uploads/` (its own URL + token); with no dashboard configured there is
+  an honest system warning.
+- **Files from the agent — the reverse courier** (a port of desktop 4.4): paths
+  mentioned in a reply are downloaded from the agent's host through the same
+  dashboard file API. HTML/Markdown are quietly auto-fetched into the cache and
+  materialize as a preview card (a fresh mention of the path re-downloads the
+  copy, so an edit by the agent is visible); tapping HTML opens the **system
+  browser** (WebView starved CDN-backed pages — Leaflet maps and the like), and
+  Markdown gets the built-in preview; other files are sent to Downloads on tap.
+  The paths are clickable right in the reply text; directories are not shown as
+  chips (there is nothing to download). Without a dashboard the old fallback
+  applies: "tap = copy the path". ⋮ → "Files in this chat" collects every path in
+  the conversation plus a "Sent by you" group.
+- **Pinned messages** (all chats, the desktop mechanics 1:1): pin by long tap, a
+  bar with a snippet and k/n, a tap goes to the pin being shown and only then
+  cycles, ✕ unpins; the order is the order of pinning; pins outside the window
+  load themselves.
+- **Sessions**: titles from the first message (on the gateway too), the list is
+  mirrored (including sessions created from Telegram/CLI), unread dots on threads
+  with external activity, and the `hermesSyncedSeq` watermark keeps our own turns
+  from duplicating. Opening the drawer reconciles the list with the gateway:
+  sessions deleted from another surface (desktop, CLI) disappear here too; an
+  opened thread always lands on the last message.
+- **The session's model and reasoning level** — in the top bar's ⋮ menu (nested
+  pages showing the current value) rather than as chips under the composer: a row
+  by the keyboard no longer eats the screen.
+- **Notifications**: a banner when a run finishes while the app is backgrounded
+  or another thread is open (the "Agent" channel, with permission requested on
+  first entry into the role).
+- `/` autocompletion of the agent's skills with descriptions; keys live in the
+  Android Keystore; Room migration 3→4 (history is preserved).
 
-Добавлено в 2.1 (контракт движка чата — порт десктопной 3.20):
+Added in 2.1 (the chat engine contract — a port of desktop 3.20):
 
-- **Pin-to-bottom как инвариант** — лента следует за стримом только пока
-  читатель внизу; отскролл вверх во время ответа больше не утаскивает вниз
-  на каждый чанк, вернуться помогает кнопка «к последнему». Собственное
-  сообщение по-прежнему прыгает вниз всегда.
-- **Инкрементальный markdown** — у стримящегося ответа заново парсится
-  только живой хвост (текущий абзац/открытый fence), стабильный префикс
-  кэшируется по границам блоков; блоки скипаются в рекомпозиции по
-  value-равенству. Флаш чанков ускорен со ~8 до 30 Гц — длинные ответы
-  больше не тяжелеют по мере роста.
-- **Бюджет тулз в настройках** (1–12, секция веб-поиска) — сколько раундов
-  инструментов может потратить один ответ. При исчерпании модель получает
-  budget notice вместо тихого обрыва и обязана написать финальный ответ из
-  собранного (конец «(empty reply)»).
-- **Continuation rounds** — модель может закончить раунд маркером
-  `<continue/>` и получить ещё до 3 рабочих раундов со свежим бюджетом;
-  ответ продолжает расти в том же пузыре, скрытый «Continue.» уходит только
-  в запрос.
+- **Pin-to-bottom as an invariant** — the feed follows the stream only while the
+  reader is at the bottom; scrolling up during a reply no longer drags you back
+  down on every chunk, and a "to the latest" button brings you back. Your own
+  message still always jumps to the bottom.
+- **Incremental markdown** — for a streaming reply only the live tail is
+  re-parsed (the current paragraph / an open fence), while the stable prefix is
+  cached on block boundaries; blocks are skipped in recomposition by value
+  equality. The chunk flush was sped up from ~8 to 30 Hz — long replies no longer
+  get heavier as they grow.
+- **A tool budget in settings** (1–12, the web-search section) — how many tool
+  rounds a single reply may spend. On exhaustion the model gets a budget notice
+  instead of a silent cutoff and must write a final answer from what it gathered
+  (the end of "(empty reply)").
+- **Continuation rounds** — the model can end a round with a `<continue/>` marker
+  and get up to 3 more working rounds with a fresh budget; the reply keeps
+  growing in the same bubble, and the hidden "Continue." only goes into the
+  request.
 
-Добавлено в 2.0.0:
+Added in 2.0.0:
 
-- **Ребрендинг AISpotlight → Cuate** вслед за десктопом (3.21). Меняется
-  только видимое: имя приложения, тема, monochrome-иконка и значок Quick
-  Settings — теперь фирменный знак Cuate. Технические идентификаторы
-  (`applicationId com.aispotlight.android`, alias Keystore, имя базы Room)
-  **намеренно сохранены**: их смена оборвала бы цепочку обновлений и
-  потеряла бы ключи и историю чатов существующих установок. Обновление
-  ставится поверх, все данные наследуются, переустановка не нужна.
+- **The AISpotlight → Cuate rebrand**, following the desktop (3.21). Only what is
+  visible changes: the app name, the theme, the monochrome icon and the Quick
+  Settings glyph — now the Cuate brand mark. The technical identifiers
+  (`applicationId com.aispotlight.android`, the Keystore alias, the Room database
+  name) are **deliberately preserved**: changing them would break the update
+  chain and lose the keys and chat history of existing installs. The update
+  installs over the old one, all data is inherited, and no reinstall is needed.
 
-Добавлено в 1.8.x:
+Added in 1.8.x:
 
-- **web_fetch** — бесключевое чтение веб-страниц моделью (порт маковского
-  тула): модель запрашивает URL, страница скачивается на устройстве и
-  возвращается читаемым текстом. Работает с любым провайдером и без
-  Brave-ключа (тогда модель получает только web_fetch, без поиска);
-  приватные/локальные адреса заблокированы.
-- **Share-targets расширены** — в приложение теперь шарятся не только тексты:
-  изображения (включая несколько сразу, `SEND_MULTIPLE`) становятся
-  вложениями, аудио (голосовые из WhatsApp/Telegram) транскрибируется в поле
-  ввода.
-- **Запись в Opus** — диктовка и голосовые пишутся в OGG/Opus 48 кГц на
-  Android 10+ (меньше файл — быстрее STT), с фолбэком на m4a на старых
-  системах.
-- **Пилюля транскрипции** — на время распознавания длинного голосового в чате
-  виден статус (порт маковского фикса: без индикатора сообщение «пропадало»).
-- **ImageAlpha** — обращение с прозрачностью как на маке: прозрачный вход
-  флэттенится на белый перед fal-обработкой (модели игнорируют альфу и видят
-  исходный фон под маской), у результата удаления фона затирается RGB под
-  прозрачностью (утечка исходника в файле), апскейл вырезки восстанавливает
-  её прозрачность локально по исходной альфа-маске.
+- **web_fetch** — keyless web-page reading for the model (a port of the Mac
+  tool): the model requests a URL, the page is downloaded on the device and
+  returned as readable text. It works with any provider and without a Brave key
+  (in which case the model only gets web_fetch, no search); private/local
+  addresses are blocked.
+- **Extended share targets** — it is no longer only text that can be shared into
+  the app: images (including several at once, `SEND_MULTIPLE`) become
+  attachments, and audio (voice messages from WhatsApp/Telegram) is transcribed
+  into the input field.
+- **Recording in Opus** — dictation and voice messages are recorded as OGG/Opus
+  48 kHz on Android 10+ (a smaller file means faster STT), with a fallback to m4a
+  on older systems.
+- **The transcription pill** — while a long voice message is being recognized the
+  status is visible in the chat (a port of the Mac fix: without an indicator the
+  message seemed to "vanish").
+- **ImageAlpha** — transparency handled as on the Mac: a transparent input is
+  flattened onto white before fal processing (the models ignore alpha and see the
+  original background under the mask), a background-removal result gets the RGB
+  under the transparency wiped (the original leaks in the file otherwise), and
+  upscaling a cutout restores its transparency locally from the original alpha
+  mask.
 
-Добавлено в 1.6.x–1.7.0:
+Added in 1.6.x–1.7.0:
 
-- **Учёт расходов** — порт macOS-версии целиком: перехват usage у всех
-  провайдеров, прайсинг-каталог, спенд-леджер (Room-миграция 2→3, история
-  чатов сохраняется), экран Costs с Canvas-графиками по дням и мягкий
-  месячный бюджет; адаптивно для планшетов/раскладных.
-- **Голосовые сообщения, UX** — перемотка тапом/драгом по волне (живая
-  заливка, таймкод позиции); один общий транспорт на чат: старт нового
-  сообщения останавливает и перематывает предыдущее, автопереход к следующему
-  голосовому; транскрипт складывается под плеер (тумблер Show/Hide text) и
-  доступен во время синтеза и после сбоя TTS; ответы на голосовые вопросы
-  помечаются VOICE с первого токена — пульсирующий силуэт плеера вместо
-  стримящегося текста.
+- **Spend tracking** — the macOS version ported whole: usage capture on every
+  provider, the pricing catalog, the spend ledger (Room migration 2→3, chat
+  history preserved), a Costs screen with Canvas charts by day and a soft monthly
+  budget; adaptive for tablets/foldables.
+- **Voice messages, UX** — seeking by tap/drag on the waveform (a live fill, a
+  position timecode); one shared transport per chat: starting a new message stops
+  and rewinds the previous one, with auto-advance to the next voice message; the
+  transcript folds under the player (a Show/Hide text toggle) and is available
+  during synthesis and after a TTS failure; replies to voice questions are marked
+  VOICE from the first token — a pulsing player silhouette instead of streaming
+  text.
 
-Добавлено в 1.1.0 к базовому чату:
+Added in 1.1.0 on top of the basic chat:
 
-- **Темы** — 8 тем: Material You (dynamic) + Blueprint, Terminal, Synthwave,
-  Sakura, Pastel, Halloween, Día de Muertos (light/dark палитры, фоновые
-  градиенты, сетка/сканлайны, градиентные баблы и send-кнопка, моноширинный
-  Terminal); режим внешнего вида System/Light/Dark; **праздничное
-  автопереключение** (31 окт → Halloween, 1–2 ноя → Día de Muertos, с
-  запоминанием и возвратом темы — порт HolidayThemeManager).
-- **Image tools (fal.ai)** — долгое нажатие на изображение в чате: апскейл
-  (Recraft Crisp), удаление фона (Bria RMBG-2.0), удаление объекта по
-  текстовому описанию (Object Removal); Queue API submit→poll→fetch; результат
-  падает в чат отдельной карточкой; «Сохранить в галерею» для любого
-  изображения.
-- **Голосовые сообщения** — как на маке: запись → транскрипция → сообщение в
-  чате с плеером (аудио хранится) и транскриптом, уходящим модели.
-- **Переключатель пресетов** в топ-баре чата (эмодзи активного пресета).
-- **Quick Settings tile** — плитка в шторке открывает ассистента (аналог
-  глобального хоткея).
-- **Max tokens** в настройках.
+- **Themes** — 8 themes: Material You (dynamic) + Blueprint, Terminal, Synthwave,
+  Sakura, Pastel, Halloween, Día de Muertos (light/dark palettes, background
+  gradients, grid/scanlines, gradient bubbles and send button, a monospaced
+  Terminal); a System/Light/Dark appearance mode; **holiday auto-switching**
+  (Oct 31 → Halloween, Nov 1–2 → Día de Muertos, remembering and restoring the
+  theme — a port of HolidayThemeManager).
+- **Image tools (fal.ai)** — a long press on an image in the chat: upscale
+  (Recraft Crisp), background removal (Bria RMBG-2.0), object removal by text
+  description (Object Removal); Queue API submit→poll→fetch; the result drops
+  into the chat as its own card; "Save to gallery" for any image.
+- **Voice messages** — as on the Mac: record → transcribe → a chat message with a
+  player (the audio is stored) and a transcript that goes to the model.
+- **A preset switcher** in the chat's top bar (the active preset's emoji).
+- **A Quick Settings tile** — the tile in the shade opens the assistant (the
+  counterpart of the global hotkey).
+- **Max tokens** in settings.
 
-Портировано с macOS-версии (`../Cuate`, Swift → Kotlin):
+Ported from the macOS version (`../Cuate`, Swift → Kotlin):
 
-- **Слой провайдеров** — Anthropic (Messages API + explicit prompt caching),
+- **The provider layer** — Anthropic (Messages API + explicit prompt caching),
   OpenAI (Responses API), Mistral / DeepSeek / OpenRouter / Kimi
-  (chat/completions), Gemini (streamGenerateContent). SSE-стриминг через OkHttp,
-  function calling, reasoning-режимы (auto/fast/deep) — порт 1:1 из
+  (chat/completions), Gemini (streamGenerateContent). SSE streaming through
+  OkHttp, function calling, reasoning modes (auto/fast/deep) — a 1:1 port of
   `Providers/*.swift`.
-- **ChatService** — агентный цикл web_search (Brave, до 4 итераций),
-  компрессия контекста (rolling summary: порог 24k токенов, script-aware
-  оценка, последние 12 сообщений verbatim, merge-style промпт), tool-context
-  grounding на последнем ответе.
-- **Хранение** — Room (беседы + сообщения, оконная загрузка по 120),
-  API-ключи в Android Keystore (AES/GCM), настройки в SharedPreferences.
-- **UI** — Jetpack Compose + Material 3 (dynamic color), Markdown-рендер
-  (код, таблицы, списки, цитаты, ссылки), стриминг с индикатором,
-  список бесед, экран настроек, пресеты системных промптов.
-- **Вложения** — галерея через системный Photo Picker (без разрешений) и
-  камера (`TakePicture` + FileProvider); изображения даунскейлятся до 2048px,
-  хранятся файлами; vision-модели получают пиксели (последнее сообщение),
-  не-vision (DeepSeek) — OCR-текст через Mistral OCR; старые вложения — кэш
-  OCR на аттачменте (ленивая экстракция, бюджет 3/ход) — 1:1 политика macOS.
-- **Голосовой ввод** — кнопка микрофона: запись (AAC/m4a) → STT (Mistral
-  Voxtral / OpenAI / Deepgram, с фолбэком на любой настроенный) → голосовое
-  сообщение в чате.
-- **Артефакты** — полные ```html-страницы и ````markdown-документы из ответа
-  показываются карточкой; открытие — живой WebView (JS включён) или рендер
-  Markdown, вкладка Code, share и сохранение в Downloads.
-- **Раскладные / планшеты** — при ширине окна ≥ 600dp список бесед
-  закрепляется слева от чата (two-pane); на сложенном экране — одна панель.
-- **Системная интеграция** — Share-target (текст из других приложений) и
-  `ACTION_PROCESS_TEXT` (пункт в меню выделения текста) → текст попадает
-  в поле ввода как цитата (аналог selection capture на macOS).
-- **Локализация** — en / ru / es (по языку системы).
+- **ChatService** — the web_search agent loop (Brave, up to 4 iterations),
+  context compression (a rolling summary: a 24k-token threshold, script-aware
+  estimation, the last 12 messages verbatim, a merge-style prompt), and
+  tool-context grounding on the last reply.
+- **Storage** — Room (conversations + messages, windowed loading 120 at a time),
+  API keys in the Android Keystore (AES/GCM), settings in SharedPreferences.
+- **UI** — Jetpack Compose + Material 3 (dynamic color), Markdown rendering
+  (code, tables, lists, quotes, links), streaming with an indicator, the
+  conversation list, the settings screen, system-prompt presets.
+- **Attachments** — the gallery through the system Photo Picker (no permissions)
+  and the camera (`TakePicture` + FileProvider); images are downscaled to 2048px
+  and stored as files; vision models get the pixels (the last message), non-vision
+  ones (DeepSeek) get OCR text through Mistral OCR; older attachments carry an
+  OCR cache on the attachment (lazy extraction, a budget of 3 per turn) — the
+  macOS policy 1:1.
+- **Voice input** — the microphone button: record (AAC/m4a) → STT (Mistral
+  Voxtral / OpenAI / Deepgram, falling back to whichever is configured) → a voice
+  message in the chat.
+- **Artifacts** — complete ```html pages and ````markdown documents from a reply
+  are shown as a card; opening gives a live WebView (JS enabled) or rendered
+  Markdown, a Code tab, share, and saving to Downloads.
+- **Foldables / tablets** — at a window width ≥ 600dp the conversation list is
+  pinned to the left of the chat (two-pane); on a folded screen there is a single
+  pane.
+- **System integration** — a share target (text from other apps) and
+  `ACTION_PROCESS_TEXT` (an entry in the text-selection menu) → the text lands in
+  the input field as a quote (the counterpart of selection capture on macOS).
+- **Localization** — en / ru / es (following the system language).
 
-## Дальше (запланировано)
+## What's next (planned)
 
-Единственное отложенное — **голосовая IME-клавиатура**: системная диктовка в
-любое приложение + перевод на лету (порт DictationService; на Android это
-InputMethodService c `commitText()` вместо синтеза ⌘V).
+The only thing deferred is the **voice IME keyboard**: system dictation into any
+app plus on-the-fly translation (a port of DictationService; on Android that is
+an InputMethodService with `commitText()` instead of synthesizing ⌘V).
 
-## Сборка
+## Building
 
-Требуется Android SDK (compileSdk 36) и JDK 17+ (подойдёт JBR из Android Studio):
+Requires the Android SDK (compileSdk 36) and JDK 17+ (the JBR from Android Studio
+will do):
 
 ```bash
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`. Либо открыть папку `android/`
-в Android Studio.
+The APK: `app/build/outputs/apk/debug/app-debug.apk`. Or open the `android/`
+folder in Android Studio.
 
-Релизный APK собирается **только** через `scripts/make-apk.sh` — скрипт бампит
-версию, подписывает ключом из `release.keystore` и кладёт результат в `dist/`.
+The release APK is built **only** through `scripts/make-apk.sh` — the script
+bumps the version, signs with the key from `release.keystore` and puts the result
+into `dist/`.
 
-## Структура
+## Structure
 
 ```text
 app/src/main/kotlin/com/aispotlight/android/
-  core/        ProviderCore: типы, LLMProvider, HttpClient (SSE)   ← ProviderCore.swift
-  providers/   Anthropic, OpenAICompatible, Gemini, Brave, Registry ← Providers/*.swift
-  chat/        ChatService (агентный цикл, компрессия), ChatViewModel ← ChatService.swift
-  data/        Room (Db, ChatModels)                                ← ChatModels/ChatPersistence.swift
-  settings/    AppSettings, ApiKeyStore (Keystore), Presets         ← AppSettings/APIKeyStore.swift
+  core/        ProviderCore: types, LLMProvider, HttpClient (SSE)     ← ProviderCore.swift
+  providers/   Anthropic, OpenAICompatible, Gemini, Brave, Registry   ← Providers/*.swift
+  chat/        ChatService (agent loop, compression), ChatViewModel   ← ChatService.swift
+  data/        Room (Db, ChatModels)                                  ← ChatModels/ChatPersistence.swift
+  settings/    AppSettings, ApiKeyStore (Keystore), Presets           ← AppSettings/APIKeyStore.swift
   ui/          MainActivity (adaptive), ChatScreen, Markdown, Settings ← Views/*.swift
 ```
 
-Лицензия: AGPL-3.0 (см. `../LICENSE`).
+License: AGPL-3.0 (see `../LICENSE`).

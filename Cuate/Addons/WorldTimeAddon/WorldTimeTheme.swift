@@ -6,8 +6,8 @@ import SwiftUI
 /// tokens: its palette is about message bubbles, while the grid encodes
 /// DATA in color (night vs working hours), so each theme expresses the day
 /// with its own pair of poles here. Values are 1:1 with the approved
-/// mockups (World Time × Темы, вариант C: дефолты + ручные переопределения
-/// для полярных тем; Blueprint — вариант A «чистое поле»).
+/// mockups (World Time × Themes, variant C: defaults + manual overrides
+/// for the polar themes; Blueprint — variant A "clean field").
 ///
 /// The `current` (Liquid Glass) tokens reproduce the panel's original
 /// hardcoded colors exactly — the glass look stays untouched.
@@ -288,8 +288,8 @@ struct WorldTimeTheme {
             )
 
         case .yule:
-            // Хвойная ночь, золотые плечи, работа — тёплый снег; выделение
-            // золотом со свечением (тёмная) / красным (светлая).
+            // Conifer night, golden shoulders, working hours — warm snow;
+            // selection in glowing gold (dark) / red (light).
             return dark ? WorldTimeTheme(
                 midnight: wrgba(10, 32, 21, 0.95), night: wrgba(38, 96, 62, 0.60),
                 shoulder: wrgba(242, 193, 78, 0.20), work: wrgba(255, 248, 235, 0.24),
@@ -318,8 +318,8 @@ struct WorldTimeTheme {
             )
 
         case .aurora:
-            // Полярная ночь: индиго-ночь, мятные плечи сияния, ледяной день;
-            // выделение мятой со свечением.
+            // Polar night: indigo night, mint aurora shoulders, icy day;
+            // selection in glowing mint.
             return dark ? WorldTimeTheme(
                 midnight: wrgba(6, 14, 32, 0.95), night: wrgba(70, 88, 200, 0.50),
                 shoulder: wrgba(74, 227, 181, 0.18), work: wrgba(222, 244, 255, 0.22),

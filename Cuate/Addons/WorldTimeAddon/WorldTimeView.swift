@@ -72,8 +72,8 @@ struct WorldTimeView: View {
                 // The measured block: everything with intrinsic height. Its
                 // ideal height drives the window's auto-fit (AppDelegate).
                 VStack(spacing: 10) {
-                    // Дата-стрип живёт в одном ряду с поиском (правый край
-                    // ряда — календарные контролы, ссылки и шестерёнка).
+                    // The date strip shares a row with the search field (the
+                    // row's right edge holds the calendar controls, links and gear).
                     topBar
                     if !busyBlocks.isEmpty {
                         busyLane
@@ -104,10 +104,10 @@ struct WorldTimeView: View {
             .frame(minWidth: 1000)
             // Same surface stack as the chat panel (glass stays resident on
             // macOS 26 — never branch around it). Decorations run in their
-            // calmer .worldTime variant (мокап: у Yule/Aurora/Café панель
-            // времени несёт свои элементы у краёв; старые праздничные темы
-            // держат доску чистой). Blueprint's grid fades out
-            // where the data field begins (variant A «чистое поле»): full on
+            // calmer .worldTime variant (mockup: on Yule/Aurora/Café the time
+            // panel carries its own elements along the edges; the older
+            // holiday themes keep the board clean). Blueprint's grid fades out
+            // where the data field begins (variant A "clean field"): full on
             // the row-header column and the top bar, gone over the hours.
             .themedPanelSurface(palette, cornerRadius: 18,
                                 decorationContext: .worldTime,

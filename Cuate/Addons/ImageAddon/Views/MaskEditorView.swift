@@ -3,9 +3,9 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Inline object-cleanup editor shown inside the panel (ТЗ §4.2): paint a
+/// Inline object-cleanup editor shown inside the panel (spec §4.2): paint a
 /// mask with a brush (slider 10–100 px, undo, reset) OR describe the object
-/// in text. «Применить» hands the mask/prompt back to the caller.
+/// in text. "Apply" hands the mask/prompt back to the caller.
 struct MaskEditorView: View {
     let attachment: ChatAttachment
     /// Called with the mask (white = remove, image resolution) — brush mode.
@@ -24,7 +24,7 @@ struct MaskEditorView: View {
     @State private var mode: Mode = .brush
     @State private var strokes: [Stroke] = []
     @State private var currentStroke: Stroke?
-    @State private var brushSize: Double = 40 // ТЗ §4.4a: 10–100, дефолт 40
+    @State private var brushSize: Double = 40 // spec §4.4a: 10–100, default 40
     @State private var promptText = ""
 
     private var image: NSImage? {
@@ -208,7 +208,7 @@ struct MaskEditorView: View {
         )
     }
 
-    /// Brush size is specified in IMAGE pixels (ТЗ) — convert to view points.
+    /// Brush size is specified in IMAGE pixels (spec) — convert to view points.
     private func displayRadius(fitted: CGRect, imageSize: CGSize) -> CGFloat {
         guard imageSize.width > 0, fitted.width > 0 else { return brushSize / 2 }
         let scale = fitted.width / imageSize.width

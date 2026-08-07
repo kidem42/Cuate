@@ -1,149 +1,167 @@
-# PlaudAddon — интеграция диктофона Plaud (выпущено в 4.5)
+# PlaudAddon — Plaud voice-recorder integration (shipped in 4.5)
 
-Аддон подключает личный аккаунт Plaud: модель в любом чате находит записи
-встреч, читает AI-саммари по вкладкам и полные транскрипты; записи появляются
-под ответами как чипы с полноценным превью (вкладки + транскрипт + аудио).
-Работает с любым провайдером — тулзы исполняются на стороне приложения.
+The addon connects a personal Plaud account: in any chat the model can find
+meeting recordings, read the AI summary tabs and the full transcripts;
+recordings appear under the replies as chips with a full preview (tabs +
+transcript + audio). It works with any provider — the tools execute on the
+app's side.
 
-## Протокол (проверено на живом аккаунте, 2026-07-28)
+## The protocol (verified against a live account, 2026-07-28)
 
-Официальный пакет `@plaud-ai/mcp` — НЕ MCP-прокси, а тонкий REST-клиент.
-Мы повторяем его напрямую на Swift, без Node:
+The official `@plaud-ai/mcp` package is NOT an MCP proxy but a thin REST
+client. We reproduce it directly in Swift, without Node:
 
 - **API**: `https://platform.plaud.ai/developer/api`
-  - `GET /open/third-party/users/current` — профиль
-  - `POST /open/third-party/users/current/revoke` — отзыв доступа
-  - `GET /open/third-party/files/?page=&page_size=` — список записей
-  - `GET /open/third-party/files/{id}` — запись целиком
+  - `GET /open/third-party/users/current` — the profile
+  - `POST /open/third-party/users/current/revoke` — revoke access
+  - `GET /open/third-party/files/?page=&page_size=` — the recording list
+  - `GET /open/third-party/files/{id}` — a whole recording
 - **OAuth** (authorization code + PKCE S256):
-  - авторизация: `https://web.plaud.ai/platform/oauth`
-  - обмен/рефреш: `platform.plaud.ai/developer/api/oauth/third-party/access-token[/refresh]`
-  - публичный `client_id` (`client_9c50…`), пустой secret (Basic `id:`)
-  - redirect **строго** `http://localhost:8199/auth/callback` — порт зашит в
-    регистрацию клиента; наш одноразовый NWListener слушает только loopback
-- **Токены** — в Keychain (`APIKeyStore.AuxKey.plaud`, один JSON-блоб),
-  авторефреш за 60 с до истечения + один ретрай на 401.
+  - authorization: `https://web.plaud.ai/platform/oauth`
+  - exchange/refresh: `platform.plaud.ai/developer/api/oauth/third-party/access-token[/refresh]`
+  - a public `client_id` (`client_9c50…`), an empty secret (Basic `id:`)
+  - the redirect is **strictly** `http://localhost:8199/auth/callback` — the port
+    is baked into the client registration; our one-shot NWListener listens on
+    loopback only
+- **Tokens** — in the Keychain (`APIKeyStore.AuxKey.plaud`, one JSON blob),
+  auto-refreshed 60 s before expiry + one retry on a 401.
 
-### Жизнь сессии (разобрано 2026-08-05)
+### Session lifetime (worked out 2026-08-05)
 
-Refresh-токен Plaud живёт примерно ту же неделю, что и access: аккаунт,
-подключённый 07-28 16:20, на 08-05 08:49 получил на рефреш **401** — грант
-мёртв, вернуть нельзя ничем, кроме нового входа в браузере.
+A Plaud refresh token lives roughly the same week the access token does: an
+account connected on 07-28 16:20 got a **401** on refresh by 08-05 08:49 — the
+grant was dead, and nothing but a new browser sign-in can bring it back.
 
-- **Классификация отказа рефреша** (как в `@plaud-ai/mcp`): `5xx` — их авария,
-  токены НЕ трогаем (`.transient`); любой другой не-200 — `invalid_grant`,
-  `PlaudClient.invalidateSession()` стирает блоб и дёргает
-  `PlaudAddon.handleSessionExpired()`. Сетевой сбой — тоже `.transient`.
-  Ветвиться только по `PlaudError.kind`, никогда по тексту сообщения.
-- **Индикатор**: `isConnected` = «в Keychain лежит блоб», это НЕ живая сессия.
-  Правду говорит `PlaudAddon.verifyConnection()` — один вызов профиля, который
-  вызывается при открытии вкладки настроек (`.task`). До 4.7 галочка горела
-  зелёным над мёртвым грантом бесконечно, а тулзы молча падали каждый ход.
-- **Переподключение**: `PlaudSettings.needsReauth` (персистится) переключает
-  карточку аккаунта на «Сессия истекла → Переподключить» с именем аккаунта —
-  вместо нейтрального «не подключено», которого юзер не просил.
-- **Профилактика**: `PlaudAddon.startSessionUpkeep()` (из
-  `applicationDidFinishLaunching`) крутит пару токенов при старте и раз в 6 ч,
-  если до истечения access осталось меньше суток. Пока Мак включают хотя бы
-  раз в неделю, сессия не умирает; неделя простоя всё равно убивает грант —
-  тогда работает честный UI выше.
-- **Модели** отказ приходит директивой (`PlaudToolService.sessionExpiredResult`):
-  не ретраить, сказать юзеру про переподключение в Настройках → Plaud.
+- **Classifying a refresh failure** (as `@plaud-ai/mcp` does): a `5xx` is their
+  outage, so the tokens are NOT touched (`.transient`); any other non-200 is
+  `invalid_grant`, and `PlaudClient.invalidateSession()` wipes the blob and
+  calls `PlaudAddon.handleSessionExpired()`. A network failure is `.transient`
+  too. Branch only on `PlaudError.kind`, never on the message text.
+- **The indicator**: `isConnected` means "a blob is in the Keychain", which is
+  NOT a live session. The truth comes from `PlaudAddon.verifyConnection()` — a
+  single profile call, made when the settings tab opens (`.task`). Before 4.7
+  the checkmark stayed green over a dead grant forever, while the tools failed
+  silently every turn.
+- **Reconnecting**: `PlaudSettings.needsReauth` (persisted) switches the account
+  card to "Session expired → Reconnect" with the account name — instead of the
+  neutral "not connected" the user never asked for.
+- **Prevention**: `PlaudAddon.startSessionUpkeep()` (from
+  `applicationDidFinishLaunching`) rotates the token pair at startup and every
+  6 h if less than a day of access lifetime is left. As long as the Mac is
+  switched on at least once a week the session survives; a week of downtime
+  still kills the grant — and then the honest UI above takes over.
+- **Models** receive the failure as a directive
+  (`PlaudToolService.sessionExpiredResult`): don't retry, tell the user to
+  reconnect in Settings → Plaud.
 
-### Модель данных записи
+### The recording data model
 
-- `note_list[]` — вкладки саммари: `data_type` (`auto_sum_note`, `high_light`, …),
-  `data_tab_name` ("Summary", "Highlights"), контент Markdown.
-- `source_list[]` — три блока, каждый может быть, а может и не быть (сверено с
-  `@plaud-ai/mcp@0.3.7`, 2026-08-05): `transaction` — дословный транскрипт
-  (JSON-массив сегментов `{start_time, end_time, content, speaker,
-  original_speaker}`, мс), `transaction_polish` — тот же формат, но речь
-  вычищена ИИ (короче примерно на четверть), `outline` — структурный обзор
-  (может прийти прозой, а не сегментами). Наш `PlaudSourceBlock` держит их
-  слаги, порядок вкладок и имена для модели (`verbatim`/`clean`/`outline`);
-  слаг `transaction` = `transcript` ради совместимости со старым кэшем.
-- ⚠️ **Ловушка**: пустой `data_content` ⇒ контент за `data_link` — presigned
-  S3-ссылка, живёт **~5 минут**. Правило: `content = data_content ||
-  fetch(data_link)`, фетчить в том же вызове, ссылки не хранить.
-- `presigned_url` — mp3, живёт 24 ч; S3 отдаёт Range ⇒ стриминг и перемотка.
-  ⚠️ Пустой `presigned_url` у синхронизированной записи (есть `duration` или
-  `source_list`) — временный сбой подписи на их стороне, а не «аудио нет»:
-  плеер оставляем на месте с подсказкой, следующий тап пробует снова.
-- Необработанная запись (юзер не потратил кредиты): пустые `note_list` и
-  `source_list`, нет `presigned_url`. Запустить обработку по API **нельзя** —
-  всё API read-only (спикеров назначить тоже нельзя).
-- Deep-link в веб-интерфейс: `https://web.plaud.ai/file/<id>` (формат из
-  адресной строки самого приложения Plaud).
+- `note_list[]` — the summary tabs: `data_type` (`auto_sum_note`, `high_light`, …),
+  `data_tab_name` ("Summary", "Highlights"), Markdown content.
+- `source_list[]` — three blocks, each of which may or may not be present
+  (checked against `@plaud-ai/mcp@0.3.7`, 2026-08-05): `transaction` — the
+  verbatim transcript (a JSON array of `{start_time, end_time, content, speaker,
+  original_speaker}` segments, in ms), `transaction_polish` — the same format
+  but with the speech cleaned up by AI (about a quarter shorter), `outline` — a
+  structural overview (it may arrive as prose rather than segments). Our
+  `PlaudSourceBlock` holds their slugs, the tab order and the names for the
+  model (`verbatim`/`clean`/`outline`); the `transaction` slug is `transcript`
+  for compatibility with the old cache.
+- ⚠️ **Trap**: an empty `data_content` means the content is behind `data_link` —
+  a presigned S3 URL that lives **~5 minutes**. The rule: `content =
+  data_content || fetch(data_link)`, fetched in the same call, and the links are
+  never stored.
+- `presigned_url` — an mp3, alive for 24 h; S3 serves Range, so streaming and
+  seeking work.
+  ⚠️ An empty `presigned_url` on a synced recording (it has a `duration` or a
+  `source_list`) is a temporary signing failure on their side, not "there is no
+  audio": keep the player in place with a hint, and the next tap tries again.
+- An unprocessed recording (the user hasn't spent the credits): empty
+  `note_list` and `source_list`, no `presigned_url`. Processing **cannot** be
+  started through the API — the whole API is read-only (assigning speakers isn't
+  possible either).
+- Deep link into the web interface: `https://web.plaud.ai/file/<id>` (the format
+  from the address bar of the Plaud app itself).
 
-## Архитектура (Cuate/Addons/PlaudAddon/)
+## Architecture (Cuate/Addons/PlaudAddon/)
 
-| Файл | Роль |
+| File | Role |
 |---|---|
-| `PlaudClient.swift` | actor: OAuth (PKCE, loopback-коллбэк, отмена), REST, резолв `data_link` |
-| `PlaudAddon.swift` | синглтон: connect/disconnect, `isAvailable`, deep-link |
-| `PlaudToolService.swift` | тулзы модели + чипы + промпт-хинты (паттерн CalendarToolService) |
-| `PlaudNoteCache.swift` | дисковый кэш + `PlaudFormat` (длительности, таймкоды, markdown транскрипта) |
-| `PlaudNotePreview.swift` | окно превью: вкладки, транскрипт с кликабельными таймкодами, AVPlayer + Now Playing |
-| `PlaudChipView.swift` | чип в пузыре + `PlaudBadge` (чёрный глиф на белой плашке — оригинальная ливрея) |
-| `PlaudSettings(+View)` | тумблер, Connect/Disconnect, режим «только по /plaud», карточка аккаунта |
-| `PlaudLocalization.swift` | строки `PLL()` (en/es/ru) |
+| `PlaudClient.swift` | actor: OAuth (PKCE, loopback callback, cancellation), REST, `data_link` resolution |
+| `PlaudAddon.swift` | singleton: connect/disconnect, `isAvailable`, deep link |
+| `PlaudToolService.swift` | the model's tools + chips + prompt hints (the CalendarToolService pattern) |
+| `PlaudNoteCache.swift` | disk cache + `PlaudFormat` (durations, timecodes, transcript markdown) |
+| `PlaudNotePreview.swift` | the preview window: tabs, transcript with clickable timecodes, AVPlayer + Now Playing |
+| `PlaudChipView.swift` | the chip in the bubble + `PlaudBadge` (a black glyph on a white plate — the original livery) |
+| `PlaudSettings(+View)` | the toggle, Connect/Disconnect, the "/plaud only" mode, the account card |
+| `PlaudLocalization.swift` | the `PLL()` strings (en/es/ru) |
 
-### Тулзы модели
+### The model's tools
 
-- `plaud_find(query?, date_from?, date_to?, limit?)` — серверных фильтров нет:
-  при фильтрах пагинация до 5×100 и фильтр на клиенте (как в официальном MCP).
-- `plaud_get_note(file_id, tab?)` — все вкладки (или одна), Markdown.
+- `plaud_find(query?, date_from?, date_to?, limit?)` — there are no server-side
+  filters: with filters it paginates up to 5×100 and filters on the client (as
+  the official MCP does).
+- `plaud_get_note(file_id, tab?)` — all tabs (or one), Markdown.
 - `plaud_get_transcript(file_id, version?, from_min?, to_min?)` —
-  `[MM:SS] Speaker: …`, срез по минутам, кап 60k символов. `version`:
-  `verbatim` (дефолт, дословно — для цитат и «кто именно сказал»), `clean`
-  (вычищенный ИИ, короче — для пересказов и длинных записей), `outline`.
-  Отсутствующая версия не «пустая запись»: ответ перечисляет доступные.
+  `[MM:SS] Speaker: …`, sliced by minutes, capped at 60k characters. `version`:
+  `verbatim` (the default, word for word — for quotes and "who exactly said"),
+  `clean` (AI-cleaned, shorter — for retellings and long recordings), `outline`.
+  A missing version is not an "empty recording": the answer lists what is
+  available.
 
-Промпт-хинт: сначала note, транскрипт — только если саммари не хватило;
-необработанные — отдельной строкой; найденное прикрепляется карточками —
-не дублировать сырые ID в текст. Гейт в ChatService: аддон включён + модель
-умеет тулзы + (`alwaysAvailable` ИЛИ сообщение начинается с `/plaud`).
+The prompt hint: note first, transcript only if the summary wasn't enough;
+unprocessed ones go on a separate line; what is found is attached as cards — so
+don't duplicate raw IDs into the text. The gate in ChatService: the addon is on,
+the model can do tools, and (`alwaysAvailable` OR the message starts with
+`/plaud`).
 
-### Чипы и превью
+### Chips and preview
 
-- Чип = `ChatAttachment` с метаданными **в пути файла**
-  (`PlaudNotes/<fileID>__<kind>__meta.json`; kind: note|unprocessed; старые
-  per-tab `.md`-пути первой сборки тоже распознаются) — схема SwiftData не
-  менялась. Один чип на запись за ход; `plaud_find` тоже рождает чипы (список
-  «всё по X» кликабелен без чтения заметок).
-- Доставка: тулза складывает чипы → ChatService шлёт событие
-  `.attachments([ChatAttachment])` → ChatWindow буферизует до `deliver`
-  (пузыря в момент тулзы ещё нет) с дедупом по пути.
-- Превью (`PlaudNotePreview`): открывается из кэша мгновенно + фоновый
-  live-рефреш всей записи (все вкладки + транскрипт). Транскрипт — всегда
-  первая вкладка слева; по умолчанию выбрана первая заметка-вкладка. Аудио:
-  AVPlayer со стримом с presigned URL (свежий на каждый сеанс), Now Playing
-  (медиа-клавиши, перемотка), клик по таймкоду сегмента = seek+play; стоп при
-  закрытии окна (окно retained — слушаем `willCloseNotification`, onDisappear
-  не срабатывает). Окно floating + `.canJoinAllSpaces, .fullScreenAuxiliary`.
-- Кэш: `Application Support/Cuate/PlaudNotes/` — meta JSON + `.md` на вкладку +
-  транскрипт (`.md` для людей + сырой `.json` сегментов для таймкодов).
+- A chip is a `ChatAttachment` with its metadata **in the file path**
+  (`PlaudNotes/<fileID>__<kind>__meta.json`; kind: note|unprocessed; the old
+  per-tab `.md` paths from the first build are recognized too) — the SwiftData
+  schema never changed. One chip per recording per turn; `plaud_find` produces
+  chips too (an "everything about X" list is clickable without reading the
+  notes).
+- Delivery: the tool collects the chips → ChatService sends an
+  `.attachments([ChatAttachment])` event → ChatWindow buffers until `deliver`
+  (there is no bubble yet at tool time) with dedup by path.
+- The preview (`PlaudNotePreview`): opens from cache instantly plus a background
+  live refresh of the whole recording (all tabs + transcript). The transcript is
+  always the leftmost tab; by default the first note tab is selected. Audio: an
+  AVPlayer streaming from the presigned URL (fresh for each session), Now
+  Playing (media keys, seeking), clicking a segment's timecode is seek+play;
+  playback stops when the window closes (the window is retained — we listen to
+  `willCloseNotification`, since onDisappear doesn't fire). The window is
+  floating + `.canJoinAllSpaces, .fullScreenAuxiliary`.
+- Cache: `Application Support/Cuate/PlaudNotes/` — a meta JSON + one `.md` per
+  tab + the transcript (`.md` for humans plus the raw segment `.json` for
+  timecodes).
 
-### Панель «Файлы чата» (LocalChatFilesView)
+### The "Chat files" panel (LocalChatFilesView)
 
-Кнопка-папка в хедере обычных чатов (аналог агентского CHAT FILES): документы
-модели (HTML/MD-артефакты из fences, через кэш парсера), записи Plaud, вложения
-пользователя; действия открыть / показать в Finder.
+A folder button in the header of ordinary chats (the counterpart of the agent
+CHAT FILES): the model's documents (HTML/MD artifacts from fences, via the
+parser cache), Plaud recordings, and the user's attachments; the actions are
+open / reveal in Finder.
 
-## Юридика и бренд
+## Legal and brand
 
-Путь — личный доступ пользователя к своим данным через публичный API Plaud
-(тот же механизм, что у их MCP для Claude/Cursor); формулировка «works with
-Plaud», без имплая партнёрства. Бейдж — фирменный глиф «Λ·» в оригинальной
-ливрее (чёрное на белом); глиф вырезан из вордмарка (favicon непрозрачный —
-template-рендеринг давал белый квадрат). Упоминание — THIRD-PARTY-NOTICES.md.
+The approach is the user's personal access to their own data through Plaud's
+public API (the same mechanism their MCP uses for Claude/Cursor); the wording is
+"works with Plaud", with no implied partnership. The badge is the brand "Λ·"
+glyph in the original livery (black on white); the glyph was cut out of the
+wordmark (the favicon is opaque — template rendering produced a white square).
+The attribution lives in THIRD-PARTY-NOTICES.md.
 
-## Не вошло / дальше
+## Left out / what's next
 
-- **Hermes-агент не видит Plaud**: клиентские тулзы не вставляются в агент-цикл
-  на чужом хосте. Варианты: Plaud MCP на хосте агента / перехват `/plaud`
-  локальной моделью / проброс tools через `/v1` (не проверен).
-- **Семантический поиск** — API отдаёт только substring по именам; локальный
-  индекс саммари (NLEmbedding) — отдельная фаза.
-- **Майндмэпы** — формат в API не встречался; проверить на реальной заметке.
-- Write-операции (запуск обработки, спикеры) — ждут появления write-API у Plaud.
+- **The Hermes agent can't see Plaud**: client-side tools are not injected into
+  an agent loop on someone else's host. The options: Plaud MCP on the agent's
+  host / intercepting `/plaud` with a local model / forwarding tools through
+  `/v1` (untested).
+- **Semantic search** — the API only offers a substring match on names; a local
+  summary index (NLEmbedding) is a separate phase.
+- **Mind maps** — the format has never shown up in the API; check on a real note.
+- Write operations (starting processing, speakers) — waiting for Plaud to ship a
+  write API.

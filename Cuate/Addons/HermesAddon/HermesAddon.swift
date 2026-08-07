@@ -352,7 +352,7 @@ final class HermesAddon: ObservableObject {
                 // Perf telemetry (2026-07-31): this is a FULL-transcript
                 // fetch parsed on the main actor, one per unread session per
                 // count change — with dozens of sessions and background
-                // agents it was a suspected источник просадок скролла.
+                // agents it was a suspected source of scroll stutter.
                 let elapsed = started.duration(to: .now)
                 let ms = Int(elapsed.components.seconds) * 1000
                     + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)

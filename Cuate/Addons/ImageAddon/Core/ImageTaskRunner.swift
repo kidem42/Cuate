@@ -2,9 +2,9 @@ import Foundation
 import Combine
 
 /// Single-flight executor for image operations. Owns the "is something
-/// running" state the UI observes, supports cancellation (крестик в
-/// thinking-пилюле), retries once on timeout/5xx (ТЗ §6), records spend,
-/// and logs через Diagnostics.
+/// running" state the UI observes, supports cancellation (the × on the
+/// thinking pill), retries once on timeout/5xx (spec §6), records spend,
+/// and logs through Diagnostics.
 @MainActor
 final class ImageTaskRunner: ObservableObject {
     static let shared = ImageTaskRunner()

@@ -140,7 +140,7 @@ nonisolated struct HermesTransport {
     let apiKey: String
 
     /// Loopback answers in milliseconds; a dead LAN host should fail the
-    /// probe fast, not spin a minute (§ plan: ~1.5s таймаут пробы).
+    /// probe fast, not spin a minute (§ plan: ~1.5s probe timeout).
     var requestTimeout: TimeInterval = 15
 
     private func request(_ method: String, _ path: String, body: [String: Any]? = nil) throws -> URLRequest {

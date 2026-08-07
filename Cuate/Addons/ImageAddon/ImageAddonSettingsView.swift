@@ -153,7 +153,7 @@ struct ImageAddonSettingsView: View {
         maskedKey = APIKeyStore.maskedKey(aux: .fal)
     }
 
-    // MARK: - Model pickers (ТЗ §3.1a: имя + бейдж + подпись + цена)
+    // MARK: - Model pickers (spec §3.1a: name + badge + caption + price)
 
     private func modelSection(titleKey: String, function: ImageFunction, selection: Binding<String>) -> some View {
         Section {
@@ -182,7 +182,7 @@ struct ImageAddonSettingsView: View {
         }
     }
 
-    // MARK: - Options (ТЗ §4.5)
+    // MARK: - Options (spec §4.5)
 
     private var optionsSection: some View {
         Section {
@@ -272,10 +272,10 @@ struct ImageAddonSettingsView: View {
     }
 }
 
-// MARK: - Rich model picker (ТЗ §3.1a)
+// MARK: - Rich model picker (spec §3.1a)
 
 /// Radio-style list: each row shows the model name, its class badge
-/// (Бюджет/Стандарт/…), the price, and a one-line caption — so the user
+/// (Budget/Standard/…), the price, and a one-line caption — so the user
 /// understands HOW to choose, not just what the names are.
 struct ImageModelPicker: View {
     let models: [ImageModelInfo]

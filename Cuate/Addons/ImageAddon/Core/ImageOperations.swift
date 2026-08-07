@@ -4,7 +4,7 @@ import AppKit
 
 extension Notification.Name {
     /// The addon asks the host to make an attachment pending (retry after an
-    /// error, «Продолжить редактирование»). ChatWindow observes.
+    /// error, "Continue editing"). ChatWindow observes.
     static let imageAddonAttachRequest = Notification.Name("imageAddonAttachRequest")
 }
 
@@ -18,7 +18,7 @@ enum ChatWindowBridge {
 }
 
 /// Session-scoped memory of what produced each result attachment — powers
-/// «Повторить с другой моделью» and «Продолжить редактирование» (ТЗ §4.3).
+/// "Retry with another model" and "Continue editing" (spec §4.3).
 /// Deliberately not persisted: after a relaunch the buttons just don't show.
 @MainActor
 final class ImageResultRegistry {
@@ -47,7 +47,7 @@ final class ImageResultRegistry {
 
 /// The addon's operation pipeline, shared by the actions bar, slash
 /// commands, and the result bar: post the source into the chat, normalize
-/// the input (GIF/лимиты — с плашками, прозрачность — флэттен на белый),
+/// the input (GIF/limits — with banners, transparency — flatten onto white),
 /// run, restore/sanitize the alpha channel, convert the output format,
 /// offload large results to disk, append the result, remember it in the
 /// registry, auto-copy if enabled. On failure the source attachment is
@@ -91,7 +91,7 @@ enum ImageOperations {
 
         Task { @MainActor in
             do {
-                // Input rules: GIF → первый кадр, большой вход → даунскейл.
+                // Input rules: GIF → first frame, oversized input → downscale.
                 // Off the main actor — re-encoding a multi-MB image inline
                 // froze the panel right when the progress UI should show.
                 let sourceMime = source.mimeType
@@ -116,11 +116,11 @@ enum ImageOperations {
                        maskSize != imageSize {
                         mask = ImageInputPreparer.resizeImage(maskData, to: imageSize) ?? maskData
                     }
-                    // Прозрачный вход флэттенится на белый: fal-модели альфу
-                    // игнорируют и работают с RGB — у вырезок там лежит
-                    // исходный фон (см. Alpha handling в ImageInputPreparer).
-                    // Альфа-маску запоминаем: после апскейла она вернётся на
-                    // результат.
+                    // A transparent input is flattened onto white: fal models
+                    // ignore alpha and work on RGB — for cutouts that RGB still
+                    // holds the original background (see Alpha handling in
+                    // ImageInputPreparer). The alpha mask is remembered: after
+                    // an upscale it goes back onto the result.
                     var sendData = prepared.data
                     var sendMime = prepared.mime
                     var alphaMask: Data?
@@ -156,9 +156,10 @@ enum ImageOperations {
                 var outData = result.image
                 var outMime = result.mimeType
 
-                // Результат удаления фона несёт нетронутый оригинал в RGB под
-                // прозрачностью — затираем (иначе фон утекает в сохранённый
-                // файл и «воскресает» в альфа-слепых обработчиках).
+                // A background-removal result carries the untouched original in
+                // the RGB under the transparency — wipe it (otherwise the
+                // background leaks into the saved file and "resurrects" in
+                // alpha-blind processors).
                 if function == .removeBackground {
                     let payload = outData
                     if let sanitized = await Task.detached(priority: .userInitiated, operation: {
@@ -169,9 +170,9 @@ enum ImageOperations {
                     }
                 }
 
-                // Апскейл вырезки: модели возвращают непрозрачный RGB —
-                // восстанавливаем прозрачность масштабированием исходной
-                // альфа-маски (локально, бесплатно).
+                // Upscaling a cutout: models return opaque RGB — restore the
+                // transparency by scaling the original alpha mask (locally,
+                // for free).
                 var restoredAlpha = false
                 if function == .upscale, let mask = normalized.alphaMask {
                     let payload = outData
@@ -184,8 +185,9 @@ enum ImageOperations {
                     }
                 }
 
-                // Output format: user's choice, кроме фона и восстановленной
-                // прозрачности — там всегда PNG (альфа-канал), ТЗ §4.4b.
+                // Output format: user's choice, except for background removal
+                // and restored transparency — those are always PNG (alpha
+                // channel), spec §4.4b.
                 if function != .removeBackground, !restoredAlpha {
                     (outData, outMime) = ImageInputPreparer.convert(outData, from: outMime, to: settings.outputFormat)
                 }
@@ -195,7 +197,7 @@ enum ImageOperations {
                     suffix: suffix(for: function),
                     mime: outMime
                 )
-                // Large payloads live as files, not base64 in chat.json (ТЗ §6).
+                // Large payloads live as files, not base64 in chat.json (spec §6).
                 let attachment = ImageResultStore.makeAttachment(data: outData, mime: outMime, filename: filename)
 
                 ImageResultRegistry.shared.remember(
@@ -224,8 +226,8 @@ enum ImageOperations {
                     ChatMessage(text: error.localizedDescription, isUser: false, messageType: .system),
                     to: origin
                 )
-                // «Повторить»: источник возвращается в композер — повторный
-                // запуск в один клик (плюс авто-ретрай уже внутри раннера).
+                // "Retry": the source goes back into the composer — a one-click
+                // re-run (on top of the auto-retry already inside the runner).
                 restoreAttachment(source)
             }
             // The pill belongs to the origin chat; after a switch the store's
@@ -253,11 +255,12 @@ enum ImageOperations {
     }
 
     /// Attachments put back into the composer from an already-shown chat
-    /// message («Продолжить редактирование», ретрай после ошибки/отмены).
-    /// Их бабл-источник повторно НЕ постится: картинка уже видна в чате, а
-    /// уникальный индекс вложений в сторе всё равно оставил бы второе
-    /// сообщение без вложения (пустой бабл после перезагрузки). Session-
-    /// scoped — после перезапуска карандаш просто снова пометит id.
+    /// message ("Continue editing", retry after an error/cancel).
+    /// Their source bubble is NOT posted again: the image is already visible
+    /// in the chat, and the store's unique attachment index would leave the
+    /// second message without an attachment anyway (an empty bubble after a
+    /// reload). Session-scoped — after a relaunch the pencil simply marks
+    /// the id again.
     private static var restoredIDs: Set<UUID> = []
 
     static func isRestoredFromChat(_ attachment: ChatAttachment) -> Bool {
@@ -265,15 +268,15 @@ enum ImageOperations {
     }
 
     /// Fresh identity (new id + own file) for the rare path that DOES post a
-    /// restored attachment as a new chat row (обычная отправка сообщения в
-    /// LLM с таким вложением) — иначе коллизия по уникальному индексу.
+    /// restored attachment as a new chat row (an ordinary message send to the
+    /// LLM carrying that attachment) — otherwise the unique index collides.
     static func freshCopyForPosting(_ attachment: ChatAttachment) -> ChatAttachment {
         guard let data = attachment.data else { return attachment }
         return ChatAttachment.fileBacked(data: data, mimeType: attachment.mimeType, filename: attachment.filename)
     }
 
-    /// Puts an attachment (back) into the composer — «Продолжить
-    /// редактирование» и восстановление после ошибки/отмены. No copy is
+    /// Puts an attachment (back) into the composer — "Continue editing" and
+    /// the restore after an error/cancel. No copy is
     /// made: the bytes go to the provider from memory, and the source
     /// bubble is skipped for restored attachments (see `restoredIDs`).
     static func restoreAttachment(_ attachment: ChatAttachment) {
@@ -355,8 +358,8 @@ struct ImageOperationCancelButton: View {
     }
 }
 
-/// Slash commands `/upscale [2|4|8]`, `/bg`, `/cleanup <что удалить>` —
-/// alternative to the buttons, acting on the current attachment (ТЗ §4.2).
+/// Slash commands `/upscale [2|4|8]`, `/bg`, `/cleanup <what to remove>` —
+/// alternative to the buttons, acting on the current attachment (spec §4.2).
 /// Host mount: one call at the top of ChatWindow.sendMessage.
 @MainActor
 enum ImageSlashCommands {

@@ -34,7 +34,7 @@ enum WebFetchService {
               let host = url.host?.lowercased(), !host.isEmpty else {
             throw ProviderError.http(status: 0, message: "web_fetch: invalid or non-http(s) URL")
         }
-        // SSRF-гигиена: модель не должна уметь читать локальную сеть.
+        // SSRF hygiene: the model must not be able to read the local network.
         guard !isPrivateHost(host) else {
             throw ProviderError.http(status: 0, message: "web_fetch: local and private addresses are not allowed")
         }
@@ -85,10 +85,10 @@ enum WebFetchService {
     // MARK: - HTML → text
 
     /// NSAttributedString's HTML importer (main-thread only, WebKit-legacy)
-    /// handles entities/структуру; на его отказ — грубый срез тегов.
+    /// handles entities/structure; when it fails, tags are stripped crudely.
     private static func extractReadableText(from data: Data, encodingName: String?) async -> String {
         let html = decodeString(data, encodingName: encodingName)
-        // <script>/<style> первыми: импортёру они не текст, а фолбэку — мусор.
+        // <script>/<style> go first: not text to the importer, garbage to the fallback.
         let stripped = html
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|iframe)\\b.*?</\\1>", with: " ", options: .regularExpression)
         let attributed = await MainActor.run { () -> String? in
@@ -104,7 +104,7 @@ enum WebFetchService {
         if let attributed, !attributed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return attributed
         }
-        // Fallback: block tags → newlines, остальные теги — прочь.
+        // Fallback: block tags → newlines, every other tag is dropped.
         return stripped
             .replacingOccurrences(of: "(?i)<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>", with: "\n", options: .regularExpression)
             .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
@@ -123,8 +123,8 @@ enum WebFetchService {
             ?? ""
     }
 
-    /// localhost, RFC1918, link-local, .local/.internal и хосты без точки
-    /// (интранет-имена) — всё мимо.
+    /// localhost, RFC1918, link-local, .local/.internal and dot-less hosts
+    /// (intranet names) — all rejected.
     private static func isPrivateHost(_ host: String) -> Bool {
         if host == "localhost" || host == "::1" || host.hasSuffix(".local") || host.hasSuffix(".internal") { return true }
         if !host.contains(".") { return true }

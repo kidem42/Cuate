@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 
 /**
  * "Eclipse" settings design system — the claude.ai/design prototype
- * («Редизайн меню настроек Eclipse») ported 1:1: settings get their own
+ * ("Eclipse settings-menu redesign") ported 1:1: settings get their own
  * look, independent of the chat theme. Glass card stacks with hairline
  * dividers, uppercase accent section headers, and the app icon's eclipse
  * orange as the single accent (switches, chips, primary buttons glow).
@@ -251,7 +251,7 @@ fun EclipseChip(
     }
 }
 
-/** Gradient pill button (the design's «Проверить» / «Сохранить»). */
+/** Gradient pill button (the design's "Check" / "Save"). */
 @Composable
 fun EclipsePrimaryButton(
     text: String,
@@ -286,7 +286,7 @@ fun EclipsePrimaryButton(
     }
 }
 
-/** Accent text button (the design's «Обновить список моделей»). */
+/** Accent text button (the design's "Refresh model list"). */
 @Composable
 fun EclipseTextButton(
     text: String,
@@ -306,7 +306,7 @@ fun EclipseTextButton(
     )
 }
 
-/** Outline chip-button (the design's «+ Добавить»). */
+/** Outline chip-button (the design's "+ Add"). */
 @Composable
 fun EclipseOutlineButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val ecl = LocalEclipsePalette.current

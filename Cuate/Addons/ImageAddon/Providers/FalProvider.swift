@@ -2,18 +2,18 @@ import Foundation
 
 /// fal.ai backend: REST Queue API (`https://queue.fal.run/{model_id}`,
 /// submit → poll → fetch), auth `Authorization: Key <FAL_KEY>`.
-/// Изображения передаются base64 data-URI прямо в `image_url`/`mask_url`
-/// (официально поддерживается fal; storage-upload — при необходимости позже).
+/// Images are passed as base64 data-URIs straight into `image_url`/`mask_url`
+/// (officially supported by fal; storage upload can come later if needed).
 ///
-/// Каталог моделей статический и обновляется релизами приложения (ТЗ §5).
-/// Схемы входов каждой модели сверены с официальными API-доками fal.
+/// The model catalog is static and ships with app releases (spec §5).
+/// Each model's input schema is checked against fal's official API docs.
 final class FalImageProvider: ImageOperationProvider {
     static let shared = FalImageProvider()
     private init() {}
 
     let id = ImageProviderID.fal
 
-    // MARK: - Catalog (ТЗ §3.1 / §3.1a)
+    // MARK: - Catalog (spec §3.1 / §3.1a)
 
     static let recraftCrispID = "fal-ai/recraft/upscale/crisp"
     static let topazID = "fal-ai/topaz/upscale/image"
@@ -24,16 +24,16 @@ final class FalImageProvider: ImageOperationProvider {
     static let briaEraserID = "fal-ai/bria/eraser"
     static let objectRemovalID = "fal-ai/object-removal"
 
-    /// Static catalog: id эндпоинта, имя, функция, бейдж, подпись, цена.
+    /// Static catalog: endpoint id, name, function, badge, caption, price.
     static let catalog: [ImageModelInfo] = [
-        // --- Апскейл ---
+        // --- Upscale ---
         ImageModelInfo(
             id: recraftCrispID, name: "Recraft Crisp",
             function: .upscale, provider: .fal, tier: .standard,
             captionKey: "ia.model.recraftCrisp.caption",
             priceUSD: 0.004, priceLabel: "$0.004",
             requiresPNGInput: true, // API: "Must be in PNG format"
-            maxUpscaleFactor: nil,  // фиксированный «crisp» проход без фактора
+            maxUpscaleFactor: nil,  // fixed "crisp" pass with no factor
             maxOutputMP: 16
         ),
         ImageModelInfo(
@@ -63,7 +63,7 @@ final class FalImageProvider: ImageOperationProvider {
             maxOutputMP: 32
         ),
 
-        // --- Удаление фона ---
+        // --- Background removal ---
         ImageModelInfo(
             id: briaRMBGID, name: "Bria RMBG-2.0",
             function: .removeBackground, provider: .fal, tier: .standard,
@@ -77,7 +77,7 @@ final class FalImageProvider: ImageOperationProvider {
             priceUSD: 0.002, priceLabel: "~$0.002"
         ),
 
-        // --- Удаление объектов ---
+        // --- Object removal ---
         ImageModelInfo(
             id: briaEraserID, name: "Bria Eraser",
             function: .objectCleanup, provider: .fal, tier: .standard,
@@ -225,8 +225,8 @@ final class FalImageProvider: ImageOperationProvider {
     }
 
     /// Polls the status URL until COMPLETED, then fetches the result JSON.
-    /// The submit response carries канонические URL-ы (у моделей с subpath
-    /// они отличаются от адреса сабмита) — используем их, не собираем сами.
+    /// The submit response carries the canonical URLs (for models with a
+    /// subpath they differ from the submit address) — use them, don't rebuild.
     /// On task cancellation the queued fal job is cancelled too (cancel_url).
     private func awaitResult(_ submitted: SubmitResponse, apiKey: String) async throws -> [String: Any] {
         guard let statusURL = URL(string: submitted.status_url),
@@ -274,8 +274,8 @@ final class FalImageProvider: ImageOperationProvider {
         Diagnostics.log("imageaddon", "op.cancel request=\(submitted.request_id)")
     }
 
-    /// Pulls the first output image out of a result JSON. Модели fal отдают
-    /// либо `{"image": {...}}`, либо `{"images": [{...}]}` — принимаем оба.
+    /// Pulls the first output image out of a result JSON. fal models return
+    /// either `{"image": {...}}` or `{"images": [{...}]}` — both are accepted.
     private func downloadOutputImage(from json: [String: Any], apiKey: String) async throws -> (Data, String) {
         let file: [String: Any]?
         if let image = json["image"] as? [String: Any] {
@@ -289,7 +289,7 @@ final class FalImageProvider: ImageOperationProvider {
             throw ImageAddonError.badResponse
         }
 
-        // Data-URI результат (sync_mode) — декодируем без сети.
+        // Data-URI result (sync_mode) — decode without hitting the network.
         if urlString.hasPrefix("data:") {
             guard let comma = urlString.firstIndex(of: ","),
                   let data = Data(base64Encoded: String(urlString[urlString.index(after: comma)...])) else {
@@ -300,7 +300,7 @@ final class FalImageProvider: ImageOperationProvider {
         }
 
         guard let url = URL(string: urlString) else { throw ImageAddonError.badResponse }
-        let data = try await performHTTP(URLRequest(url: url)) // fal.media — без авторизации
+        let data = try await performHTTP(URLRequest(url: url)) // fal.media — no auth
         let mime = (file["content_type"] as? String) ?? "image/png"
         return (data, mime)
     }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Terminal-output processing for agent replies (notes §7.2 п.2–3): agents
+/// Terminal-output processing for agent replies (notes §7.2 items 2–3): agents
 /// paste raw stdout — ANSI colors, `\r` progress-bar redraws, unified diffs.
 /// In a plain code block that is garbage; here it becomes what a terminal
 /// would have shown. Pure functions — nothing here touches app state.

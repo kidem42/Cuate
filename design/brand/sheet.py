@@ -30,12 +30,12 @@ def uniq(svg, tag):
     return svg
 
 VARIANTS = [
-    ('eclipse',    'Eclipse',     'Принят',   'Два света на одном теле. Держит идею близнеца, выживает в размере, наследует прежнюю сферу.'),
-    ('fase',       'Fase',        'Резерв',   'Один серп. Читается меньше всех остальных — отсюда глиф строки меню. Но близнец пропадает.'),
-    ('terminador', 'Terminador',  'Отклонён', 'Линия дня и ночи. Сильно и лаконично, но теряет свет: плоская заливка вместо подсветки.'),
-    ('sicigia',    'Sicigia',     'Отклонён', 'Два тела в ряд. Самое выразительное и самое непригодное: широкое, в квадрат иконки не садится.'),
-    ('conjuncion', 'Conjuncion',  'Отклонён', 'Светится пересечение. Читается как диаграмма Венна — то есть как любой другой стартап.'),
-    ('anillo',     'Anillo',      'Отклонён', 'Полное покрытие, свет по всему краю. На малых размерах — индикатор загрузки.'),
+    ('eclipse',    'Eclipse',     'Accepted',   'Two lights on one body. It holds the twin idea, survives at small sizes, and inherits the previous sphere.'),
+    ('fase',       'Fase',        'Reserve',   'A single crescent. It reads at the smallest size of them all — hence the menu-bar glyph. But the twin disappears.'),
+    ('terminador', 'Terminador',  'Rejected', 'The line of day and night. Strong and terse, but it loses the light: a flat fill instead of illumination.'),
+    ('sicigia',    'Sicigia',     'Rejected', 'Two bodies in a row. The most expressive and the least usable: it is wide and never fits the icon square.'),
+    ('conjuncion', 'Conjuncion',  'Rejected', 'The intersection glows. It reads as a Venn diagram — that is, like every other startup.'),
+    ('anillo',     'Anillo',      'Rejected', 'Full coverage, light around the whole edge. At small sizes it is a loading indicator.'),
 ]
 
 def swatch_row(name, ramp):
@@ -63,7 +63,7 @@ def token_table(mode):
             note = f'{c:.2f}:1 ' + ('ok' if c >= 3 else 'FAIL')
         elif k == 'on-accent':
             c = contrast_pair(v, S['accent'])
-            note = f'{c:.2f}:1 над accent'
+            note = f'{c:.2f}:1 over accent'
         else:
             note = ''
         rows += (f'<tr><td class="mono">{k}</td>'
@@ -74,7 +74,7 @@ def token_table(mode):
 marks_html = ''
 for slug, title, status, note in VARIANTS:
     svg = uniq(inner(f'/home/claude/brand/marks/{slug}.svg'), slug)
-    cls = 'ok' if status == 'Принят' else ('alt' if status == 'Резерв' else 'no')
+    cls = 'ok' if status == 'Accepted' else ('alt' if status == 'Reserve' else 'no')
     marks_html += (f'<figure class="mk"><div class="mkart">{svg}</div>'
                    f'<figcaption><div class="mkh"><b>{title}</b>'
                    f'<span class="badge {cls}">{status}</span></div>'
@@ -151,81 +151,81 @@ h3{{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);
 
 <div class="hero">{hero}
 <div><div class="nm">Cuate</div>
-<div class="say">KWAH-teh · от науатль <i>cōātl</i> — «близнец»</div>
-<div class="tg">Один диск, две подсветки. Тёплая снизу, холодная сверху.</div></div></div>
+<div class="say">KWAH-teh · from Nahuatl <i>cōātl</i> — "twin"</div>
+<div class="tg">One disc, two lights. Warm from below, cold from above.</div></div></div>
 
-<section><h2>Марка — исследование</h2>
-<p>Шесть вариантов из одной геометрической грамматики: два диска равного радиуса на разной фазе.
-Меняются только смещение и угол — всё остальное следствие. Лист <b>Láminа I</b> показывает
-72 фазы этой же сетки; принятая марка отмечена на нём янтарным кольцом.</p>
+<section><h2>The mark — an exploration</h2>
+<p>Six variants from a single geometric grammar: two discs of equal radius at different phases.
+Only the offset and the angle change — everything else follows. The <b>Lámina I</b> plate shows
+72 phases of the same grid; the accepted mark is marked on it with an amber ring.</p>
 <div class="mks">{marks_html}</div>
-<p style="margin-top:22px">Принятый вариант обрезан у полюсов на 26 единиц: без этого серпы
-смыкаются в кольцо и марка читается как индикатор загрузки, а не как два источника света.</p>
+<p style="margin-top:22px">The accepted variant is trimmed by 26 units at the poles: without that the crescents
+close into a ring and the mark reads as a loading indicator rather than two sources of light.</p>
 </section>
 
-<section><h2>Шкалы</h2>
-<p>Построены в OKLCH — перцептивно равномерном пространстве, поэтому шаги выглядят
-равномерными, а не только считаются такими. Каждая шкала имеет собственную лестницу
-светлоты, чтобы фирменный цвет попадал ровно на ступень <b>500</b>: янтарь по природе
-светлый, сьело тёмный, общая лестница исказила бы оба. Хрома зажимается бинарным поиском
-по границе sRGB — вне гаммы ничего нет.</p>
+<section><h2>Ramps</h2>
+<p>Built in OKLCH — a perceptually uniform space, so the steps look
+even rather than merely being counted as even. Each ramp has its own lightness
+ladder so the brand color lands exactly on step <b>500</b>: ámbar is light by nature,
+cielo is dark, and a shared ladder would distort both. Chroma is clamped by binary search
+against the sRGB boundary — nothing sits out of gamut.</p>
 {swatch_row('ambar', R['ambar'])}
 {swatch_row('cielo', R['cielo'])}
 {swatch_row('piedra', R['piedra'])}
 {swatch_row('verde', R['verde'])}
 {swatch_row('rojo', R['rojo'])}
-<p style="margin-top:16px">Нейтральная <b>piedra</b> построена на том же тоне, что и янтарь,
-с хромой 0.016 — серый никогда не уходит в холод. <b>Verde</b> и <b>rojo</b> отнесены на
-148° и 26°, чтобы не спорить с акцентом на 70°.</p>
+<p style="margin-top:16px">The neutral <b>piedra</b> is built on the same hue as ámbar,
+at chroma 0.016 — the grey never drifts cold. <b>Verde</b> and <b>rojo</b> are pushed to
+148° and 26° so they don't argue with the accent at 70°.</p>
 </section>
 
-<section><h2>Семантические токены</h2>
-<p><b>accent</b> — цвет заливки, он остаётся ярким янтарём в обеих темах, потому что так
-выглядит бренд. <b>accent-ink</b> — тот же янтарь в роли текста, и на светлом фоне он
-обязан темнеть до 4.5:1. В <code>AppTheme.swift</code> это различие уже живёт как
+<section><h2>Semantic tokens</h2>
+<p><b>accent</b> is a fill color; it stays bright ámbar in both themes, because that is what
+the brand looks like. <b>accent-ink</b> is the same ámbar in the role of text, and on a light background it
+must darken to 4.5:1. In <code>AppTheme.swift</code> that distinction already lives as
 <code>accentInk</code>.</p>
 <div class="cols">
-<div><h3>Тёмная</h3><table><tr><th>Токен</th><th>Значение</th><th>Контраст</th></tr>
+<div><h3>Dark</h3><table><tr><th>Token</th><th>Value</th><th>Contrast</th></tr>
 {token_table('dark')}</table></div>
-<div class="lightcard"><h3>Светлая</h3><table><tr><th>Токен</th><th>Значение</th><th>Контраст</th></tr>
+<div class="lightcard"><h3>Light</h3><table><tr><th>Token</th><th>Value</th><th>Contrast</th></tr>
 {token_table('light')}</table></div>
 </div>
 </section>
 
-<section><h2>Строка меню</h2>
-<p>Глиф — <b>намеренно не марка</b>. То, что работает логотипом на 200&nbsp;px, разваливается
-на 18&nbsp;pt. Общая у них только грамматика: одно тело, две одинаковые половины.</p>
-<p>Диск разрезан по диагонали, половины соскользнули друг с другом <i>вдоль</i> разреза.
-Два силуэта отброшены после проверки в натуральную величину: <b>полумесяц</b> — это значок
-«Не беспокоить» в macOS, а <b>круг с диагональной прорезью</b> читается как знак запрета.
-Сдвиг вдоль разреза ломает круглый силуэт, и оба прочтения исчезают.</p>
-<p>Состояние — только геометрией: в работе половины смыкаются, тело снова целое.</p>
-<div class="cap">Светлая · покой и активность</div>
-<div class="bar l"><span>Finder</span><span style="opacity:.5">Файл</span><span style="flex:1"></span>
+<section><h2>The menu bar</h2>
+<p>The glyph is <b>deliberately not the mark</b>. What works as a logo at 200&nbsp;px falls apart
+at 18&nbsp;pt. All they share is the grammar: one body, two identical halves.</p>
+<p>The disc is cut on the diagonal, and the halves have slid past each other <i>along</i> the cut.
+Two silhouettes were rejected after a check at actual size: a <b>crescent</b> is the macOS
+"Do Not Disturb" glyph, and a <b>circle with a diagonal slot</b> reads as a prohibition sign.
+Sliding along the cut breaks the round silhouette, and both readings disappear.</p>
+<p>State through geometry only: while working, the halves close and the body is whole again.</p>
+<div class="cap">Light · idle and active</div>
+<div class="bar l"><span>Finder</span><span style="opacity:.5">File</span><span style="flex:1"></span>
 <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#2A2A2E" d="M 16.545 4.120 A 7.35 7.35 0 0 1 4.961 13.170 Z M 13.039 4.830 A 7.35 7.35 0 0 0 1.455 13.880 Z"/></svg>
 <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#2A2A2E" d="M 14.792 4.475 A 7.35 7.35 0 0 1 3.208 13.525 Z M 14.792 4.475 A 7.35 7.35 0 0 0 3.208 13.525 Z"/></svg>
 <span>13:24</span></div>
-<div class="cap">Тёмная</div>
-<div class="bar d"><span>Finder</span><span style="opacity:.5">Файл</span><span style="flex:1"></span>
+<div class="cap">Dark</div>
+<div class="bar d"><span>Finder</span><span style="opacity:.5">File</span><span style="flex:1"></span>
 <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#F0F0F4" d="M 16.545 4.120 A 7.35 7.35 0 0 1 4.961 13.170 Z M 13.039 4.830 A 7.35 7.35 0 0 0 1.455 13.880 Z"/></svg>
 <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#F0F0F4" d="M 14.792 4.475 A 7.35 7.35 0 0 1 3.208 13.525 Z M 14.792 4.475 A 7.35 7.35 0 0 0 3.208 13.525 Z"/></svg>
 <span>13:24</span></div>
 </section>
 
-<section><h2>Файлы</h2>
+<section><h2>Files</h2>
 <table class="mono">
-<tr><td>design/brand/PHILOSOPHY.md</td><td class="dim">визуальная философия, из неё всё выведено</td></tr>
-<tr><td>design/brand/color.py</td><td class="dim">генератор шкал и токенов, с проверкой WCAG</td></tr>
-<tr><td>design/brand/marks.py</td><td class="dim">генератор марок из одной грамматики</td></tr>
-<tr><td>design/brand/plate.py</td><td class="dim">лист «Fases del gemelo»</td></tr>
-<tr><td>design/brand/tokens.css</td><td class="dim">переменные CSS — для сайта</td></tr>
-<tr><td>design/brand/BrandTokens.swift</td><td class="dim">токены для приложения</td></tr>
-<tr><td>design/brand/tokens.json</td><td class="dim">источник для любых других платформ</td></tr>
-<tr><td>design/brand/cuate-lamina-I.pdf</td><td class="dim">печатный лист, A4 300 dpi</td></tr>
+<tr><td>design/brand/PHILOSOPHY.md</td><td class="dim">the visual philosophy; everything is derived from it</td></tr>
+<tr><td>design/brand/color.py</td><td class="dim">the ramp and token generator, with WCAG checking</td></tr>
+<tr><td>design/brand/marks.py</td><td class="dim">the mark generator from a single grammar</td></tr>
+<tr><td>design/brand/plate.py</td><td class="dim">the "Fases del gemelo" plate</td></tr>
+<tr><td>design/brand/tokens.css</td><td class="dim">CSS variables — for the site</td></tr>
+<tr><td>design/brand/BrandTokens.swift</td><td class="dim">tokens for the app</td></tr>
+<tr><td>design/brand/tokens.json</td><td class="dim">the source for any other platform</td></tr>
+<tr><td>design/brand/cuate-lamina-I.pdf</td><td class="dim">the print plate, A4 300 dpi</td></tr>
 </table>
-<p style="margin-top:18px" class="dim">Растр всегда пересобирается из
-<code>color.py</code> и <code>marks.py</code>. Руками не править — иначе шкалы
-разъедутся с проверкой контраста.</p>
+<p style="margin-top:18px" class="dim">The raster is always regenerated from
+<code>color.py</code> and <code>marks.py</code>. Never edit by hand — otherwise the ramps
+drift out of sync with the contrast checks.</p>
 </section>
 
 </div></body></html>'''

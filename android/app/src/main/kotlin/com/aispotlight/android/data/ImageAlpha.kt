@@ -7,14 +7,14 @@ import android.graphics.Color
 import java.io.ByteArrayOutputStream
 
 /**
- * Alpha handling for image operations — порт маковского «фикса воскресшего
- * фона» (ImageInputPreparer, Alpha handling).
+ * Alpha handling for image operations — a port of the Mac "resurrected
+ * background" fix (ImageInputPreparer, Alpha handling).
  *
- * Модели удаления фона (Bria RMBG, BiRefNet) возвращают PNG, где в RGB лежит
- * НЕТРОНУТЫЙ оригинал, а вырезание живёт только в альфа-канале. Просмотрщики
- * альфу уважают — картинка выглядит вырезанной; fal-модели (апскейл, eraser)
- * альфу игнорируют и обрабатывают RGB — «удалённый» фон воскресал в
- * результате. Плюс утечка: из сохранённого файла фон достаётся редактором.
+ * Background-removal models (Bria RMBG, BiRefNet) return a PNG whose RGB still
+ * holds the UNTOUCHED original — the cutout lives in the alpha channel alone.
+ * Viewers honor alpha, so the image looks cut out; fal models (upscale, eraser)
+ * ignore alpha and process RGB — the "removed" background came back to life in
+ * the result. Plus a leak: any editor pulls the background out of a saved file.
  */
 object ImageAlpha {
 
@@ -28,8 +28,8 @@ object ImageAlpha {
     }
 
     /**
-     * Flattens a transparent image onto WHITE (то, что видит пользователь в
-     * чате) and extracts the alpha mask. Returns null for images without
+     * Flattens a transparent image onto WHITE (what the user actually sees in
+     * the chat) and extracts the alpha mask. Returns null for images without
      * actual transparency — the caller keeps the original bytes.
      */
     fun flattenIfTransparent(bytes: ByteArray): Pair<ByteArray, Bitmap>? {
@@ -39,8 +39,8 @@ object ImageAlpha {
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         if (pixels.none { (it ushr 24) < 255 }) return null
 
-        // Маска — ARGB_8888 с альфой в альфа-байте (extractAlpha даёт ALPHA_8,
-        // но getPixels на ALPHA_8 на части версий Android возвращает нули).
+        // The mask is ARGB_8888 with alpha in the alpha byte (extractAlpha gives
+        // ALPHA_8, but getPixels on ALPHA_8 returns zeros on some Android versions).
         val maskPixels = IntArray(pixels.size) { pixels[it] and -0x1000000 }
         val mask = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
         mask.setPixels(maskPixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
@@ -55,9 +55,9 @@ object ImageAlpha {
 
     /**
      * Re-encodes an image so pixels under transparency hold no leftover RGB.
-     * Декод в premultiplied-битмап сам умножает RGB на альфу (α=0 → чёрный),
-     * PNG-энкодер пишет уже чистые значения. Returns null when the image has
-     * no transparency — nothing to sanitize.
+     * Decoding into a premultiplied bitmap multiplies RGB by alpha on its own
+     * (α=0 → black); the PNG encoder then writes already-clean values. Returns
+     * null when the image has no transparency — nothing to sanitize.
      */
     fun sanitizedTransparency(bytes: ByteArray): ByteArray? {
         val bitmap = decode(bytes) ?: return null
@@ -70,8 +70,8 @@ object ImageAlpha {
 
     /**
      * Scales the remembered alpha mask to the result's size and writes it into
-     * the alpha channel — апскейл возвращает непрозрачный RGB, так что
-     * прозрачность вырезки восстанавливается локально (бесплатно).
+     * the alpha channel — upscalers return opaque RGB, so the cutout's
+     * transparency is restored locally (for free).
      */
     fun applyAlphaMask(mask: Bitmap, resultBytes: ByteArray): ByteArray? {
         val result = decode(resultBytes) ?: return null

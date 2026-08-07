@@ -28,7 +28,7 @@ final class PlaudSettings: ObservableObject {
     // MARK: - Exposure
 
     /// When true (default) the tools ride along in every chat turn and the
-    /// model reaches for them on its own ("что решили на встрече?", voice
+    /// model reaches for them on its own ("what did we decide in the meeting?", voice
     /// messages mentioning Plaud). When false the notes stay invisible until
     /// the user explicitly invokes /plaud — the privacy-lean mode.
     @Published var alwaysAvailable: Bool {

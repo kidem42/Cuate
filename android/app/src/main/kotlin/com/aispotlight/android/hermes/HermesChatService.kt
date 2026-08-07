@@ -276,9 +276,17 @@ object HermesChatService {
             val local = File(context.filesDir, attachment.filePath)
             try {
                 remotePaths.add(transport.uploadToDashboard(dashboard, token, local))
-            } catch (e: Exception) {
-                failures.add(attachment.filename)
-                Diagnostics.log("hermes", "courier.fail ${attachment.filename}: ${e.message?.take(120)}")
+            } catch (first: Exception) {
+                // One retry: multi-megabyte uploads on a mobile uplink die to
+                // transient stalls (handover, CGNAT resets) often enough that
+                // a single failed attempt is not the file's final word.
+                Diagnostics.log("hermes", "courier.retry ${attachment.filename}: ${first.message?.take(120)}")
+                try {
+                    remotePaths.add(transport.uploadToDashboard(dashboard, token, local))
+                } catch (e: Exception) {
+                    failures.add(attachment.filename)
+                    Diagnostics.log("hermes", "courier.fail ${attachment.filename}: ${e.message?.take(120)}")
+                }
             }
         }
         // Canonical cross-device note (AgentAttachNote is the shared

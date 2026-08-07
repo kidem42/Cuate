@@ -6,10 +6,10 @@ import android.os.Build
 import java.io.File
 
 /**
- * Voice recording for STT: Opus in an .ogg container — то, чем пишут голос
- * Telegram/WhatsApp: вдвое легче AAC при том же качестве речи, и все STT-
- * провайдеры его принимают. On pre-Android 10 (API < 29, no OGG/OPUS in
- * MediaRecorder) falls back to AAC/.m4a — the mac app's format.
+ * Voice recording for STT: Opus in an .ogg container — what Telegram and
+ * WhatsApp record voice with: half the size of AAC at the same speech
+ * quality, and every STT provider accepts it. On pre-Android 10 (API < 29,
+ * no OGG/OPUS in MediaRecorder) falls back to AAC/.m4a — the mac app's format.
  */
 class AudioRecorderService(private val context: Context) {
     private var recorder: MediaRecorder? = null

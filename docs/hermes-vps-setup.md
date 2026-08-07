@@ -119,6 +119,13 @@ EOF
 sleep 8
 echo "════════════════════════════════════════════"
 curl -s https://agent.$DOMAIN/health && echo " ← should say ok"
+# Body-limit self-check for the FILE domain: an 11 MB POST must come back as
+# anything except 413 (401/404 mean the proxy passed it through). A 413 here
+# caps every file attachment at the proxy's limit — this one matters.
+head -c 11000000 /dev/zero | curl -s -o /dev/null -w "dash body-limit: %{http_code} (413 = file uploads capped)\n" -X POST "https://dash.$DOMAIN/api/files/upload-stream" --data-binary @-
+# (agent.$DOMAIN carries only text + downscaled inline images, so its body
+# limit is a non-issue in practice — the lone exception is GIFs over ~7 MB,
+# which travel uncompressed. Probe the same way against /v1/chat if you care.)
 echo "Gateway address:  https://agent.$DOMAIN"
 echo "Key:              $(grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2)"
 echo "Dashboard URL:    https://dash.$DOMAIN"
@@ -142,6 +149,7 @@ sessions in the sidebar, files and images work.
 | `502 Bad Gateway` | the gateway is restarting — wait 30–60 sec |
 | health does not answer | `systemctl --user status hermes-gateway`; DNS may not have propagated — check `dig +short agent.YOUR-DOMAIN` |
 | File upload → `Unauthorized` | the app's token ≠ `HERMES_DASHBOARD_SESSION_TOKEN` in `~/.hermes/.env` |
+| File uploads over ~10 MB fail (413) | proxy body limit below 64 MB on `dash.` (or on `agent.`, but only oversized inline GIFs ever hit that one) — rerun the body-limit self-check from Step 3; in Caddy: `request_body { max_size 64MB }`, in nginx: `client_max_body_size 64m` (rewrite the config file whole, never append a duplicate directive, and `nginx -t` before reloading) |
 | The agent's terminal does not work at all | egress firewall was enabled — set `proxy.enabled: false` in `~/.hermes/config.yaml` + restart the gateway |
 | The agent "cannot see" files/images | Docker terminal backend is still active: set `backend: local` in config.yaml **and** delete the `TERMINAL_ENV=docker` line from `.env`, restart |
 | Something broke after `hermes update` | roll back: `cd /usr/local/lib/hermes-agent && git fetch --unshallow; git checkout <previous commit> && systemctl --user restart hermes-gateway` |

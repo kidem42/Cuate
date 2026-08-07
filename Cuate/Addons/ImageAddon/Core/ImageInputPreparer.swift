@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// models that require it (and for HEIC/TIFF, which no API accepts), plus
 /// the base64 data-URI encoding the fal endpoints take as `image_url`.
 enum ImageInputPreparer {
-    /// Formats the cloud endpoints accept as-is (ТЗ §4.4b).
+    /// Formats the cloud endpoints accept as-is (spec §4.4b).
     static func isDirectlySendable(mime: String) -> Bool {
         ["image/png", "image/jpeg", "image/webp"].contains(mime.lowercased())
     }
@@ -61,17 +61,17 @@ enum ImageInputPreparer {
         return CGSize(width: width, height: height)
     }
 
-    // MARK: - Operation-time normalization (ТЗ §4.4b)
+    // MARK: - Operation-time normalization (spec §4.4b)
 
     /// What happened to the input on the way in — the UI surfaces these as
-    /// system-message warnings ("плашки").
+    /// system-message warnings (banners).
     enum InputNote {
         case gifFirstFrame
         case downscaled(fromMP: Double, toMP: Double)
     }
 
-    /// Applies the input rules before an operation: GIF → первый кадр,
-    /// вход больше лимита → автодаунскейл. Returns the normalized bytes,
+    /// Applies the input rules before an operation: GIF → first frame,
+    /// input over the limit → auto-downscale. Returns the normalized bytes,
     /// mime, and the notes to show.
     static func normalizeForOperation(
         data: Data,
@@ -160,14 +160,14 @@ enum ImageInputPreparer {
         return out as Data
     }
 
-    // MARK: - Alpha handling (фикс «воскресшего фона»)
+    // MARK: - Alpha handling (the "resurrected background" fix)
     //
-    // Модели удаления фона (Bria RMBG, BiRefNet) возвращают PNG, где в RGB
-    // лежит НЕТРОНУТЫЙ оригинал, а вырезание живёт только в альфа-канале.
-    // Просмотрщики альфу уважают — картинка выглядит вырезанной; fal-модели
-    // (апскейл, eraser) альфу игнорируют и обрабатывают RGB — «удалённый»
-    // фон воскресал в результате. Плюс это утечка: из сохранённого файла
-    // фон достаётся любым редактором.
+    // Background-removal models (Bria RMBG, BiRefNet) return a PNG whose RGB
+    // still holds the UNTOUCHED original — the cutout lives in the alpha
+    // channel alone. Viewers honor alpha, so the image looks cut out; fal
+    // models (upscale, eraser) ignore alpha and process RGB — the "removed"
+    // background came back to life in the result. It is also a leak: any
+    // editor can pull the background out of the saved file.
 
     /// Decodes the first frame (shared by the alpha helpers below).
     private static func decodeImage(_ data: Data) -> CGImage? {
@@ -175,9 +175,9 @@ enum ImageInputPreparer {
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }
 
-    /// RGBA8 premultiplied bitmap — само рисование в premultiplied-контекст
-    /// умножает RGB на альфу, т.е. скрытые под прозрачностью пиксели гибнут
-    /// уже на этом шаге.
+    /// RGBA8 premultiplied bitmap — drawing into a premultiplied context
+    /// multiplies RGB by alpha on its own, so pixels hidden under
+    /// transparency die at this very step.
     private static func rgbaContext(width: Int, height: Int) -> CGContext? {
         CGContext(
             data: nil, width: width, height: height,
@@ -204,8 +204,8 @@ enum ImageInputPreparer {
         }
     }
 
-    /// Flattens a transparent image onto WHITE (то, что видит пользователь
-    /// в чате) and extracts the alpha mask as a grayscale PNG. Returns nil
+    /// Flattens a transparent image onto WHITE (what the user actually sees
+    /// in the chat) and extracts the alpha mask as a grayscale PNG. Returns nil
     /// for images without actual transparency — the caller keeps the
     /// original bytes and skips the restore step.
     static func flattenIfTransparent(_ data: Data) -> (flattened: Data, alphaMask: Data)? {
@@ -258,8 +258,8 @@ enum ImageInputPreparer {
     }
 
     /// Scales the remembered alpha mask to the result's size and writes it
-    /// into the alpha channel — апскейл возвращает непрозрачный RGB, так что
-    /// прозрачность вырезки восстанавливается локально (бесплатно).
+    /// into the alpha channel — upscalers return opaque RGB, so the cutout's
+    /// transparency is restored locally (for free).
     static func applyingAlphaMask(_ maskPNG: Data, to resultData: Data) -> Data? {
         guard let result = decodeImage(resultData), let mask = decodeImage(maskPNG) else { return nil }
         let w = result.width, h = result.height
@@ -285,8 +285,8 @@ enum ImageInputPreparer {
         for i in 0..<(w * h) {
             let a = Int(scaled[i])
             guard a < 255 else { continue }
-            // Контекст premultiplied — умножаем вручную; PNG-энкодер обратит
-            // премультипликацию при записи (straight alpha).
+            // The context is premultiplied — multiply by hand; the PNG encoder
+            // undoes the premultiplication on write (straight alpha).
             px[i * 4]     = UInt8(Int(px[i * 4]) * a / 255)
             px[i * 4 + 1] = UInt8(Int(px[i * 4 + 1]) * a / 255)
             px[i * 4 + 2] = UInt8(Int(px[i * 4 + 2]) * a / 255)
@@ -296,7 +296,7 @@ enum ImageInputPreparer {
         return encodePNG(combined)
     }
 
-    // MARK: - Output conversion (ТЗ §4.5: формат вывода)
+    // MARK: - Output conversion (spec §4.5: output format)
 
     /// Re-encodes a result into the requested format. Returns the input
     /// unchanged when it already matches or when encoding fails (a valid

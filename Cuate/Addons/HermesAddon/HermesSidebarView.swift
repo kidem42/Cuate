@@ -42,7 +42,7 @@ struct HermesSidebarView: View {
     @State private var loadedSkills = false
     @State private var loadedToolsets = false
     @State private var loadedModel = false
-    /// Inline rename state (context menu → «Переименовать»).
+    /// Inline rename state (context menu → "Rename").
     @State private var renamingSessionID: String?
     @State private var renameDraft = ""
     /// "New session" in flight / failed. The create is a network round-trip
@@ -208,7 +208,7 @@ struct HermesSidebarView: View {
             Spacer()
             // Management that needs WRITE access (skill toggles, backends,
             // MCP, messengers) lives in the Hermes app — we deliberately
-            // don't fake it here (no admin API; см. обсуждение 2026-07-25).
+            // don't fake it here (no admin API; see discussion 2026-07-25).
             Button {
                 openHermesApp()
             } label: {
@@ -334,9 +334,9 @@ struct HermesSidebarView: View {
                 )
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    // Активность показывает заливка строки (вариант А), так что
-                    // иконка больше не меняется на галочку — цветные метки её
-                    // всё равно прятали, и признак был виден не у всех сессий.
+                    // Activity is shown by the row fill (variant A), so the
+                    // icon no longer flips to a checkmark — colored marks hid
+                    // it anyway, and the cue was visible for some sessions only.
                     if let markColor {
                         Circle().fill(markColor).frame(width: 7, height: 7)
                     } else {
@@ -400,10 +400,10 @@ struct HermesSidebarView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Активная сессия — мягкая заливка-пилюля на всю строку
-                // (нативный паттерн выделения сайдбара): padding уходит ЗА
-                // колонку текста и компенсируется обратно, так что строки
-                // остаются выровнены с остальным списком.
+                // The active session gets a soft pill fill across the whole
+                // row (the native sidebar selection pattern): padding reaches
+                // BEYOND the text column and is compensated back, so rows stay
+                // aligned with the rest of the list.
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background {

@@ -11,8 +11,8 @@ private func drgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> Color 
 /// twinkling on its own period — plus snow falling the full panel height
 /// with a gentle side-to-side sway.
 struct YuleDecorations: View {
-    /// Мировое время: лампочки жмутся к самой кромке (мельче), снега меньше
-    /// и он полупрозрачный — доска с данными остаётся читаемой.
+    /// World Time: bulbs hug the very edge (and are smaller), there is less
+    /// snow and it is translucent — the data board stays readable.
     var worldTime: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     private var dark: Bool { colorScheme == .dark }
@@ -93,8 +93,8 @@ private struct TwinklingBulb: View {
 
     var body: some View {
         ZStack {
-            // CSS-ореол: 1.5px spread + 8px blur → размытая капля чуть крупнее
-            // самой лампочки; на пике дыхания раздувается и ярчает.
+            // CSS halo: 1.5px spread + 8px blur → a blurred drop slightly larger
+            // than the bulb itself; at the peak of the breath it swells and brightens.
             Ellipse()
                 .fill(color)
                 .frame(width: 10, height: 12)
@@ -106,7 +106,7 @@ private struct TwinklingBulb: View {
                 .frame(width: 6, height: 8)
                 .opacity(dim ? 0.5 : 1)
         }
-        .frame(width: 6, height: 8)   // ореол не сдвигает раскладку
+        .frame(width: 6, height: 8)   // the halo must not shift the layout
         .scaleEffect(scale)
         .onAppear {
             withAnimation(.easeInOut(duration: period / 2)

@@ -425,6 +425,11 @@ object HttpClient {
     val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
+        // OkHttp's default write watchdog is 10 s PER SOCKET WRITE — on a
+        // stalling mobile uplink that reliably kills any multi-megabyte
+        // upload (the courier's "files over ~10 MB never send on LTE" bug);
+        // the overall callTimeout below still bounds a truly dead transfer.
+        .writeTimeout(120, TimeUnit.SECONDS)
         .callTimeout(600, TimeUnit.SECONDS)
         .build()
 

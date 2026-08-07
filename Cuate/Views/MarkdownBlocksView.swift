@@ -49,8 +49,8 @@ struct MarkdownBlocksView: View {
 
     /// A run of consecutive PROSE blocks (paragraphs, headings, lists) is
     /// rendered as ONE Text — SwiftUI selection cannot cross view borders,
-    /// so per-block Texts limited a drag to a single paragraph ("выделяется
-    /// странными блоками", 2026-07-28). Interactive blocks (code cards,
+    /// so per-block Texts limited a drag to a single paragraph ("selects in
+    /// weird blocks", 2026-07-28). Interactive blocks (code cards,
     /// tables, artifacts, quotes with their tap-to-copy) stay their own
     /// views between runs.
     enum Segment {
@@ -293,7 +293,7 @@ struct MarkdownBlocksView: View {
         }
 
         /// A single message can carry a 20k-line log — rendering it whole
-        /// hangs the panel (notes §7.2 п.4). Above this the block folds.
+        /// hangs the panel (notes §7.2 item 4). Above this the block folds.
         private static let foldThreshold = 300
 
         /// ▶ shows on shell-tagged blocks — and, in AGENT chats, on untagged
@@ -891,7 +891,7 @@ struct MarkdownBlocksView: View {
     }
 
     /// Cell text stripped of inline markdown — a spreadsheet cell should read
-    /// `Итого`, not `**Итого**`. Tabs and newlines are flattened to spaces:
+    /// `Total`, not `**Total**`. Tabs and newlines are flattened to spaces:
     /// either one would silently shift every later column of the TSV.
     private static func plainCell(_ text: String) -> String {
         var s = text.replacingOccurrences(

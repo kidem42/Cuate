@@ -12,7 +12,7 @@ import CryptoKit
 ///
 /// Tokens live in the Keychain (`APIKeyStore.AuxKey.plaud`) as one JSON
 /// blob — never in UserDefaults, never in ~/.plaud (that file belongs to
-/// the официальный CLI, sharing it would desync refresh rotations).
+/// the official CLI, sharing it would desync refresh rotations).
 actor PlaudClient {
     static let shared = PlaudClient()
 

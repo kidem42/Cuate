@@ -25,7 +25,7 @@ final class ImageAddonSettings: ObservableObject {
         }
     }
 
-    // MARK: - Model choice (per function, ТЗ §3.1)
+    // MARK: - Model choice (per function, spec §3.1)
 
     @Published var upscaleModel: String {
         didSet { defaults.set(upscaleModel, forKey: "imageAddon.upscaleModel") }
@@ -35,7 +35,7 @@ final class ImageAddonSettings: ObservableObject {
         didSet { defaults.set(backgroundModel, forKey: "imageAddon.backgroundModel") }
     }
 
-    /// Mask-based object cleanup model (кисть).
+    /// Mask-based object cleanup model (brush).
     @Published var cleanupModel: String {
         didSet { defaults.set(cleanupModel, forKey: "imageAddon.cleanupModel") }
     }
@@ -58,7 +58,7 @@ final class ImageAddonSettings: ObservableObject {
         ImageProviderRegistry.models(for: .objectCleanup).first { $0.cleanupByText }
     }
 
-    // MARK: - Output & input options (ТЗ §4.4b / §4.5)
+    // MARK: - Output & input options (spec §4.4b / §4.5)
 
     /// Result format. Background removal always keeps PNG (alpha).
     @Published var outputFormat: ImageOutputFormat {
@@ -76,7 +76,7 @@ final class ImageAddonSettings: ObservableObject {
         didSet { defaults.set(maxInputMegapixels, forKey: "imageAddon.maxInputMegapixels") }
     }
 
-    static let maxInputBytes = 20 * 1024 * 1024 // 20 MB (ТЗ §4.4b)
+    static let maxInputBytes = 20 * 1024 * 1024 // 20 MB (spec §4.4b)
 
     // MARK: - Save folder (nil = Downloads)
 

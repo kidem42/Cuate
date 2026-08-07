@@ -546,7 +546,7 @@ struct MarkdownText: View {
         attributed = linkifyRawURLs(in: attributed)
 
         // Agent replies: file paths in prose act like the chips below the
-        // bubble ("Файл: /root/map.html" was dead text — e2e 2026-07-27).
+        // bubble ("File: /root/map.html" was dead text — e2e 2026-07-27).
         // After the URL pass so a path inside a URL is never double-linked.
         if agentFileLinks {
             attributed = linkifyAgentPaths(in: attributed, linkColor: linkColor)

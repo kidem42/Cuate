@@ -48,7 +48,7 @@ object WebFetchService {
         // HttpUrl only parses http(s) — ftp/file/data schemes fail here.
         val url = urlString.toHttpUrlOrNull()
             ?: throw ProviderException.http(0, "web_fetch: invalid or non-http(s) URL")
-        // SSRF-гигиена: модель не должна уметь читать локальную сеть.
+        // SSRF hygiene: the model must not be able to read the local network.
         if (isPrivateHost(url.host.lowercase())) {
             throw ProviderException.http(0, "web_fetch: local and private addresses are not allowed")
         }
@@ -125,8 +125,8 @@ object WebFetchService {
     // MARK: - HTML → text
 
     /**
-     * Html.fromHtml handles tags/entities; <script>/<style> первыми — им в
-     * тексте не место. На пустой результат — грубый срез тегов.
+     * Html.fromHtml handles tags/entities; <script>/<style> go first — they
+     * have no place in the text. On an empty result, tags are stripped crudely.
      */
     private fun extractReadableText(html: String): String {
         val stripped = html.replace(
@@ -138,15 +138,15 @@ object WebFetchService {
             Html.fromHtml(stripped, Html.FROM_HTML_MODE_LEGACY).toString()
         }.getOrNull()
         if (!parsed.isNullOrBlank()) return parsed
-        // Fallback: block tags → newlines, остальные теги — прочь.
+        // Fallback: block tags → newlines, every other tag is dropped.
         return stripped
             .replace(Regex("<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>", RegexOption.IGNORE_CASE), "\n")
             .replace(Regex("<[^>]+>"), " ")
     }
 
     /**
-     * localhost, RFC1918, link-local, .local/.internal и хосты без точки
-     * (интранет-имена) — всё мимо.
+     * localhost, RFC1918, link-local, .local/.internal and dot-less hosts
+     * (intranet names) — all rejected.
      */
     private fun isPrivateHost(host: String): Boolean {
         if (host == "localhost" || host == "::1" || host.endsWith(".local") || host.endsWith(".internal")) return true

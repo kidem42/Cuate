@@ -105,10 +105,10 @@ final class AppSettings: ObservableObject {
             if localModelsEnabled != oldValue {
                 NotificationCenter.default.post(name: .localModelsMenuDidChange, object: nil)
             }
-            // Облачный тумблер — вложенный пункт локальных моделей и виден
-            // только при включённых локальных. Выключение родителя при
-            // выключенном облаке оставило бы ноль провайдеров без видимого
-            // способа это исправить — облако возвращается само.
+            // The cloud toggle is nested under local models and is visible
+            // only while local models are on. Turning the parent off with the
+            // cloud already off would leave zero providers and no visible way
+            // to fix it — so the cloud comes back on by itself.
             if !localModelsEnabled, !onlineModelsEnabled {
                 onlineModelsEnabled = true
             }

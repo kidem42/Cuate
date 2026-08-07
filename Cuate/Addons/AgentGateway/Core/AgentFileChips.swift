@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// File-path chips under an agent reply (notes §7.2 п.6–7): the agent
+/// File-path chips under an agent reply (notes §7.2 items 6–7): the agent
 /// creates files on ITS host and answers with paths. With a LOCAL gateway
 /// (host = this Mac — the common setup) the file is right here, so the chip
 /// opens it; with a remote gateway Hermes serves no file-download API, so
@@ -123,7 +123,7 @@ struct AgentFilePill: View {
 /// The chip row itself. Renders nothing when the reply mentions no paths.
 /// HTML/Markdown files the agent produced open as full ARTIFACT cards with
 /// the in-app preview (same card as fenced deliverables — e2e feedback
-/// 2026-07-25: "просматривать не переходя в папки"); everything else stays
+/// 2026-07-25: "preview them without walking into folders"); everything else stays
 /// a chip that reveals in Finder / copies the remote path.
 struct AgentFileChipsView: View {
     @Environment(\.themePalette) private var palette
@@ -230,8 +230,8 @@ struct AgentFileChipsView: View {
             ?? HermesFileCourier.fetchedCopy(forRemotePath: path)
         // Reverse courier: a remote gateway with the dashboard configured
         // can pull the file down — the chip becomes a download, not a
-        // copy-the-path consolation prize (e2e 2026-07-27: "как получить
-        // файл то?" — the agent offered ITS OWN localhost).
+        // copy-the-path consolation prize (e2e 2026-07-27: "so how do I
+        // get the file?" — the agent offered ITS OWN localhost).
         // Directories stay download-free on a remote gateway: there is
         // nothing to fetch through the files API — the chip only offers
         // the path (on a LOCAL gateway the same chip opens the folder in

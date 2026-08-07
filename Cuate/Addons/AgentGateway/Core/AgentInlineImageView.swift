@@ -4,7 +4,7 @@ import AppKit
 /// Inline image from a markdown `![](url)` line. Plain URLs load plainly;
 /// URLs pointing at a connected agent gateway get its Bearer token — a
 /// screenshot the agent serves from its own host would otherwise 401 and
-/// silently never render (notes §7.2 п.5). `data:image/...` URLs decode
+/// silently never render (notes §7.2 item 5). `data:image/...` URLs decode
 /// locally without any request.
 struct AgentInlineImageView: View {
     @Environment(\.themePalette) private var palette

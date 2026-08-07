@@ -20,8 +20,8 @@ struct ImageResultActionsBar: View {
     var body: some View {
         if settings.enabled, attachment.mimeType.hasPrefix("image") {
             VStack(alignment: .leading, spacing: 2) {
-                // Иконки вместо текста (кроме ретрай-меню): подписи живут в
-                // тултипах и accessibility-лейблах.
+                // Icons instead of text (except the retry menu): the captions
+                // live in tooltips and accessibility labels.
                 HStack(spacing: 12) {
                     iconButton(
                         icon: savedURL == nil ? "square.and.arrow.down" : "checkmark",
@@ -42,18 +42,18 @@ struct ImageResultActionsBar: View {
                         help: IAL("ia.help.copy")
                     ) { copy() }
 
-                    // «Продолжить редактирование» — у ЛЮБОГО результата:
-                    // картинка возвращается в композер, где доступны все
-                    // функции аддона (апскейл/фон/объекты).
+                    // "Continue editing" — on ANY result: the image goes back
+                    // into the composer, where every addon function is
+                    // available (upscale/background/objects).
                     iconButton(icon: "pencil",
                                label: IAL("ia.result.continueEditing"),
                                help: IAL("ia.help.continueEditing")) {
                         ImageOperations.restoreAttachment(attachment)
                     }
 
-                    // «Повторить с другой моделью» — только пока жива
-                    // сессионная запись о том, чем этот результат был
-                    // получен (ТЗ §4.3). Текстом — по решению дизайна.
+                    // "Retry with another model" — only while the session
+                    // record of what produced this result is still alive
+                    // (spec §4.3). Kept as text by design decision.
                     if let record = ImageResultRegistry.shared.record(for: attachment.id) {
                         retryMenu(record)
                     }

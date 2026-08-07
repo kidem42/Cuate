@@ -4,12 +4,12 @@ import AppKit
 /// Row of image actions shown under the pending-attachment preview in the
 /// chat panel (host mount: one line in `ChatWindow`):
 ///
-///   [Апскейл ▾] [Убрать фон] [Удалить объекты]   (+ OCR остаётся в превью)
+///   [Upscale ▾] [Remove background] [Remove objects]   (+ OCR stays in the preview)
 ///
-/// Клик по «Апскейл» — дефолтный запуск (×2 где применимо); ▾ — факторы
-/// ×2/×4/×макс (недоступные по потолку модели дизейблятся) и «Улучшить
-/// лица» для моделей с поддержкой. «Удалить объекты» разворачивает инлайн
-/// `MaskEditorView` (кисть/текст). Renders nothing when the addon is off or
+/// Clicking "Upscale" runs the default (×2 where applicable); ▾ offers the
+/// factors ×2/×4/×max (those over the model's ceiling are disabled) and
+/// "Enhance faces" for models that support it. "Remove objects" expands the
+/// inline `MaskEditorView` (brush/text). Renders nothing when the addon is off or
 /// the attachment isn't an image, so the host call site stays unconditional.
 struct ImageAttachmentActionsBar: View {
     let attachment: ChatAttachment
@@ -125,7 +125,7 @@ struct ImageAttachmentActionsBar: View {
     }
 
     /// Factors offered for the current attachment: model options minus the
-    /// ones whose result would exceed the model's output ceiling (ТЗ §4.4a).
+    /// ones whose result would exceed the model's output ceiling (spec §4.4a).
     private func availableFactors(for model: ImageModelInfo?) -> [Int] {
         guard let model else { return [] }
         var options = model.factorOptions
@@ -194,13 +194,14 @@ struct ImageAttachmentActionsBar: View {
                                 fg: palette.ink)
     }
 
-    /// "Что делает · модель (цена) · слэш-альтернатива" per function.
+    /// "What it does · model (price) · slash alternative" per function.
     private func functionHelp(_ key: String, model: ImageModelInfo?) -> String {
         guard let model else { return "" }
         return String(format: IAL(key), model.name, model.priceLabel)
     }
 
-    /// ТЗ §6: кнопки видны и без ключа; клик объясняет, куда идти. On-device
+    /// Spec §6: the buttons are visible without a key; a click explains where
+    /// to go. On-device
     /// providers (Apple) need no key, so the check is skipped when the target
     /// model runs locally — background removal works with no key configured.
     private func runIfKeyed(_ model: ImageModelInfo?, _ body: () -> Void) {
@@ -287,7 +288,7 @@ struct ThemedPillColors {
 
 /// Día-style action pill: rounded rect (r6), 1.5px dotted border and a
 /// translucent fill, text + SF Symbol in the pill's foreground color. Matches
-/// the design's `[Апскейл ▾] [Убрать фон] [Удалить объекты]` row.
+/// the design's `[Upscale ▾] [Remove background] [Remove objects]` row.
 struct ThemedPillButtonStyle: ButtonStyle {
     let colors: ThemedPillColors
     @Environment(\.isEnabled) private var isEnabled
@@ -322,7 +323,7 @@ extension View {
     }
 }
 
-/// Result filenames: `<исходное>-upscaled.png` / `-nobg.png` / `-cleaned.png`.
+/// Result filenames: `<source>-upscaled.png` / `-nobg.png` / `-cleaned.png`.
 enum ImageResultNaming {
     static func filename(source: String, suffix: String, mime: String) -> String {
         let base = (source as NSString).deletingPathExtension

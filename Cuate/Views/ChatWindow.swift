@@ -466,8 +466,8 @@ struct ChatWindow: View {
                     .padding(.vertical, 6)
                     .background(.ultraThinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    // Тонкая обводка в цвете поля ввода (мокап тем):
-                    // glass остаётся как был, без рамки.
+                    // Hairline stroke in the input field's color (theme mockup):
+                    // glass stays as it was, with no border.
                     .overlay {
                         if !palette.isGlass {
                             RoundedRectangle(cornerRadius: 12)
@@ -1137,7 +1137,7 @@ struct ChatWindow: View {
                 panelKeyMonitor = nil
             }
         }
-        // ImageAddon: retry-after-error and «Продолжить редактирование»
+        // ImageAddon: retry-after-error and "Continue editing"
         // hand an attachment back to the composer.
         .onReceive(NotificationCenter.default.publisher(for: .imageAddonAttachRequest)) { note in
             if let attachment = note.object as? ChatAttachment {
@@ -2210,7 +2210,7 @@ struct ChatWindow: View {
     /// models) in `buildMessages`.
     private func performSend(text: String, attachments: [ChatAttachment]) {
         // An attachment restored from an existing chat message (ImageAddon
-        // «продолжить редактирование») already owns a store row; posting the
+        // "continue editing") already owns a store row; posting the
         // same id again would collide with the unique index and persist an
         // attachment-less message — re-wrap with a fresh identity.
         let posted = attachments.map {

@@ -28,7 +28,7 @@ struct ThinkingEqualizer: View {
 
     var body: some View {
         if palette.themeID == .yule {
-            // Yule: карамельный цилиндр — спираль крутится «на боку».
+            // Yule: a candy-cane cylinder — the spiral spins "on its side".
             CandyCaneSpinner(paused: paused)
         } else {
             equalizer
@@ -90,8 +90,8 @@ struct CandyCaneSpinner: View {
                 ctx.clip(to: capsule)
                 ctx.fill(capsule, with: .color(cream))
 
-                // Диагональные полосы «/», едут вправо на phase; запас по краям
-                // покрывает диагональный свес.
+                // Diagonal "/" stripes travelling right with phase; the margin
+                // on both sides covers the diagonal overhang.
                 let h = canvasSize.height
                 var x = -h - travel + phase
                 while x < canvasSize.width + h {
@@ -105,7 +105,7 @@ struct CandyCaneSpinner: View {
                     x += travel
                 }
 
-                // Глянец цилиндра: блик сверху, тень снизу — неподвижные.
+                // Cylinder gloss: highlight on top, shadow below — both static.
                 ctx.fill(capsule, with: .linearGradient(
                     Gradient(stops: [
                         .init(color: .white.opacity(0.45), location: 0),

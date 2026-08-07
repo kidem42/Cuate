@@ -13,7 +13,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case openrouter
     case kimi
     case ollama
-    case hermes // agent gateway (Addons/HermesAddon), not a конвенциональный provider
+    case hermes // agent gateway (Addons/HermesAddon), not a conventional provider
 
     var id: String { rawValue }
 

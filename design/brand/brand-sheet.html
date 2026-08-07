@@ -86,20 +86,20 @@
   </svg>
   <div>
     <div class="name">Cuate</div>
-    <div class="say">KWAH-teh · Куатэ · от науатль <i>cōātl</i> — «близнец»</div>
-    <div class="tag">Нажми клавишу где угодно. Твой близнец появится.</div>
+    <div class="say">KWAH-teh · from Nahuatl <i>cōātl</i> — "twin"</div>
+    <div class="tag">Press a key anywhere. Your twin shows up.</div>
   </div>
 </div>
 
 <section>
-  <h2>Марка — el eclipse</h2>
-  <p>Один диск, две подсветки. Тёплая снизу, холодная сверху. Это и есть близнецы:
-     ты и он — одно и то же тело, освещённое с двух сторон. Форма унаследована от
-     прежней иконки-сферы, так что переход не выглядит разрывом.</p>
+  <h2>The mark — el eclipse</h2>
+  <p>One disc, two lights. Warm from below, cold from above. That is the twins:
+     you and it are the same body, lit from two sides. The shape is inherited from
+     the previous sphere icon, so the transition doesn't read as a break.</p>
 
   <div class="grid g2">
     <div class="card">
-      <div class="lab">Геометрия</div>
+      <div class="lab">Geometry</div>
       <svg width="100%" viewBox="0 0 1024 1024" style="max-width:300px;display:block;margin:0 auto">
         <circle cx="512" cy="512" r="300" fill="none" stroke="#3A424C" stroke-width="4"/>
         <circle cx="484" cy="406" r="300" fill="none" stroke="#3A424C" stroke-width="4" stroke-dasharray="14 12"/>
@@ -111,43 +111,43 @@
         <circle cx="530" cy="580" r="7" fill="#8C8A85"/>
       </svg>
       <p class="muted" style="font-size:13px;margin:16px 0 0">
-        Диск&nbsp;A: <code>r&nbsp;=&nbsp;300</code>. Тёплый близнец — копия A со сдвигом
-        <code>(−28,&nbsp;−106)</code>, толщина серпа 110. Холодный — сдвиг
-        <code>(+18,&nbsp;+68)</code>, толщина 70. Всё строится от одного радиуса, поэтому
-        марку можно пересобрать в любом размере, не имея исходника.
+        Disc&nbsp;A: <code>r&nbsp;=&nbsp;300</code>. The warm twin is a copy of A offset by
+        <code>(−28,&nbsp;−106)</code>, with a crescent thickness of 110. The cold one is offset by
+        <code>(+18,&nbsp;+68)</code>, thickness 70. Everything derives from a single radius, so
+        the mark can be rebuilt at any size without the source file.
       </p>
     </div>
 
     <div class="card">
-      <div class="lab">Правила</div>
-      <div class="dd"><span class="yes">✓</span><span class="t">Тёплый серп всегда снизу<em>Свет идёт снизу — так было в исходной иконке, так и остаётся</em></span></div>
-      <div class="dd"><span class="yes">✓</span><span class="t">Охранное поле — половина радиуса диска<em>Ничего ближе <code>0.5r</code> к краю марки</em></span></div>
-      <div class="dd"><span class="yes">✓</span><span class="t">Минимальный размер — 16&nbsp;px<em>Ниже переходим на монохромный глиф меню-бара</em></span></div>
-      <div class="dd"><span class="no">✗</span><span class="t">Не переворачивать и не зеркалить<em>Перевёрнутая марка читается как убывающая луна</em></span></div>
-      <div class="dd"><span class="no">✗</span><span class="t">Не перекрашивать серпы в цвета тем<em>Восемь тем красят интерфейс, но не бренд</em></span></div>
-      <div class="dd"><span class="no">✗</span><span class="t">Не добавлять обводку, тень и текст внутрь марки</span></div>
+      <div class="lab">Rules</div>
+      <div class="dd"><span class="yes">✓</span><span class="t">The warm crescent is always at the bottom<em>The light comes from below — as it did in the original icon, and still does</em></span></div>
+      <div class="dd"><span class="yes">✓</span><span class="t">The clear space is half the disc's radius<em>Nothing closer than <code>0.5r</code> to the mark's edge</em></span></div>
+      <div class="dd"><span class="yes">✓</span><span class="t">The minimum size is 16&nbsp;px<em>Below that we switch to the monochrome menu-bar glyph</em></span></div>
+      <div class="dd"><span class="no">✗</span><span class="t">Never flip or mirror it<em>An inverted mark reads as a waning moon</em></span></div>
+      <div class="dd"><span class="no">✗</span><span class="t">Never recolor the crescents with theme colors<em>The eight themes paint the interface, not the brand</em></span></div>
+      <div class="dd"><span class="no">✗</span><span class="t">Never add an outline, a shadow or text inside the mark</span></div>
     </div>
   </div>
 </section>
 
 <section>
-  <h2>Значок в строке меню</h2>
-  <p>Шаблонное изображение: только альфа, цвет назначает система. Серп утолщён до
-     <code>0.45r</code> — на 18&nbsp;pt тонкий серп разваливается. Состояние показываем
-     геометрией, а не цветом: близнец подходит ближе, серп сужается.</p>
+  <h2>The menu-bar glyph</h2>
+  <p>A template image: alpha only, with the system assigning the color. The crescent is
+     thickened to <code>0.45r</code> — at 18&nbsp;pt a thin crescent falls apart. State is shown
+     with geometry, not color: the twin moves closer and the crescent narrows.</p>
 
-  <div class="barlabel">Светлая строка меню — покой и активность</div>
+  <div class="barlabel">A light menu bar — idle and active</div>
   <div class="bar light">
-    <span>Finder</span><span class="muted" style="opacity:.5">Файл</span>
+    <span>Finder</span><span class="muted" style="opacity:.5">File</span>
     <span style="flex:1"></span>
     <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#2A2A2E" d="M 14.796 6.24 A 6.6 6.6 0 1 1 2.404 9.66 A 6.6 6.6 0 0 0 14.796 6.24 Z"/></svg>
     <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#2A2A2E" d="M 15.132 6.961 A 6.6 6.6 0 1 1 2.468 10.339 A 6.6 6.6 0 0 0 15.132 6.961 Z"/></svg>
     <span>13:24</span>
   </div>
 
-  <div class="barlabel">Тёмная строка меню</div>
+  <div class="barlabel">A dark menu bar</div>
   <div class="bar dark">
-    <span>Finder</span><span style="opacity:.5">Файл</span>
+    <span>Finder</span><span style="opacity:.5">File</span>
     <span style="flex:1"></span>
     <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#F0F0F4" d="M 14.796 6.24 A 6.6 6.6 0 1 1 2.404 9.66 A 6.6 6.6 0 0 0 14.796 6.24 Z"/></svg>
     <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#F0F0F4" d="M 15.132 6.961 A 6.6 6.6 0 1 1 2.468 10.339 A 6.6 6.6 0 0 0 15.132 6.961 Z"/></svg>
@@ -155,141 +155,141 @@
   </div>
 
   <div class="grid g3" style="margin-top:26px">
-    <div class="card"><div class="lab">Покой</div><p style="margin:0;font-size:14px">Серп 3.0&nbsp;pt. Близнец далеко.</p></div>
-    <div class="card"><div class="lab">Слушает</div><p style="margin:0;font-size:14px">Серп 1.55&nbsp;pt. Анимируем сдвиг близнеца, 0.9&nbsp;с, ease-in-out, туда-обратно.</p></div>
-    <div class="card"><div class="lab">Занято</div><p style="margin:0;font-size:14px">Тот же цикл, вдвое медленнее. Никаких спиннеров и точек.</p></div>
+    <div class="card"><div class="lab">Idle</div><p style="margin:0;font-size:14px">Crescent 3.0&nbsp;pt. The twin is far away.</p></div>
+    <div class="card"><div class="lab">Listening</div><p style="margin:0;font-size:14px">Crescent 1.55&nbsp;pt. Animate the twin's offset, 0.9&nbsp;s, ease-in-out, back and forth.</p></div>
+    <div class="card"><div class="lab">Busy</div><p style="margin:0;font-size:14px">The same cycle, at half the speed. No spinners, no dots.</p></div>
   </div>
 </section>
 
 <section>
-  <h2>Цвет</h2>
-  <p>Палитра снята пипеткой с исходной иконки — это не новый набор, а тот же свет,
-     записанный числами. Два акцента и есть близнецы: тёплый и холодный.</p>
+  <h2>Color</h2>
+  <p>The palette was eyedropped from the original icon — it isn't a new set but the same light,
+     written down as numbers. The two accents are the twins: warm and cold.</p>
 
   <div class="grid g3">
     <div class="sw"><div class="chip" style="background:#08070C"></div><div class="meta">
       <div class="n">Obsidiana</div><div class="h">#08070C</div>
-      <div class="u">Фон везде. Сайт, иконка, панель.</div></div></div>
+      <div class="u">The background everywhere. The site, the icon, the panel.</div></div></div>
 
     <div class="sw"><div class="chip" style="background:#F9A211"></div><div class="meta">
       <div class="n">Ámbar</div><div class="h">#F9A211</div>
-      <div class="u">Главный акцент. Тёплый близнец, ссылки и действия на тёмном.</div></div></div>
+      <div class="u">The primary accent. The warm twin, links and actions on dark.</div></div></div>
 
     <div class="sw"><div class="chip" style="background:#C77800"></div><div class="meta">
       <div class="n">Brasa</div><div class="h">#C77800</div>
-      <div class="u">Амбра для светлого фона — там, где #F9A211 не проходит по контрасту.</div></div></div>
+      <div class="u">Ámbar for light backgrounds — where #F9A211 fails on contrast.</div></div></div>
 
     <div class="sw"><div class="chip" style="background:#5C7A96"></div><div class="meta">
       <div class="n">Cielo</div><div class="h">#5C7A96</div>
-      <div class="u">Холодный близнец. Второй акцент, никогда не главный.</div></div></div>
+      <div class="u">The cold twin. The secondary accent, never the primary one.</div></div></div>
 
     <div class="sw"><div class="chip" style="background:#A8C0D4"></div><div class="meta">
       <div class="n">Niebla</div><div class="h">#A8C0D4</div>
-      <div class="u">Светлый край холодного серпа, моноширинный текст, подписи.</div></div></div>
+      <div class="u">The light edge of the cold crescent, monospaced text, captions.</div></div></div>
 
     <div class="sw"><div class="chip" style="background:#FEFCF2"></div><div class="meta">
       <div class="n">Cal</div><div class="h">#FEFCF2</div>
-      <div class="u">Тёплый белый. Заголовки на тёмном, фон светлой темы сайта.</div></div></div>
+      <div class="u">A warm white. Headings on dark, the background of the site's light theme.</div></div></div>
   </div>
 
-  <h3>Пропорция</h3>
-  <p class="muted" style="font-size:14px">Примерно 80&nbsp;% обсидиана, 12&nbsp;% нейтральных
-    поверхностей, 6&nbsp;% амбры, 2&nbsp;% сьело. Амбра — редкая и потому заметная. Если её
-    много, продукт начинает выглядеть как предупреждение.</p>
+  <h3>Proportion</h3>
+  <p class="muted" style="font-size:14px">Roughly 80&nbsp;% obsidiana, 12&nbsp;% neutral
+    surfaces, 6&nbsp;% ámbar, 2&nbsp;% cielo. Ámbar is rare and therefore noticeable. Too much of it
+    and the product starts to look like a warning.</p>
 </section>
 
 <section>
-  <h2>Шрифт</h2>
+  <h2>Typeface</h2>
   <div class="grid g2">
     <div class="card">
-      <div class="lab">Интерфейс и сайт</div>
+      <div class="lab">Interface and site</div>
       <div style="font-size:30px;font-weight:600;color:var(--cal);letter-spacing:-.01em">Cuate</div>
       <p class="muted" style="font-size:14px;margin-top:10px">
-        Геометрический гротеск с человечными формами. В приложении — системный
-        (SF&nbsp;Pro / Roboto). На сайте — Inter или Geist. Никакого леттерспейсинга
-        в логотипе, никакого курсива, никаких капсов.</p>
+        A geometric grotesque with humanist shapes. In the app it is the system face
+        (SF&nbsp;Pro / Roboto). On the site, Inter or Geist. No letterspacing
+        in the logo, no italics, no all caps.</p>
     </div>
     <div class="card">
-      <div class="lab">Код и клавиши</div>
+      <div class="lab">Code and keys</div>
       <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:22px;color:var(--niebla)">⌘⇧Space</div>
       <p class="muted" style="font-size:14px;margin-top:10px">
-        Моноширинный — SF&nbsp;Mono или JetBrains&nbsp;Mono. Хоткеи всегда набираются
-        символами клавиш, а не словами: <code>⌥Space</code>, не «Option+Пробел».</p>
+        Monospaced — SF&nbsp;Mono or JetBrains&nbsp;Mono. Hotkeys are always set
+        in key symbols, never in words: <code>⌥Space</code>, not "Option+Space".</p>
     </div>
   </div>
   <p class="muted" style="font-size:14px;margin-top:18px">
-    Пара <b>ua</b> — визуальная подпись слова. Не сжимать её кернингом.</p>
+    The <b>ua</b> pair is the word's visual signature. Never tighten it with kerning.</p>
 </section>
 
 <section>
-  <h2>Голос</h2>
-  <p>Cuate — не слуга и не начальник. Он ровня. Отсюда всё остальное: короткие фразы,
-     отсутствие извинений, отсутствие восторга.</p>
+  <h2>Voice</h2>
+  <p>Cuate is neither a servant nor a boss. It is an equal. Everything else follows from that:
+     short sentences, no apologies, no enthusiasm.</p>
 
   <div class="grid g2">
     <div class="card">
-      <div class="lab">Так</div>
-      <div class="dd"><span class="yes">✓</span><span class="t">«Готово. Скопировал в буфер.»</span></div>
-      <div class="dd"><span class="yes">✓</span><span class="t">«Не нашёл ключ Mistral. Добавить?»</span></div>
-      <div class="dd"><span class="yes">✓</span><span class="t">«Модель не в памяти. Загрузка займёт около минуты.»</span></div>
-      <div class="dd"><span class="yes">✓</span><span class="t">В испанском — <b>tú</b><em>«¿Le echamos un ojo?», никогда «usted»</em></span></div>
+      <div class="lab">Do</div>
+      <div class="dd"><span class="yes">✓</span><span class="t">"Done. Copied to the clipboard."</span></div>
+      <div class="dd"><span class="yes">✓</span><span class="t">"No Mistral key found. Add one?"</span></div>
+      <div class="dd"><span class="yes">✓</span><span class="t">"The model isn't in memory. Loading will take about a minute."</span></div>
+      <div class="dd"><span class="yes">✓</span><span class="t">In Spanish, <b>tú</b><em>"¿Le echamos un ojo?", never "usted"</em></span></div>
     </div>
     <div class="card">
-      <div class="lab">Не так</div>
-      <div class="dd"><span class="no">✗</span><span class="t">«Отлично! Я успешно скопировал текст! 🎉»</span></div>
-      <div class="dd"><span class="no">✗</span><span class="t">«Извините, я не смог найти ваш API-ключ…»</span></div>
-      <div class="dd"><span class="no">✗</span><span class="t">«Ваш персональный AI-ассистент готов помочь»</span></div>
-      <div class="dd"><span class="no">✗</span><span class="t">Имя для самого ИИ<em>Он и есть Cuate. Второго имени у него нет</em></span></div>
+      <div class="lab">Don't</div>
+      <div class="dd"><span class="no">✗</span><span class="t">"Great! I successfully copied the text! 🎉"</span></div>
+      <div class="dd"><span class="no">✗</span><span class="t">"Sorry, I was unable to find your API key…"</span></div>
+      <div class="dd"><span class="no">✗</span><span class="t">"Your personal AI assistant is ready to help"</span></div>
+      <div class="dd"><span class="no">✗</span><span class="t">A name for the AI itself<em>It IS Cuate. It has no second name</em></span></div>
     </div>
   </div>
 
-  <h3>Правила письма</h3>
+  <h3>Writing rules</h3>
   <table>
-    <tr><th>Правило</th><th>Пример</th></tr>
-    <tr><td>Никаких восклицательных знаков в интерфейсе</td><td>«Файл сохранён.»</td></tr>
-    <tr><td>Ошибка = что случилось + что делать</td><td>«Провайдер вернул 429. Подождать или сменить модель.»</td></tr>
-    <tr><td>Без эмодзи в продукте и в релизах</td><td>—</td></tr>
-    <tr><td>Слово «AI» живёт в дескрипторах, не в речи продукта</td><td>«Cuate — AI on any screen», но внутри просто «Cuate»</td></tr>
-    <tr><td>Имя не склоняется ни в одном языке</td><td>«Открой Cuate», не «открой Куату»</td></tr>
+    <tr><th>Rule</th><th>Example</th></tr>
+    <tr><td>No exclamation marks in the interface</td><td>"File saved."</td></tr>
+    <tr><td>An error = what happened + what to do</td><td>"The provider returned 429. Wait or switch models."</td></tr>
+    <tr><td>No emoji in the product or in releases</td><td>—</td></tr>
+    <tr><td>The word "AI" belongs in descriptors, not in the product's speech</td><td>"Cuate — AI on any screen", but inside it is just "Cuate"</td></tr>
+    <tr><td>The name is never inflected in any language</td><td>"Open Cuate", never a declined form of it</td></tr>
   </table>
 </section>
 
 <section>
-  <h2>Сайт</h2>
+  <h2>The site</h2>
   <div class="grid g2">
     <div class="card">
-      <div class="lab">Первый экран</div>
-      <p style="margin:0;font-size:14px">Обсидиановый фон, марка, имя, одна строка
-      дескриптора и живая запись экрана: нажатие хоткея — панель — ответ. Никаких
-      скриншотов-коллажей и никаких людей в наушниках.</p>
+      <div class="lab">The first screen</div>
+      <p style="margin:0;font-size:14px">An obsidiana background, the mark, the name, a single line
+      of descriptor and a live screen recording: the hotkey press — the panel — the answer. No
+      screenshot collages and no people in headphones.</p>
     </div>
     <div class="card">
-      <div class="lab">Что показывать</div>
-      <p style="margin:0;font-size:14px">Продукт в чужом окне — поверх почты, кода,
-      таблицы. Ценность в том, что он приходит к тебе, а не ты к нему; интерфейс
-      в вакууме этого не показывает.</p>
+      <div class="lab">What to show</div>
+      <p style="margin:0;font-size:14px">The product inside someone else's window — over mail, code,
+      a spreadsheet. The value is that it comes to you rather than you to it; an interface
+      in a vacuum doesn't show that.</p>
     </div>
   </div>
   <p class="muted" style="font-size:14px;margin-top:18px">
-    Темы приложения (blueprint, terminal, synthwave, sakura, halloween, Día de Muertos) —
-    это витрина, а не идентичность. Показывать их можно и нужно, но отдельным блоком,
-    а не как основной язык сайта.</p>
+    The app's themes (blueprint, terminal, synthwave, sakura, halloween, Día de Muertos) are
+    a showcase, not an identity. They can and should be shown, but as a separate block,
+    not as the site's primary language.</p>
 </section>
 
 <section>
-  <h2>Файлы</h2>
+  <h2>Files</h2>
   <table class="files">
-    <tr><td>design/brand/cuate-icon.svg</td><td class="muted">иконка приложения, 1024</td></tr>
-    <tr><td>design/brand/cuate-mark.svg</td><td class="muted">марка без подложки</td></tr>
-    <tr><td>design/brand/cuate-menubar-18.svg</td><td class="muted">строка меню, покой</td></tr>
-    <tr><td>design/brand/cuate-menubar-18-active.svg</td><td class="muted">строка меню, активен</td></tr>
-    <tr><td>BRANDING.md</td><td class="muted">бренд-бук целиком</td></tr>
+    <tr><td>design/brand/cuate-icon.svg</td><td class="muted">the app icon, 1024</td></tr>
+    <tr><td>design/brand/cuate-mark.svg</td><td class="muted">the mark with no backdrop</td></tr>
+    <tr><td>design/brand/cuate-menubar-18.svg</td><td class="muted">menu bar, idle</td></tr>
+    <tr><td>design/brand/cuate-menubar-18-active.svg</td><td class="muted">menu bar, active</td></tr>
+    <tr><td>BRANDING.md</td><td class="muted">the whole brand book</td></tr>
   </table>
 </section>
 
 <p class="muted" style="font-size:13px;border-top:1px solid var(--linea);padding-top:20px">
-  Палитра снята с <code>Assets.xcassets/AppIcon.appiconset</code> прежней иконки.
-  Марка построена от того же диска, что и она.
+  The palette was taken from the previous icon's <code>Assets.xcassets/AppIcon.appiconset</code>.
+  The mark is built from the same disc it was.
 </p>
 
 </div>

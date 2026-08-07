@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Макет нового онбординг-тура Cuate: 5 анимированных сцен по пунктам
-меню статус-бара + окно тура целиком.
+Mockup of the new Cuate onboarding tour: 5 animated scenes, one per
+status-bar menu item, plus the whole tour window.
 
     python3 design/onboarding/build_cards.py
     open design/onboarding/dist/preview.html
 
-Собирает самодостаточные HTML-карточки в dist/ (формат Claude Design:
-первая строка — маркер @dsCard) плюс локальный стенд preview.html.
+Builds self-contained HTML cards into dist/ (Claude Design format: the
+first line is the @dsCard marker) plus a local preview.html stand.
 
-Значки настоящие: SF Symbols отрисованы AppKit'ом в PNG (dump_symbols.swift →
-symbols.json) и подключаются CSS-маской, поэтому красятся currentColor ровно
-как template-изображения в приложении. Логотипы провайдеров берутся как есть
-из Cuate/Assets.xcassets/Provider-*.imageset/*.svg.
+The glyphs are real: SF Symbols are rendered to PNG by AppKit
+(dump_symbols.swift -> symbols.json) and attached as a CSS mask, so they take
+currentColor exactly like template images do in the app. Provider logos are
+taken as-is from Cuate/Assets.xcassets/Provider-*.imageset/*.svg.
 
-Модель анимации, которую переносить в SwiftUI: ОДИН такт на сцену, у каждого
-слоя своё окно внутри фазы 0…1 (проценты в @keyframes). В приложении сцена
-играет один проход и замирает на кадре-результате; здесь зациклена, чтобы её
-можно было разглядывать, и её можно скраббить по шкале под сценой.
+The animation model to port to SwiftUI: ONE beat per scene, each layer with
+its own window inside the 0...1 phase (percentages in @keyframes). In the app
+a scene plays a single pass and freezes on the result frame; here it loops so
+it can be inspected, and it can be scrubbed on the scale below the scene.
 """
 
 import json, pathlib, re
 
 HERE = pathlib.Path(__file__).resolve().parent
-REPO = HERE.parent.parent                      # корень репозитория
+REPO = HERE.parent.parent                      # repository root
 ASSETS = REPO / "Cuate" / "Assets.xcassets"
 OUT = HERE / "dist"
 
@@ -32,15 +32,15 @@ SYMBOLS = json.loads((HERE / "symbols.json").read_text())
 
 
 def sf(name, size=13, extra=""):
-    """SF Symbol как маска. name — как в Image(systemName:)."""
+    """SF Symbol as a mask. `name` is spelled as in Image(systemName:)."""
     key = name.replace(".", "-")
-    assert key in SYMBOLS, "нет символа " + name
+    assert key in SYMBOLS, "no such symbol: " + name
     return ('<i class="sf" style="--u:var(--sf-%s);width:%spx;height:%spx;%s"></i>'
             % (key, size, size, extra))
 
 
 def symbol_defs(body):
-    """Только те символы, что реально встретились в карточке."""
+    """Only the symbols that actually appear in the card."""
     used = sorted(set(re.findall(r"var\(--sf-([a-z0-9-]+)\)", body)))
     return ":root{" + "".join(
         '--sf-%s:url(data:image/png;base64,%s);' % (k, SYMBOLS[k]) for k in used) + "}"
@@ -63,7 +63,7 @@ def logo(provider, size=12, extra=""):
         "<svg ", '<svg class="lg" style="width:%spx;height:%spx;%s" ' % (size, size, extra), 1)
 
 
-# ============================================================ ОБЩЕЕ
+# ============================================================ SHARED
 CORE = """
 *{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
 :root{
@@ -136,9 +136,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue'
 .src{display:inline-flex; align-items:center; gap:3px; font-size:8px; color:var(--blue);
   background:rgba(0,113,227,.13); padding:2px 6px; border-radius:999px; margin-top:3px}
 
-/* Печать: ширина от 0 до натуральной; натуральную меряет скрипт (scrollWidth),
-   подбирать её в ch бессмысленно — шрифт пропорциональный. Ширина, а не клип:
-   так строка раздвигается и каретка едет за текстом. */
+/* Typing: width goes from 0 to the natural width, which the script measures
+   (scrollWidth) — guessing it in ch is pointless with a proportional font.
+   Width, not clip: the line grows and the caret rides after the text. */
 .type{display:inline-block; overflow:hidden; white-space:nowrap; vertical-align:bottom; --w:0px; width:0}
 .caret{display:inline-block; width:1px; height:10px; background:var(--text); vertical-align:-1px;
   animation:blink 1.05s steps(1) infinite; animation-delay:var(--delay,0ms); animation-play-state:var(--play,running)}
@@ -153,7 +153,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue'
   animation-iteration-count:infinite; animation-fill-mode:both;
   animation-delay:var(--delay,0ms); animation-play-state:var(--play,running)}
 .an.st{animation-timing-function:steps(26)}
-/* «проезды» (шторка, лупа, рамка колонки) идут равномерно, без разгона */
+/* the sweeps (curtain, loupe, column frame) run at a constant speed, no ramp */
 .an.lin{animation-timing-function:linear}
 .per{animation-iteration-count:infinite; animation-fill-mode:both; animation-timing-function:ease-in-out;
   animation-delay:calc(var(--delay,0ms) + var(--i,0) * -70ms); animation-play-state:var(--play,running)}
@@ -166,7 +166,7 @@ def menubar(app, hot=False):
     return """
   <div class="menubar">
     <span class="app">%s</span>
-    <span class="mi">Файл</span><span class="mi">Правка</span><span class="mi">Вид</span>
+    <span class="mi">File</span><span class="mi">Edit</span><span class="mi">View</span>
     <span class="sp"></span>
     <span class="mb-icon%s">%s</span>%s%s<span>9:41</span>
   </div>""" % (app, ' hot" style="background:rgba(255,255,255,.28)' if hot else "",
@@ -174,7 +174,7 @@ def menubar(app, hot=False):
                sf("battery.100", 15, "opacity:.85;"))
 
 
-def head(provider="openai", provider_name="OpenAI", preset="Стандартный"):
+def head(provider="openai", provider_name="OpenAI", preset="Standard"):
     return """
     <div class="p-head">
       <span class="grp">%s %s %s</span><span class="sp"></span>
@@ -192,7 +192,7 @@ def composer(ph):
     </div>""" % (sf("paperclip", 12), ph, sf("mic.fill", 10), sf("paperplane.fill", 10))
 
 
-# ============================================================ 1 · ЧАТ
+# ============================================================ 1 - CHAT
 S1_CSS = """
 .s1 .hostwin{left:22px; top:44px; width:266px; height:180px; color:var(--text)}
 .s1 .panel{left:172px; top:64px; width:368px; z-index:10}
@@ -218,7 +218,7 @@ S1 = """
   <div class="wall"></div>
   __MENUBAR__
   <div class="hostwin">
-    <div class="hw-bar"><i class="r"></i><i class="y"></i><i class="g"></i><b>Почта — Входящие</b></div>
+    <div class="hw-bar"><i class="r"></i><i class="y"></i><i class="g"></i><b>Mail — Inbox</b></div>
     <div class="hw-body">
       <div class="tl b" style="width:52%"></div><div class="tl" style="width:88%"></div>
       <div class="tl" style="width:74%"></div><div class="tl" style="width:82%"></div>
@@ -232,18 +232,18 @@ S1 = """
     __HEAD__
     <div class="thread">
       <div class="an" style="animation-name:c1user">
-        <div class="row user"><div class="bub">Какая погода сегодня в Барселоне?</div></div>
+        <div class="row user"><div class="bub">What is the weather in Barcelona today?</div></div>
         <div class="ts" style="text-align:right">9:41</div>
       </div>
       <div class="stack">
         <div class="status an" style="animation-name:c1search">
-          __GLOBE__<span class="per" style="animation-name:shim;animation-duration:1.4s">Ищу в интернете…</span>
+          __GLOBE__<span class="per" style="animation-name:shim;animation-duration:1.4s">Searching the web…</span>
         </div>
         <div class="row bot an" style="animation-name:c1bot">
           <span class="avatar">__BRAIN__</span>
           <div class="bub" style="display:flex;flex-direction:column;gap:2px;align-self:start">
-            <span class="type an" style="animation-name:c1a1">Сейчас +26 °C, ясно, ветер 12 км/ч.</span>
-            <span class="type an" style="animation-name:c1a2">К вечеру +21 °C, дождя не будет.</span>
+            <span class="type an" style="animation-name:c1a1">Right now +26 °C, clear, wind 12 km/h.</span>
+            <span class="type an" style="animation-name:c1a2">By evening +21 °C, no rain expected.</span>
             <span class="src an" style="animation-name:c1src">__GLOBE2__ weather.com</span>
           </div>
         </div>
@@ -252,19 +252,19 @@ S1 = """
     <div class="composer">
       <span class="clip">__CLIP__</span>
       <div class="field">
-        <span class="ph an" style="animation-name:c1ph">Спросите что угодно…</span>
+        <span class="ph an" style="animation-name:c1ph">Ask anything…</span>
         <span class="an" style="animation-name:c1clear;white-space:nowrap">
-          <span class="type an st" style="animation-name:c1type">Какая погода сегодня в Барселоне?</span><span class="caret"></span>
+          <span class="type an st" style="animation-name:c1type">What is the weather in Barcelona today?</span><span class="caret"></span>
         </span>
       </div>
       <span class="mic">__MIC__</span><span class="send">__SEND__</span>
     </div>
   </div>
-  <div class="keycap an" style="animation-name:c1esc">Esc — скрыть</div>
+  <div class="keycap an" style="animation-name:c1esc">Esc — hide</div>
 </div>
 """
 
-# ============================================================ 2 · СКРИНШОТ ОБЛАСТИ → ТАБЛИЦА
+# ============================================================ 2 - AREA SCREENSHOT -> TABLE
 S2_CSS = """
 .s2 .hostwin{left:16px; top:40px; width:300px; height:206px; color:var(--text)}
 .s2 .dtable{width:100%; border-collapse:collapse; font-size:7.5px}
@@ -292,8 +292,8 @@ S2_CSS = """
 .s2 .act{display:inline-flex; align-items:center; gap:3px; font-size:8.5px; padding:3px 7px;
   border-radius:6px; background:rgba(255,255,255,.75); border:1px solid var(--sep); white-space:nowrap}
 .s2 .act.hot{background:var(--blue); border-color:transparent; color:#fff}
-/* одна таблица на все строки — колонки обязаны совпадать, поэтому строки
-   проявляются прозрачностью, а не высотой */
+/* one table for all rows — the columns must line up, so rows
+   fade in with opacity rather than height */
 .s2 .mdtable{width:100%; border-collapse:collapse; font-size:8px; table-layout:fixed}
 .s2 .mdtable th{text-align:left; font-weight:700; padding:1.5px 4px; border-bottom:1px solid rgba(0,0,0,.22)}
 .s2 .mdtable td{padding:1.5px 4px; border-bottom:1px solid rgba(0,0,0,.07); font-variant-numeric:tabular-nums}
@@ -319,27 +319,27 @@ S2_CSS = """
 @keyframes c2ans{0%,88%{opacity:0;transform:translateY(5px)}92%,100%{opacity:1;transform:none}}
 """
 
-TABLE_ROWS = [("Прямые продажи", "3,6", "4,2", "+17 %"),
-              ("Партнёры", "1,5", "1,8", "+20 %"),
-              ("Подписки", "5,4", "6,4", "+19 %")]
+TABLE_ROWS = [("Direct sales", "3.6", "4.2", "+17 %"),
+              ("Partners", "1.5", "1.8", "+20 %"),
+              ("Subscriptions", "5.4", "6.4", "+19 %")]
 
 
 def doc_table():
     rows = "".join('<tr><td>%s</td><td class="n">%s</td><td class="n">%s</td><td class="n">%s</td></tr>' % r
                    for r in TABLE_ROWS)
-    return ('<table class="dtable"><tr><th>Канал</th><th class="n">Q2</th>'
+    return ('<table class="dtable"><tr><th>Channel</th><th class="n">Q2</th>'
             '<th class="n">Q3</th><th class="n">Δ</th></tr>%s</table>' % rows)
 
 
 def md_table():
     out = ('<colgroup><col style="width:46%"><col style="width:18%"><col style="width:18%">'
            '<col style="width:18%"></colgroup>'
-           '<tr class="an" style="animation-name:c2t1"><th>Канал</th><th class="n">Q2</th>'
+           '<tr class="an" style="animation-name:c2t1"><th>Channel</th><th class="n">Q2</th>'
            '<th class="n">Q3</th><th class="n">Δ</th></tr>')
     for i, r in enumerate(TABLE_ROWS):
         out += ('<tr class="an" style="animation-name:c2t%d"><td>%s</td><td class="n">%s</td>'
                 '<td class="n">%s</td><td class="n">%s</td></tr>' % (i + 2, r[0], r[1], r[2], r[3]))
-    out += ('<tr class="an" style="animation-name:c2t5"><td><b>Итого</b></td><td class="n">10,5</td>'
+    out += ('<tr class="an" style="animation-name:c2t5"><td><b>Total</b></td><td class="n">10.5</td>'
             '<td class="n"><b>12,4</b></td><td class="n">+18 %</td></tr>')
     return '<table class="mdtable">' + out + "</table>"
 
@@ -349,7 +349,7 @@ S2 = ("""
   <div class="wall"></div>
   __MENUBAR__
   <div class="hostwin">
-    <div class="hw-bar"><i class="r"></i><i class="y"></i><i class="g"></i><b>Q3-отчёт.numbers</b></div>
+    <div class="hw-bar"><i class="r"></i><i class="y"></i><i class="g"></i><b>Q3-report.numbers</b></div>
     <div class="hw-body"><div class="tl b" style="width:44%"></div>__DOCTABLE__</div>
   </div>
   <div class="keycap an" style="animation-name:c2key">⇧⌘D</div>
@@ -363,32 +363,32 @@ S2 = ("""
     <div class="att">
       <div class="shot an" style="animation-name:c2thumb">__SHOTTABLE__</div>
       <div class="actbar an" style="animation-name:c2act">
-        <span class="act hot an" style="animation-name:c2press">__VIEWFINDER__ Извлечь текст</span>
-        <span class="act">__BGDOT__ Убрать фон</span>
-        <span class="act">__UPSCALE__ Апскейл</span>
+        <span class="act hot an" style="animation-name:c2press">__VIEWFINDER__ Extract text</span>
+        <span class="act">__BGDOT__ Remove background</span>
+        <span class="act">__UPSCALE__ Upscale</span>
       </div>
     </div>
     <div class="thread" style="padding-top:5px">
       <div class="status an" style="animation-name:c2ocr">
-        __VIEWFINDER2__ <span class="per" style="animation-name:shim;animation-duration:1.4s">Распознаю таблицу…</span>
+        __VIEWFINDER2__ <span class="per" style="animation-name:shim;animation-duration:1.4s">Reading the table…</span>
       </div>
       <div class="row bot">
         <span class="avatar">__BRAIN__</span>
         <div class="bub" style="align-self:start;padding:5px 7px;width:100%">__MDTABLE__</div>
       </div>
       <div class="an" style="animation-name:c2user">
-        <div class="row user"><div class="bub">Посчитай прирост к Q2</div></div>
+        <div class="row user"><div class="bub">Work out the growth over Q2</div></div>
       </div>
       <div class="row bot an" style="animation-name:c2ans">
         <span class="avatar">__BRAIN2__</span>
-        <div class="bub" style="align-self:start">Итого 12,4 млн — на 18 % больше Q2.</div>
+        <div class="bub" style="align-self:start">Total 12.4 M — 18 % above Q2.</div>
       </div>
     </div>
     <div class="composer">
       <span class="clip">__CLIP__</span>
       <div class="field">
         <span class="an" style="animation-name:c2qclear;white-space:nowrap">
-          <span class="type an st" style="animation-name:c2q">Посчитай прирост к Q2</span><span class="caret"></span>
+          <span class="type an st" style="animation-name:c2q">Work out the growth over Q2</span><span class="caret"></span>
         </span>
       </div>
       <span class="mic">__MIC__</span><span class="send">__SEND__</span>
@@ -398,7 +398,7 @@ S2 = ("""
 """).replace("__DOCTABLE__", doc_table()).replace("__SHOTTABLE__", doc_table()) \
     .replace("__MDTABLE__", md_table())
 
-# ============================================================ 3 · ДИКТОВКА С ПЕРЕВОДОМ (EN → ES)
+# ============================================================ 3 - DICTATION WITH TRANSLATION (EN -> ES)
 S3_CSS = """
 .s3 .notch{position:absolute; left:0; right:0; margin:0 auto; top:0; width:108px; height:21px;
   background:#08090C; border-radius:0 0 10px 10px; z-index:8}
@@ -458,7 +458,7 @@ S3 = """
     <span class="lang an" style="animation-name:c3lang">EN → ES</span>
   </div>
   <div class="heard an" style="animation-name:c3heard">
-    <u>говорю:</u><span class="type an st" style="animation-name:c3h1">Sorry for the delay,</span><span class="type an st" style="animation-name:c3h2"> I'll send the file tonight</span>
+    <u>saying:</u><span class="type an st" style="animation-name:c3h1">Sorry for the delay,</span><span class="type an st" style="animation-name:c3h2"> I'll send the file tonight</span>
   </div>
   <div class="keycap an" style="animation-name:c3key">⌥⇧Space</div>
 
@@ -472,7 +472,7 @@ S3 = """
       </div>
       <div class="done an" style="animation-name:c3done">
         <span style="width:5px;height:5px;border-radius:50%;background:#34C759"></span>
-        вставлено на месте курсора — приложение ничего не заметило
+        inserted at the cursor — the app never noticed
       </div>
       <div class="tgfield">
         <div class="tgin"><span class="type an st" style="animation-name:c3p1">Perdona el retraso —</span><span class="type an st" style="animation-name:c3p2"> te envío el archivo esta noche.</span><span class="caret"></span></div>
@@ -483,14 +483,15 @@ S3 = """
 </div>
 """
 
-# ============================================================ 4 · МИРОВОЕ ВРЕМЯ
-# Структура 1:1 с WorldTimeView: шапка (закрыть · поиск города · ссылка на
-# Календарь · AM-PM/24 · Esc), полоса дней, сетка. Слева шапка строки —
-# смещение от дома (или house.fill у домашнего города), название, чип
-# аббревиатуры зоны, страна, свои часы и дата. Справа сплошная «стеклянная
-# лента» из 24 ячеек без зазоров: номер часа в каждой, чип даты в локальную
-# полночь (день недели / число / месяц), пунктир «сейчас». Рамка колонки —
-# одна на всю высоту сетки (columnFrames), не по строкам.
+# ============================================================ 4 - WORLD TIME
+# Structure is 1:1 with WorldTimeView: top bar (close - city search - link to
+# Calendar - AM-PM/24 - Esc), the day strip, the grid. On the left the row
+# header carries the offset from home (or house.fill for the home city), the
+# name, the zone-abbreviation chip, the country, its own clock and date. On the
+# right a continuous "glass band" of 24 gapless cells: the hour number in each,
+# a date chip at local midnight (weekday / day / month), a dashed "now" line.
+# The column frame is a single one spanning the grid height (columnFrames),
+# not one per row.
 S4_CSS = """
 .s4 .menu{position:absolute; right:14px; top:26px; z-index:9; width:214px; padding:4px; border-radius:9px;
   background:rgba(250,250,252,.92); backdrop-filter:blur(24px) saturate(180%);
@@ -584,24 +585,24 @@ S4_CSS = """
 @keyframes c4pop{0%,73%{opacity:0;transform:translateY(5px) scale(.96)}78%,92%{opacity:1;transform:none}96%,100%{opacity:0}}
 """
 
-# Дом — Москва; «сейчас» 13:04 по дому, планируется слот 15:30.
+# Home is Moscow; "now" is 13:04 at home, the slot being planned is 15:30.
 WT_CITIES = [
-    ("Москва",   "Россия",         "MSK",  0, "13:04", "чт, 23 июл", ("ЧТ", "23", "ИЮЛ")),
-    ("Лондон",   "Великобритания", "BST", -2, "11:04", "чт, 23 июл", ("ЧТ", "23", "ИЮЛ")),
-    ("Нью-Йорк", "США",            "EDT", -7, "06:04", "чт, 23 июл", ("ЧТ", "23", "ИЮЛ")),
-    ("Токио",    "Япония",         "JST",  6, "19:04", "чт, 23 июл", ("ПТ", "24", "ИЮЛ")),
+    ("Moscow",   "Russia",         "MSK",  0, "13:04", "Thu, Jul 23", ("THU", "23", "JUL")),
+    ("London",   "United Kingdom", "BST", -2, "11:04", "Thu, Jul 23", ("THU", "23", "JUL")),
+    ("New York", "United States",  "EDT", -7, "06:04", "Thu, Jul 23", ("THU", "23", "JUL")),
+    ("Tokyo",    "Japan",          "JST",  6, "19:04", "Thu, Jul 23", ("FRI", "24", "JUL")),
 ]
 NOW_COL, SEL_COL = 13, 15
 HEAD_W, BAND_W = 136.0, 386.0
 CELL_W = BAND_W / 24
-FR_X0 = HEAD_W - 2                      # рамка колонки 0 (ширина = ячейка + 4)
-FR_DX = SEL_COL * CELL_W                # проезд рамки до выбранной колонки
+FR_X0 = HEAD_W - 2                      # frame of column 0 (width = cell + 4)
+FR_DX = SEL_COL * CELL_W                # frame travel to the selected column
 SPLIT_X = HEAD_W + (SEL_COL + 0.5) * CELL_W
-POP_X = SPLIT_X - 66.5                  # стрелка поповера смотрит в центр колонки
+POP_X = SPLIT_X - 66.5                  # popover arrow points at the column center
 
 
 def cell_kind(h):
-    """cellKind(): ночь / плечо / рабочие часы (по умолчанию 9…18)."""
+    """cellKind(): night / shoulder / working hours (9...18 by default)."""
     if h < 6 or h >= 22: return "night"
     if 9 <= h < 18:      return "work"
     return "shoulder"
@@ -631,7 +632,7 @@ def wt_rows():
 
 def wt_strip():
     days = [("20", 0), ("21", 0), ("22", 0), ("23", 1), ("24", 0), ("25", 2), ("26", 2), ("27", 0)]
-    return "".join('<i class="%s">%s</i>' % (["", "on", "we"][k], "июл 23" if k == 1 else d)
+    return "".join('<i class="%s">%s</i>' % (["", "on", "we"][k], "Jul 23" if k == 1 else d)
                    for d, k in days)
 
 
@@ -640,24 +641,24 @@ S4 = """
   <div class="wall"></div>
   __MENUBAR_HOT__
   <div class="menu an" style="animation-name:c4menu">
-    <div class="mi">__M1__<b>Открыть ассистента</b><span class="k">⇧⌘Space</span></div>
-    <div class="mi">__M2__<b>Скриншот + панель</b><span class="k">⇧⌘S</span></div>
-    <div class="mi">__M3__<b>Скриншот области + панель</b><span class="k">⇧⌘D</span></div>
+    <div class="mi">__M1__<b>Open Assistant</b><span class="k">⇧⌘Space</span></div>
+    <div class="mi">__M2__<b>Screenshot + panel</b><span class="k">⇧⌘S</span></div>
+    <div class="mi">__M3__<b>Area screenshot + panel</b><span class="k">⇧⌘D</span></div>
     <div class="msep"></div>
-    <div class="mi wt"><span class="hl an" style="animation-name:c4hl"></span>__M4__<b>Мировое время</b></div>
+    <div class="mi wt"><span class="hl an" style="animation-name:c4hl"></span>__M4__<b>World Time</b></div>
     <div class="msep"></div>
-    <div class="mi">__M5__<b>Диктовка</b><span class="k">⌥Space</span></div>
-    <div class="mi">__M6__<b>Диктовка с переводом</b><span class="k">⌥⇧Space</span></div>
+    <div class="mi">__M5__<b>Dictation</b><span class="k">⌥Space</span></div>
+    <div class="mi">__M6__<b>Dictation with translation</b><span class="k">⌥⇧Space</span></div>
   </div>
 
   <div class="wtpanel an" style="animation-name:c4panel">
     <div class="wt-top">
       __XMARK__
-      <span class="wt-search">__PLUS__ Добавить город…</span>
+      <span class="wt-search">__PLUS__ Add a city…</span>
       <span class="sp"></span>
-      <span class="wt-link">Открыть Календарь</span>
+      <span class="wt-link">Open Calendar</span>
       <span class="wt-seg"><b>AM/PM</b><b class="on">24</b></span>
-      <span class="wt-esc">Esc — закрыть</span>
+      <span class="wt-esc">Esc — close</span>
     </div>
     <div class="wt-strip">__STRIP__</div>
     <div class="wt-grid">
@@ -666,20 +667,21 @@ S4 = """
       <div class="fr selfr an" style="animation-name:c4sel;left:__SELX__px"></div>
       <div class="split an" style="animation-name:c4split;left:__SPLITX__px"></div>
       <div class="slotpop an" style="animation-name:c4pop;left:__POPX__px;top:124px">
-        <div class="ttl">__CAL__ Новая встреча · 15:30</div>
-        <div class="fld">Синк с Лондоном и Токио</div>
-        <div class="btns"><span class="btn2 gh">Отмена</span><span class="btn2">Создать</span></div>
+        <div class="ttl">__CAL__ New meeting · 15:30</div>
+        <div class="fld">Sync with London and Tokyo</div>
+        <div class="btns"><span class="btn2 gh">Cancel</span><span class="btn2">Create</span></div>
       </div>
     </div>
   </div>
 </div>
 """
 
-# ============================================================ 5 · ТРИ ОПЕРАЦИИ С КАРТИНКОЙ
-# Каждая операция читается по трём признакам: нажатая пилюля, прогресс по её
-# нижней кромке и строка результата под панелью действий. «Убрать фон» —
-# шторка со светящимся краем едет по кадру, за ней остаётся прозрачность,
-# после чего контур предмета коротко подсвечивается: видно, что вырезали.
+# ============================================================ 5 - THREE IMAGE OPERATIONS
+# Each operation reads through three cues: the pressed pill, the progress along
+# its bottom edge, and the result line under the actions bar. "Remove
+# background" is a curtain with a glowing edge sweeping across the frame,
+# leaving transparency behind it, after which the object's outline lights up
+# briefly: you can see what was cut out.
 S5_CSS = """
 .s5 .panel{left:52px; top:42px; width:456px}
 .s5 .work{display:flex; gap:12px; padding:8px 10px 7px}
@@ -721,20 +723,20 @@ S5_CSS = """
 .s5 .note{font-size:9px; color:var(--sec); line-height:1.5}
 @keyframes c5panel{0%,3%{opacity:0;transform:translateY(9px) scale(.97);filter:blur(6px)}9%,94%{opacity:1;transform:none;filter:blur(0)}100%{opacity:0;transform:translateY(-4px) scale(.99);filter:blur(4px)}}
 @keyframes c5bar{0%,8%{opacity:0;transform:translateY(5px)}13%,100%{opacity:1;transform:none}}
-/* 1 · убрать фон */
+/* 1 · remove background */
 @keyframes c5hot1{0%,15%{background:rgba(255,255,255,.75);color:var(--text)}17%,31%{background:var(--blue);color:#fff}35%,100%{background:rgba(255,255,255,.75);color:var(--text)}}
 @keyframes c5p1{0%,16%{transform:scaleX(0)}18%{transform:scaleX(.06)}31%,100%{transform:scaleX(1)}}
 @keyframes c5wipe{0%,18%{opacity:0;transform:translateX(-18px)}20%{opacity:1;transform:translateX(-18px)}30%{opacity:1;transform:translateX(196px)}32%,100%{opacity:0;transform:translateX(196px)}}
 @keyframes c5bgout{0%,19%{clip-path:inset(0 0 0 0)}31%,100%{clip-path:inset(0 0 0 100%)}}
 @keyframes c5cut{0%,31%{filter:none}34%,40%{filter:drop-shadow(0 0 2px rgba(0,113,227,.95)) drop-shadow(0 0 5px rgba(0,113,227,.5))}45%,100%{filter:none}}
 @keyframes c5r1{0%,33%{opacity:0;transform:translateY(3px)}36%,49%{opacity:1;transform:none}52%,100%{opacity:0}}
-/* 2 · апскейл */
+/* 2 · upscale */
 @keyframes c5hot2{0%,43%{background:rgba(255,255,255,.75);color:var(--text)}45%,57%{background:var(--blue);color:#fff}61%,100%{background:rgba(255,255,255,.75);color:var(--text)}}
 @keyframes c5p2{0%,44%{transform:scaleX(0)}46%{transform:scaleX(.06)}57%,100%{transform:scaleX(1)}}
 @keyframes c5soft{0%,46%{filter:blur(1.6px) saturate(.9)}58%,100%{filter:blur(0) saturate(1)}}
 @keyframes c5loupe{0%,45%{opacity:0;transform:translate(0,0)}48%{opacity:1;transform:translate(0,0)}57%,60%{opacity:1;transform:translate(120px,34px)}64%,100%{opacity:0;transform:translate(120px,34px)}}
 @keyframes c5r2{0%,57%{opacity:0;transform:translateY(3px)}60%,70%{opacity:1;transform:none}73%,100%{opacity:0}}
-/* 3 · удалить объекты */
+/* 3 · remove objects */
 @keyframes c5hot3{0%,64%{background:rgba(255,255,255,.75);color:var(--text)}66%,79%{background:var(--blue);color:#fff}83%,100%{background:rgba(255,255,255,.75);color:var(--text)}}
 @keyframes c5p3{0%,65%{transform:scaleX(0)}67%{transform:scaleX(.06)}79%,100%{transform:scaleX(1)}}
 @keyframes c5brush{0%,66%{width:0;opacity:0}68%{opacity:1;width:0}74%,78%{width:52px;opacity:1}83%,100%{width:52px;opacity:0}}
@@ -764,18 +766,18 @@ S5 = """
       </div>
       <div class="side">
         <div class="actbar an" style="animation-name:c5bar">
-          <span class="act an" style="animation-name:c5hot1">__BGDOT__ Убрать фон<u class="an" style="animation-name:c5p1"></u></span>
-          <span class="act an" style="animation-name:c5hot2">__UPSCALE__ Апскейл ×4<u class="an" style="animation-name:c5p2"></u></span>
-          <span class="act an" style="animation-name:c5hot3">__ERASER__ Удалить объекты<u class="an" style="animation-name:c5p3"></u></span>
+          <span class="act an" style="animation-name:c5hot1">__BGDOT__ Remove background<u class="an" style="animation-name:c5p1"></u></span>
+          <span class="act an" style="animation-name:c5hot2">__UPSCALE__ Upscale ×4<u class="an" style="animation-name:c5p2"></u></span>
+          <span class="act an" style="animation-name:c5hot3">__ERASER__ Remove objects<u class="an" style="animation-name:c5p3"></u></span>
         </div>
         <div class="results">
-          <span class="res1 an" style="animation-name:c5r1">__CHECK1__ Фон удалён — PNG с прозрачностью</span>
-          <span class="res1 an" style="animation-name:c5r2">__CHECK2__ Увеличено ×4 — 2048 × 1536</span>
-          <span class="res1 an" style="animation-name:c5r3">__CHECK3__ Объект убран, место заращено</span>
+          <span class="res1 an" style="animation-name:c5r1">__CHECK1__ Background removed — a PNG with transparency</span>
+          <span class="res1 an" style="animation-name:c5r2">__CHECK2__ Upscaled ×4 — 2048 × 1536</span>
+          <span class="res1 an" style="animation-name:c5r3">__CHECK3__ Object removed, the gap filled in</span>
         </div>
         <div class="note an" style="animation-name:c5bar">
-          Фон и распознавание текста — на нативных движках Apple, без ключей и без токенов.
-          Апскейл и удаление объектов — по ключу fal.ai.
+          Background removal and text recognition run on native Apple engines, with no keys and no tokens.
+          Upscaling and object removal use a fal.ai key.
         </div>
       </div>
     </div>
@@ -785,18 +787,18 @@ S5 = """
 """
 
 
-# ============================================================ ПОДСТАНОВКИ
+# ============================================================ SUBSTITUTIONS
 def fill(html, **kw):
     for k, v in kw.items():
         html = html.replace("__%s__" % k, v)
     return html
 
 
-S1 = fill(S1, MENUBAR=menubar("Почта"), HEAD=head("openai", "OpenAI", "Стандартный"),
+S1 = fill(S1, MENUBAR=menubar("Mail"), HEAD=head("openai", "OpenAI", "Standard"),
           GLOBE=sf("globe", 10), GLOBE2=sf("globe", 8), BRAIN=sf("brain", 12),
           CLIP=sf("paperclip", 12), MIC=sf("mic.fill", 10), SEND=sf("paperplane.fill", 10))
 
-S2 = fill(S2, MENUBAR=menubar("Numbers"), HEAD=head("anthropic", "Anthropic", "Аналитик"),
+S2 = fill(S2, MENUBAR=menubar("Numbers"), HEAD=head("anthropic", "Anthropic", "Analyst"),
           VIEWFINDER=sf("text.viewfinder", 9), VIEWFINDER2=sf("text.viewfinder", 10),
           BGDOT=sf("person.and.background.dotted", 9),
           UPSCALE=sf("arrow.up.backward.and.arrow.down.forward.rectangle", 9),
@@ -814,17 +816,17 @@ S4 = fill(S4, MENUBAR_HOT=menubar("Finder", hot=True),
           SPLITX="%.1f" % SPLIT_X, POPX="%.1f" % POP_X)
 S4_CSS = S4_CSS.replace("__DX__", "%.1f" % FR_DX)
 
-S5 = fill(S5, MENUBAR=menubar("Cuate"), HEAD=head("mistral", "Mistral", "Стандартный"),
+S5 = fill(S5, MENUBAR=menubar("Cuate"), HEAD=head("mistral", "Mistral", "Standard"),
           BGDOT=sf("person.and.background.dotted", 10),
           UPSCALE=sf("arrow.up.backward.and.arrow.down.forward.rectangle", 10),
           ERASER=sf("eraser", 10), CHECK1=sf("checkmark.circle.fill", 9),
           CHECK2=sf("checkmark.circle.fill", 9), CHECK3=sf("checkmark.circle.fill", 9),
-          COMPOSER=composer("Или просто спросите про картинку…"))
+          COMPOSER=composer("Or just ask about the picture…"))
 
-# ============================================================ ОПИСАНИЯ СЦЕН
+# ============================================================ SCENE DESCRIPTIONS
 SCENES = [
     dict(key="chat", file="1-chat", css=S1_CSS, html=S1, cycle=9000, hold=.86,
-         name="1 · Чат", sub="⇧⌘Space → панель → веб-поиск → ответ со ссылкой", step="Чат",
+         name="1 · Chat", sub="⇧⌘Space → panel → web search → an answer with a link", step="Chat",
          ru=("Спросите что угодно, где угодно",
              "Cuate живёт в строке меню и открывается поверх любого приложения. "
              "Спросили — получили ответ — Esc.",
@@ -832,19 +834,19 @@ SCENES = [
          en=("Ask anything, anywhere",
              "Cuate lives in the menu bar and opens over any app. Ask, read the answer, press Esc.",
              [("⇧⌘Space", "Open Assistant")]),
-         beats=[(.04, "иконка в строке меню подсвечивается"),
-                (.08, "клавиша ⇧⌘Space «нажимается»"),
-                (.13, "панель въезжает: scale .965 → 1, blur 7 → 0"),
-                (.20, "вопрос про погоду печатается в поле ввода"),
-                (.40, "поле очищается, пузырь вопроса встаёт в ленту"),
-                (.48, "«Ищу в интернете…» — модель сама пошла в веб"),
-                (.64, "ответ проявляется построчно, как при стриминге"),
-                (.84, "чип источника weather.com"),
-                (.90, "подсказка «Esc — скрыть»")]),
+         beats=[(.04, "the menu-bar icon lights up"),
+                (.08, "the ⇧⌘Space key is 'pressed'"),
+                (.13, "the panel slides in: scale .965 → 1, blur 7 → 0"),
+                (.20, "the weather question is typed into the input field"),
+                (.40, "the field clears, the question bubble joins the thread"),
+                (.48, "'Searching the web…' — the model went to the web on its own"),
+                (.64, "the answer appears line by line, as when streaming"),
+                (.84, "the weather.com source chip"),
+                (.90, "the 'Esc — hide' hint")]),
 
     dict(key="shot", file="2-area-shot", css=S2_CSS, html=S2, cycle=12000, hold=.93,
-         name="2 · Скриншот области → таблица",
-         sub="⇧⌘D → рамка по таблице → распознавание → вопрос по данным", step="Скриншот",
+         name="2 · Area screenshot → table",
+         sub="⇧⌘D → frame the table → recognition → a question about the data", step="Screenshot",
          ru=("Сняли таблицу — получили таблицу",
              "Выделите кусок экрана: он попадёт в чат. «Извлечь текст» превращает снимок таблицы "
              "в настоящую таблицу — и по ней сразу можно спрашивать.",
@@ -853,20 +855,20 @@ SCENES = [
              "Drag a region and it lands in the chat. Extract Text turns a screenshot of a table into "
              "a real table — then just ask about the numbers.",
              [("⇧⌘D", "Area Screenshot + Panel"), ("⇧⌘S", "Screenshot + Panel")]),
-         beats=[(.05, "клавиша ⇧⌘D"),
-                (.10, "экран притухает, курсор — перекрестие"),
-                (.12, "рамка тянется по таблице, размер считается на лету"),
-                (.26, "вспышка затвора"),
-                (.30, "панель, снимок «прилетает» в неё вложением"),
-                (.44, "панель действий; «Извлечь текст» нажимается"),
-                (.50, "«Распознаю таблицу…»"),
-                (.56, "таблица собирается в чате строка за строкой"),
-                (.72, "печатается вопрос по этим же данным"),
-                (.88, "ответ по распознанным числам")]),
+         beats=[(.05, "the ⇧⌘D key"),
+                (.10, "the screen dims, the cursor becomes a crosshair"),
+                (.12, "the frame is dragged over the table, the size counts live"),
+                (.26, "the shutter flash"),
+                (.30, "the panel; the shot 'flies' into it as an attachment"),
+                (.44, "the actions bar; 'Extract text' is pressed"),
+                (.50, "'Reading the table…'"),
+                (.56, "the table assembles in the chat row by row"),
+                (.72, "a question about the same data is typed"),
+                (.88, "the answer from the recognized numbers")]),
 
     dict(key="dictation", file="3-dictation", css=S3_CSS, html=S3, cycle=9500, hold=.82,
-         name="3 · Диктовка с переводом",
-         sub="⌥⇧Space → пилюля под камерой → английская речь, испанский текст", step="Диктовка",
+         name="3 · Dictation with translation",
+         sub="⌥⇧Space → a pill under the camera → English speech, Spanish text", step="Dictation",
          ru=("Говорите по-английски — пишется по-испански",
              "Пилюля появляется под камерой, а перевод впечатывается туда, где стоит курсор, — "
              "фраза за фразой, пока вы говорите. Чужое приложение ничего не замечает.",
@@ -875,18 +877,18 @@ SCENES = [
              "A pill drops under the camera and the translation is typed where the cursor is, "
              "phrase by phrase, while you speak. The other app never notices.",
              [("⌥Space", "Dictate"), ("⌥⇧Space", "Dictate with translation")]),
-         beats=[(.05, "клавиша ⌥⇧Space"),
-                (.10, "пилюля выпадает из-под камеры с перелётом"),
-                (.17, "эквалайзер оживает, идёт запись"),
-                (.19, "под пилюлей видно, что именно услышано по-английски"),
-                (.25, "в поле Telegram печатается испанский перевод"),
-                (.30, "бейдж EN → ES моргает: язык меняется на лету"),
-                (.56, "вторая фраза — речь и перевод идут внахлёст"),
-                (.90, "пилюля уезжает, текст остаётся в чужом поле")]),
+         beats=[(.05, "the ⌥⇧Space key"),
+                (.10, "the pill drops out from under the camera with an overshoot"),
+                (.17, "the equalizer comes alive, recording is under way"),
+                (.19, "under the pill you can see exactly what was heard in English"),
+                (.25, "the Spanish translation is typed into the Telegram field"),
+                (.30, "the EN → ES badge blinks: the language switches on the fly"),
+                (.56, "the second phrase — speech and translation overlap"),
+                (.90, "the pill leaves, the text stays in the other app's field")]),
 
     dict(key="worldtime", file="4-world-time", css=S4_CSS, html=S4, cycle=8500, hold=.86,
-         name="4 · Мировое время",
-         sub="меню → сетка суток → колонка = один момент → встреча в календаре", step="Мир",
+         name="4 · World Time",
+         sub="menu → the day grid → a column is one moment → a meeting in the calendar", step="World",
          ru=("Один момент — сразу во всех городах",
              "Сетка суток по вашим городам: вертикальный срез — это один и тот же момент везде. "
              "Клик по получасу зовёт на встречу.",
@@ -895,18 +897,18 @@ SCENES = [
              "A 24-hour grid across your cities: one vertical slice is the same instant everywhere. "
              "Click a half-hour to send an invite.",
              []),
-         beats=[(.05, "меню статус-бара раскрывается"),
-                (.13, "подсветка доезжает до «Мировое время»"),
-                (.22, "панель разворачивается"),
-                (.28, "строки городов въезжают: часы, страна, свои сутки"),
-                (.49, "пунктирная рамка ведёт курсор по суткам"),
-                (.62, "колонка выбрана — 15 / 13 / 08 / 21 сверху вниз"),
-                (.70, "получасовой пунктир делит выбранный час"),
-                (.78, "поповер: встреча на 15:30 в Календаре")]),
+         beats=[(.05, "the status-bar menu opens"),
+                (.13, "the highlight travels down to 'World Time'"),
+                (.22, "the panel unfolds"),
+                (.28, "the city rows slide in: the clock, the country, their own day"),
+                (.49, "a dashed frame walks the cursor across the day"),
+                (.62, "a column is selected — 15 / 13 / 08 / 21 top to bottom"),
+                (.70, "the half-hour dashes split the selected hour"),
+                (.78, "the popover: a 15:30 meeting in Calendar")]),
 
     dict(key="image", file="5-image-ops", css=S5_CSS, html=S5, cycle=11000, hold=.90,
-         name="5 · Картинки: три операции",
-         sub="фон → апскейл ×4 → удаление объектов, на одном снимке", step="Картинки",
+         name="5 · Images: three operations",
+         sub="background → upscale ×4 → object removal, on one shot", step="Images",
          ru=("Три операции с любой картинкой",
              "Прикрепите изображение — появится панель действий: убрать фон, апскейл ×4 "
              "или закрасить лишнее, чтобы стереть.",
@@ -915,19 +917,19 @@ SCENES = [
              "Attach a picture and the actions bar appears: remove the background, upscale ×4, "
              "or brush over something to erase it.",
              []),
-         beats=[(.04, "панель с прикреплённой картинкой"),
-                (.17, "«Убрать фон» нажата, по кромке кнопки идёт прогресс"),
-                (.20, "шторка со светящимся краем едет по кадру"),
-                (.31, "за шторкой — прозрачность; контур предмета подсвечен"),
-                (.36, "результат: PNG с альфа-каналом"),
-                (.45, "«Апскейл ×4» — лупа идёт по кадру, мягкое становится резким"),
-                (.60, "результат: 2048 × 1536"),
-                (.66, "«Удалить объекты» — кисть закрашивает лишний предмет"),
-                (.77, "объект растворяется, место заращивается"),
-                (.86, "результат: чистый кадр")]),
+         beats=[(.04, "the panel with an attached image"),
+                (.17, "'Remove background' is pressed, progress runs along the button's edge"),
+                (.20, "a curtain with a glowing edge sweeps across the frame"),
+                (.31, "behind the curtain — transparency; the object's outline lights up"),
+                (.36, "the result: a PNG with an alpha channel"),
+                (.45, "'Upscale ×4' — a loupe crosses the frame, soft becomes sharp"),
+                (.60, "the result: 2048 × 1536"),
+                (.66, "'Remove objects' — the brush paints over the unwanted item"),
+                (.77, "the object dissolves, the gap is filled in"),
+                (.86, "the result: a clean frame")]),
 ]
 
-# ============================================================ ТРАНСПОРТ (карточка сцены)
+# ============================================================ TRANSPORT (scene card)
 TRANSPORT_CSS = """
 .card{width:560px; background:var(--bg)}
 .bar{display:flex; align-items:center; gap:10px; padding:9px 12px; border-top:1px solid var(--sep); background:#fff}
@@ -950,16 +952,16 @@ TRANSPORT_CSS = """
 
 TRANSPORT_HTML = """
   <div class="bar">
-    <button class="play" type="button" id="play" data-playing="true" aria-label="Пауза">
+    <button class="play" type="button" id="play" data-playing="true" aria-label="Pause">
       <svg class="p1" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7-4.5z"/></svg>
       <svg class="p2" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5h2.5v9H2.5zM7 1.5h2.5v9H7z"/></svg>
     </button>
-    <div class="rail" id="rail" role="slider" tabindex="0" aria-label="Позиция в сцене"
+    <div class="rail" id="rail" role="slider" tabindex="0" aria-label="Position in the scene"
          aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <div class="ln"></div><div class="fl" id="fl" style="transform:scaleX(0)"></div>
       __TICKS__<div class="hd" id="hd" style="left:0"></div>
     </div>
-    <div class="rdout" id="out"><b>0.00 с</b></div>
+    <div class="rdout" id="out"><b>0.00 s</b></div>
   </div>
 """
 
@@ -971,7 +973,7 @@ TRANSPORT_JS = """
   var hd=document.getElementById('hd'), out=document.getElementById('out');
   var t=0, playing=false, start=0;
   var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // натуральная ширина каждой «печатаемой» строки — измеряется, а не задаётся
+  // the natural width of each 'typed' line — measured, not declared
   Array.prototype.forEach.call(document.querySelectorAll('.type'),function(el){
     el.style.setProperty('--w', el.scrollWidth+'px');
   });
@@ -981,12 +983,12 @@ TRANSPORT_JS = """
     hd.style.left=(t*100).toFixed(2)+'%';
     rail.setAttribute('aria-valuenow',Math.round(t*100));
     var lab='',i; for(i=0;i<BEATS.length;i++){ if(t>=BEATS[i][0]) lab=BEATS[i][1]; }
-    out.textContent=(t*CYCLE/1000).toFixed(2)+' с — '+lab;
+    out.textContent=(t*CYCLE/1000).toFixed(2)+' s — '+lab;
     out.title=lab;
   }
   function setPlay(on){
     playing=on; play.setAttribute('data-playing',on?'true':'false');
-    play.setAttribute('aria-label',on?'Пауза':'Проиграть');
+    play.setAttribute('aria-label',on?'Pause':'Play');
     stage.style.setProperty('--play',on?'running':'paused');
     if(on) start=performance.now()-t*CYCLE;
   }
@@ -1021,14 +1023,14 @@ def scene_card(s):
     js = (TRANSPORT_JS.replace("__CYCLE__", str(s["cycle"])).replace("__HOLD__", str(s["hold"]))
           .replace("__BEATS__", js_beats(s["beats"])))
     return "\n".join([
-        '<!-- @dsCard group="08 · Онбординг" name="%s" subtitle="%s" width="560" height="352" -->'
+        '<!-- @dsCard group="08 · Onboarding" name="%s" subtitle="%s" width="560" height="352" -->'
         % (s["name"], s["sub"]),
         '<meta charset="utf-8"><meta name="viewport" content="width=560">',
         "<style>" + symbol_defs(body + css) + css + "</style>", body,
         "<script>" + js + "</script>", ""])
 
 
-# ============================================================ ОКНО ТУРА
+# ============================================================ TOUR WINDOW
 SHELL_CSS = """
 .win{width:560px; height:640px; background:var(--bg); display:flex; flex-direction:column; overflow:hidden}
 .cap{padding:20px 30px 0; text-align:center; display:flex; flex-direction:column; align-items:center; gap:9px; flex:1}
@@ -1100,7 +1102,7 @@ SHELL_JS = """
       kids[k].querySelector('i').style.transform='scaleX('+(k<i?1:(k===i?t:0))+')';
     }
   }
-  // ширину печатаемых строк можно измерить только у видимой сцены
+  // the width of typed lines can only be measured on the visible scene
   function measure(root){
     Array.prototype.forEach.call(root.querySelectorAll('.type'),function(el){
       if(el.getAttribute('data-m')) return;
@@ -1150,7 +1152,7 @@ def shell_card():
         '<div class="win">', '  <div class="stage" id="stage">',
         "".join(s["html"] for s in SCENES), "  </div>",
         '  <div class="cap">',
-        '    <div class="langpick" role="group" aria-label="Язык">',
+        '    <div class="langpick" role="group" aria-label="Language">',
         '      <button type="button" data-lang="ru" aria-pressed="true">Русский</button>',
         '      <button type="button" data-lang="en" aria-pressed="false">English</button>',
         "    </div>",
@@ -1162,17 +1164,17 @@ def shell_card():
         "  </div>", "</div>"])
     css = CORE + SHELL_CSS + "".join(s["css"] for s in SCENES)
     return "\n".join([
-        '<!-- @dsCard group="08 · Онбординг" name="0 · Окно тура · 560×640" '
-        'subtitle="Пять страниц, рельс шагов, переключение RU/EN" width="560" height="640" -->',
+        '<!-- @dsCard group="08 · Onboarding" name="0 · Tour window · 560×640" '
+        'subtitle="Five pages, the step rail, RU/EN switching" width="560" height="640" -->',
         '<meta charset="utf-8"><meta name="viewport" content="width=560">',
         "<style>" + symbol_defs(body + css) + css + "</style>", body,
         "<script>" + SHELL_JS.replace("__DATA__", data) + "</script>", ""])
 
 
-# ============================================================ ЛОКАЛЬНЫЙ СТЕНД
+# ============================================================ LOCAL PREVIEW STAND
 PREVIEW = """<!doctype html>
 <meta charset="utf-8">
-<title>Онбординг Cuate — стенд</title>
+<title>Cuate onboarding — preview stand</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{background:#E9E9ED; color:#15161A; padding:32px 28px 64px;
@@ -1187,16 +1189,17 @@ PREVIEW = """<!doctype html>
   .cap span{font-weight:400; color:#7A7F8A; font-size:11.5px}
   iframe{display:block; border:0; width:560px}
 </style>
-<h1>Онбординг Cuate — 5 сцен в движении</h1>
+<h1>Cuate onboarding — 5 scenes in motion</h1>
 <p class="lede">
-  Пересобирается командой <code>python3 design/onboarding/build_cards.py</code>.
-  У каждой сцены снизу плеер: пауза и перетаскивание по шкале разбирают движение по кадрам,
-  засечки — ключевые моменты. В окне тура страницы листаются кнопками, подписи — RU/EN.
+  Rebuilt with <code>python3 design/onboarding/build_cards.py</code>.
+  Each scene has a player below it: pausing and dragging the scale break the motion down frame
+  by frame, and the ticks are the key moments. In the tour window the pages are turned with
+  buttons, and the captions come in RU/EN.
 </p>
 <div class="grid">
   <div class="col">
-    <div class="card"><div class="cap">0 · Окно тура целиком <span>560×640</span></div>
-      <iframe src="onboarding/tour/shell.html" height="640" title="Окно тура"></iframe></div>
+    <div class="card"><div class="cap">0 · The whole tour window <span>560×640</span></div>
+      <iframe src="onboarding/tour/shell.html" height="640" title="Tour window"></iframe></div>
   </div>
   <div class="col">__COL2__</div>
   <div class="col">__COL3__</div>
@@ -1224,4 +1227,4 @@ write("onboarding/tour/shell.html", shell_card())
 for sc in SCENES:
     write("onboarding/scenes/%s.html" % sc["file"], scene_card(sc))
 write("preview.html", preview())
-print("готово →", OUT)
+print("done ->", OUT)

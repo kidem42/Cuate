@@ -1,9 +1,9 @@
 import AppKit
 import Foundation
 
-// Настоящие SF Symbols → PNG с альфой → base64.
-// В HTML используются как CSS mask, поэтому красятся currentColor,
-// ровно как template-изображения в приложении.
+// Real SF Symbols → PNG with alpha → base64.
+// The HTML uses them as a CSS mask, so they take currentColor, exactly
+// like template images do in the app.
 
 let names = [
     "brain.head.profile", "brain", "mic.fill", "stop.fill", "paperplane.fill",
@@ -27,7 +27,7 @@ var out: [String] = []
 for name in names {
     guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil),
           let img = base.withSymbolConfiguration(cfg) else {
-        FileHandle.standardError.write("нет символа: \(name)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("no such symbol: \(name)\n".data(using: .utf8)!)
         continue
     }
     let size = img.size
@@ -50,7 +50,7 @@ for name in names {
     let b64 = png.base64EncodedString()
     let key = name.replacingOccurrences(of: ".", with: "-")
     out.append("  \"\(key)\": \"\(b64)\"")
-    FileHandle.standardError.write("ок \(name)  \(png.count) B  \(Int(size.width))×\(Int(size.height))\n".data(using: .utf8)!)
+    FileHandle.standardError.write("ok \(name)  \(png.count) B  \(Int(size.width))×\(Int(size.height))\n".data(using: .utf8)!)
 }
 
 print("{\n" + out.joined(separator: ",\n") + "\n}")

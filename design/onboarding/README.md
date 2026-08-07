@@ -1,65 +1,68 @@
-# Макет нового онбординг-тура
+# Mockup of the new onboarding tour
 
-Пять анимированных сцен по пунктам меню статус-бара плюс окно тура целиком —
-замена восьми статичным картинкам из `OnboardingIllustrations.swift`.
+Five animated scenes, one per status-bar menu item, plus the whole tour
+window — a replacement for the eight static images in
+`OnboardingIllustrations.swift`.
 
 ```sh
-python3 design/onboarding/build_cards.py     # пересобрать
-open design/onboarding/dist/preview.html     # посмотреть стенд
+python3 design/onboarding/build_cards.py     # rebuild
+open design/onboarding/dist/preview.html     # open the preview stand
 ```
 
-## Что где
+## What lives where
 
-| Файл | Что это |
+| File | What it is |
 |---|---|
-| `build_cards.py` | генератор: сцены, тайминги, подписи — всё здесь |
-| `dump_symbols.swift` | отрисовывает SF Symbols в PNG → `symbols.json` |
-| `symbols.json` | значки в base64, подключаются CSS-маской |
-| `dist/` | собранные карточки + `preview.html` (в git не нужны, пересобираются) |
+| `build_cards.py` | the generator: scenes, timings, captions — everything is here |
+| `dump_symbols.swift` | renders SF Symbols to PNG → `symbols.json` |
+| `symbols.json` | base64 glyphs, attached as a CSS mask |
+| `dist/` | the built cards + `preview.html` (not needed in git, they are regenerated) |
 
-Карточки одновременно лежат в Claude Design, проект «Cuate Settings
-Redesign», группа «08 · Онбординг» — формат `@dsCard` в первой строке файла.
+The cards also live in Claude Design, project "Cuate Settings Redesign",
+group "08 · Onboarding" — the `@dsCard` format on the file's first line.
 
-## Значки настоящие
+## The glyphs are real
 
-SF Symbols рендерятся системой (`NSImage(systemSymbolName:)`) в PNG с альфой и
-подключаются как `mask`, поэтому красятся `currentColor` — ровно как
-template-изображения в приложении. Символы взяты те же, что в коде:
-`brain.head.profile` в строке меню, `brain` в аватаре ответа, `paperplane.fill`,
-`mic.fill`, `paperclip`, `text.viewfinder`, `person.and.background.dotted`,
-`eraser`, `arrow.up.backward.and.arrow.down.forward.rectangle`, `house.fill`.
+SF Symbols are rendered by the system (`NSImage(systemSymbolName:)`) into PNG
+with alpha and attached as a `mask`, so they take `currentColor` — exactly like
+template images in the app. The symbols are the same ones the code uses:
+`brain.head.profile` in the menu bar, `brain` in the reply avatar,
+`paperplane.fill`, `mic.fill`, `paperclip`, `text.viewfinder`,
+`person.and.background.dotted`, `eraser`,
+`arrow.up.backward.and.arrow.down.forward.rectangle`, `house.fill`.
 
-Логотипы провайдеров берутся как есть из
+Provider logos are taken as-is from
 `Cuate/Assets.xcassets/Provider-*.imageset/*.svg`.
 
-Хоткеи — дефолты из `Cuate/App/HotkeyCombo.swift`.
+Hotkeys are the defaults from `Cuate/App/HotkeyCombo.swift`.
 
-## Модель анимации (её и переносить в SwiftUI)
+## The animation model (this is what to port to SwiftUI)
 
-**Один такт на сцену.** У сцены есть нормализованная фаза `0…1`; каждый слой
-знает своё окно внутри этой фазы и считает из неё свой прогресс. В макете это
-проценты в `@keyframes` и одна переменная `--delay` на всю сцену — поэтому
-сцену можно скраббить: сдвиг фазы сдвигает сразу всё синхронно.
+**One beat per scene.** A scene has a normalized phase `0…1`; every layer knows
+its own window inside that phase and derives its progress from it. In the mockup
+that is percentages in `@keyframes` plus a single `--delay` variable for the
+whole scene — which is why the scene can be scrubbed: shifting the phase shifts
+everything at once, in sync.
 
-В SwiftUI то же самое даёт `TimelineView(.animation)`: из него берётся `t`,
-дальше каждый слой считает `progress(in: from...to)`.
+In SwiftUI the same thing comes from `TimelineView(.animation)`: take `t` from
+it, and each layer computes `progress(in: from...to)`.
 
-Важные отличия макета от приложения:
+Important differences between the mockup and the app:
 
-* здесь сцена **зациклена**, чтобы её можно было рассматривать; в туре она
-  играет один проход и замирает на кадре-результате, повтор — по кнопке;
-* при `accessibilityReduceMotion` фаза сразу ставится на кадр-результат
-  (в карточках это делает тот же код: страница открывается на паузе).
+* here the scene **loops** so it can be inspected; in the tour it plays a single
+  pass and freezes on the result frame, with a button to replay;
+* under `accessibilityReduceMotion` the phase jumps straight to the result frame
+  (the cards do the same: the page opens paused).
 
-## Сцены
+## The scenes
 
-| # | Сцена | Такт | Что показывает |
+| # | Scene | Beat | What it shows |
 |---|---|---|---|
-| 1 | Чат | 9,0 с | ⇧⌘Space → панель → вопрос про погоду → веб-поиск → ответ со ссылкой |
-| 2 | Скриншот области | 12,0 с | ⇧⌘D → рамка по таблице → «Извлечь текст» → таблица в чате → вопрос по числам |
-| 3 | Диктовка | 9,5 с | ⌥⇧Space → пилюля под камерой → английская речь, испанский текст в чужом поле |
-| 4 | Мировое время | 8,5 с | меню → сетка суток → колонка = один момент → встреча в Календаре |
-| 5 | Картинки | 11,0 с | убрать фон (шторка) → апскейл ×4 (лупа) → удалить объект (кисть) |
+| 1 | Chat | 9.0 s | ⇧⌘Space → panel → a weather question → web search → answer with a link |
+| 2 | Area screenshot | 12.0 s | ⇧⌘D → frame over a table → "Extract text" → the table in the chat → a question about the numbers |
+| 3 | Dictation | 9.5 s | ⌥⇧Space → pill under the camera → English speech, Spanish text in someone else's field |
+| 4 | World Time | 8.5 s | menu → the day grid → a column is one moment → a meeting in Calendar |
+| 5 | Images | 11.0 s | remove background (curtain) → upscale ×4 (loupe) → remove object (brush) |
 
-Тайминги ключевых моментов лежат в `SCENES[*]["beats"]` и показываются
-в плеере под сценой — это и есть раскадровка для реализации.
+The timings of the key moments live in `SCENES[*]["beats"]` and are shown in the
+player under the scene — that is the storyboard for the implementation.

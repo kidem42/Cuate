@@ -10,6 +10,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -356,7 +357,10 @@ class HermesTransport(
             .addFormDataPart("path", "~/$remoteRelative")
             .addFormDataPart("overwrite", "true")
             .addFormDataPart("file", file.name,
-                file.readBytes().toRequestBody("application/octet-stream".toMediaType()))
+                // Streamed from disk: readBytes() held the whole payload in
+                // memory, and a buffered body cannot be resent — streaming
+                // keeps a 60 MB video from doubling the heap on send.
+                file.asRequestBody("application/octet-stream".toMediaType()))
             .build()
         val request = Request.Builder()
             .url(dash.newBuilder().addPathSegments("api/files/upload-stream").build())

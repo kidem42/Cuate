@@ -9,7 +9,7 @@ extension Notification.Name {
 }
 
 /// Layout constants for the agent management sidebar (left column, notes
-/// §"Боковая панель").
+/// §"Sidebar").
 enum AgentSidebarLayout {
     static let width: CGFloat = 280
 }

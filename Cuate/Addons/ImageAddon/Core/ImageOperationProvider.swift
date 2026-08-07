@@ -39,7 +39,7 @@ enum ImageProviderID: String, CaseIterable, Codable, Identifiable {
 
 // MARK: - Model catalog entries
 
-/// Fixed model-class badge shown next to each model in pickers (ТЗ §3.1a).
+/// Fixed model-class badge shown next to each model in pickers (spec §3.1a).
 enum ImageModelTier: String, Codable {
     case onDevice, budget, standard, quality, premium, smart, freedom
 
@@ -49,7 +49,7 @@ enum ImageModelTier: String, Codable {
 
 /// One catalog entry: a concrete model behind a function, with everything the
 /// UI needs (badge, one-line caption, price). The catalog is static and ships
-/// with app releases (ТЗ §5).
+/// with app releases (spec §5).
 struct ImageModelInfo: Identifiable, Equatable {
     /// Provider-side endpoint id, e.g. "fal-ai/recraft/upscale/crisp".
     let id: String
@@ -68,10 +68,10 @@ struct ImageModelInfo: Identifiable, Equatable {
     /// Highest upscale factor the model accepts; nil = the model has no
     /// factor parameter (e.g. Recraft Crisp decides on its own).
     var maxUpscaleFactor: Int? = nil
-    /// The model exposes a face-enhancement switch (ТЗ §4.4a).
+    /// The model exposes a face-enhancement switch (spec §4.4a).
     var supportsFaceEnhance: Bool = false
     /// Estimated output ceiling in megapixels — factors that would exceed it
-    /// are disabled in the UI (ТЗ §4.4a).
+    /// are disabled in the UI (spec §4.4a).
     var maxOutputMP: Double? = nil
     /// For `objectCleanup`: the model works from a text prompt instead of a mask.
     var cleanupByText: Bool = false
@@ -85,7 +85,7 @@ struct ImageModelInfo: Identifiable, Equatable {
     }
 }
 
-/// Output format for results (ТЗ §4.5). Background removal always keeps PNG
+/// Output format for results (spec §4.5). Background removal always keeps PNG
 /// (alpha channel); other functions convert locally after download.
 enum ImageOutputFormat: String, CaseIterable, Codable, Identifiable {
     case png, jpeg, webp

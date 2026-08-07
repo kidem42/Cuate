@@ -11,7 +11,7 @@ import org.json.JSONObject
  * fal.ai image tools: REST Queue API (`https://queue.fal.run/{model_id}`,
  * submit → poll → fetch), auth `Authorization: Key <FAL_KEY>`.
  * Images travel as base64 data-URIs. Full port of `FalProvider.swift` with
- * the complete static model catalog (ТЗ §3.1).
+ * the complete static model catalog (spec §3.1).
  */
 object FalImageProvider {
 

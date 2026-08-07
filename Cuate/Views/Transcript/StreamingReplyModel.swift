@@ -63,7 +63,7 @@ final class StreamingReplyModel: ObservableObject {
         // artifact (an 11 KB HTML fence full of blank lines) made this loop
         // probe EVERY blank line × rescan the whole tail, on EVERY flush:
         // O(n²) on the main thread — the live bubble froze until the stream
-        // ended ("плашка исчезает, потом резко готовый бабл", 2026-07-28).
+        // ended ("the pill vanishes, then the finished bubble snaps in", 2026-07-28).
         let limit = firstUnclosedFenceStart() ?? tail.endIndex
         guard limit > tail.startIndex else { return }
         var searchRange = tail.startIndex..<limit

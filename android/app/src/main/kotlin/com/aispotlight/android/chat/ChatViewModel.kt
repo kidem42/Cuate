@@ -420,9 +420,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _isRecording.value = false
         if (file == null) return
         _isTranscribing.value = true
-        // Пилюля в чате на время распознавания: долгое голосовое без
-        // индикатора выглядит как пропавшее сообщение (порт маковского фикса;
-        // плейсхолдер композера её дублирует, но виден не всегда).
+        // A pill in the chat while transcribing: a long voice message with no
+        // indicator looks like a lost message (port of the Mac fix; the
+        // composer placeholder duplicates it, but is not always visible).
         _statusText.value = getApplication<Application>().getString(R.string.chat_transcribing)
         viewModelScope.launch {
             try {
@@ -583,9 +583,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var alphaMask: android.graphics.Bitmap? = null
                 val result = withContext(Dispatchers.IO) {
                     val context = getApplication<Application>()
-                    // Прозрачный вход флэттенится на белый: fal-модели альфу
-                    // игнорируют и видят RGB под маской — у вырезок там лежит
-                    // исходный фон (ImageAlpha, порт маковского фикса).
+                    // A transparent input is flattened onto white: fal models
+                    // ignore alpha and see the RGB under the mask — for cutouts
+                    // that holds the original background (ImageAlpha, port of
+                    // the Mac fix).
                     val flattened = ImageStore.file(context, attachment)
                         .takeIf { it.exists() }?.readBytes()
                         ?.let { ImageAlpha.flattenIfTransparent(it) }
@@ -627,17 +628,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val resultAttachment = withContext(Dispatchers.IO) {
                     var outBytes = result.image
                     var outMime = result.mimeType
-                    // Результат удаления фона несёт нетронутый оригинал в RGB
-                    // под прозрачностью — затираем (утечка + «воскрешение»
-                    // фона в альфа-слепых обработчиках).
+                    // A background-removal result carries the untouched original
+                    // in the RGB under the transparency — wipe it (a leak, plus
+                    // the background "resurrects" in alpha-blind processors).
                     if (function == com.aispotlight.android.providers.FalImageProvider.Function.REMOVE_BACKGROUND) {
                         ImageAlpha.sanitizedTransparency(outBytes)?.let {
                             outBytes = it
                             outMime = "image/png"
                         }
                     }
-                    // Апскейл вырезки: модели возвращают непрозрачный RGB —
-                    // восстанавливаем прозрачность исходной альфа-маской.
+                    // Upscaling a cutout: models return opaque RGB — restore the
+                    // transparency from the original alpha mask.
                     if (function == com.aispotlight.android.providers.FalImageProvider.Function.UPSCALE) {
                         alphaMask?.let { mask ->
                             ImageAlpha.applyAlphaMask(mask, outBytes)?.let {
