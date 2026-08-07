@@ -334,10 +334,13 @@ struct HermesSidebarView: View {
                 )
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Активность показывает заливка строки (вариант А), так что
+                    // иконка больше не меняется на галочку — цветные метки её
+                    // всё равно прятали, и признак был виден не у всех сессий.
                     if let markColor {
                         Circle().fill(markColor).frame(width: 7, height: 7)
                     } else {
-                        Image(systemName: isBound ? "checkmark.circle.fill" : "bubble.left")
+                        Image(systemName: "bubble.left")
                             .font(.system(size: 10))
                             .foregroundColor(palette.ink)
                     }
@@ -350,7 +353,7 @@ struct HermesSidebarView: View {
                                     .foregroundColor(palette.secondaryText)
                             }
                             Text(hasTitle ? session.title! : session.id)
-                                .font(.system(size: 12, weight: isBound ? .medium : .regular))
+                                .font(.system(size: 12, weight: isBound ? .semibold : .regular))
                                 .foregroundColor(palette.primaryText)
                                 .lineLimit(1)
                             // "Agent is working here": a tiny equalizer wave
@@ -397,6 +400,20 @@ struct HermesSidebarView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Активная сессия — мягкая заливка-пилюля на всю строку
+                // (нативный паттерн выделения сайдбара): padding уходит ЗА
+                // колонку текста и компенсируется обратно, так что строки
+                // остаются выровнены с остальным списком.
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background {
+                    if isBound {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(palette.ink.opacity(0.12))
+                    }
+                }
+                .padding(.horizontal, -6)
+                .padding(.vertical, -3)
                 .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
