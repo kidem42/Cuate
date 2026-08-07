@@ -42,7 +42,6 @@ enum AgentChatService {
                     return currentText.isEmpty ? completedText : completedText + "\n\n" + currentText
                 }
                 var sawFinalText = false
-                var turnUsage = TokenUsage()
 
                 do {
                     continuation.yield(.status(AGL("agent.status.thinking")))
@@ -114,15 +113,21 @@ enum AgentChatService {
                                     try? await resolvingSession.resolveApproval(id: approval.id, decision: decision)
                                 }
                             })
-                        case .usage(let usage):
-                            turnUsage = turnUsage.merged(with: usage)
+                        case .usage:
+                            // NOT recorded into the spend ledger: the gateway
+                            // pays for its own model calls (subscription), and
+                            // its usage frames are run-cumulative — every
+                            // tool-loop call re-counts the whole prompt, which
+                            // drowned the Ø-tokens-per-message stat (a single
+                            // agent turn read as ~1M input tokens). The context
+                            // gauge gets its number in HermesAgentSession.
+                            break
                         }
                     }
 
                     if let summary = journal.summary() {
                         continuation.yield(.agentSteps(summary))
                     }
-                    recordSpend(role: role, usage: turnUsage, sent: userMessage.text, receivedChars: displayedText.count)
                     // Long-turn banner: suppressed automatically when the
                     // panel is open on this very conversation (§7.1).
                     NotificationService.shared.postTurnCompleted(
@@ -141,7 +146,6 @@ enum AgentChatService {
                         let abortable = session
                         Task { await abortable.abort() }
                     }
-                    recordSpend(role: role, usage: turnUsage, sent: userMessage.text, receivedChars: displayedText.count)
                     Diagnostics.log("agent", "turn.error \(String(error.localizedDescription.prefix(200)))")
                     continuation.finish(throwing: error)
                 }
@@ -150,21 +154,4 @@ enum AgentChatService {
         }
     }
 
-    /// Tokens land in the ledger without a cost: the gateway pays for its
-    /// own model calls, so money shown here would be a lie
-    /// (`PricingCatalog` has no entry for agents → cost stays nil).
-    private static func recordSpend(role: AgentRole, usage: TokenUsage, sent: String, receivedChars: Int) {
-        var usage = usage
-        var isEstimate = false
-        if usage.isEmpty {
-            guard receivedChars > 0 else { return }
-            usage.inputTokens = sent.count / 3
-            usage.outputTokens = receivedChars / 3
-            isEstimate = true
-        }
-        _ = SpendStore.shared.record(
-            kind: .chat, provider: ProviderID.hermes.rawValue, model: role.agentID,
-            usage: usage, costUSD: nil, isEstimate: isEstimate
-        )
-    }
 }

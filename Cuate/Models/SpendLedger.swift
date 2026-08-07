@@ -118,10 +118,20 @@ nonisolated enum SpendLedger {
 
     /// Fetches records in [from, to) as value types; completion runs on the
     /// ledger queue — callers hop to main themselves.
+    ///
+    /// Hermes agent records are excluded here, at the single point every
+    /// Costs aggregate reads through: the gateway pays for its own model
+    /// calls, and its run-cumulative usage frames (every tool-loop call
+    /// re-counts the whole prompt) drowned the token stats. New agent turns
+    /// are no longer recorded at all; this filter hides the ones already in
+    /// the ledger.
     static func fetch(from: Date, to: Date, completion: @escaping ([SpendRecordValue]) -> Void) {
         queue.async {
             let ctx = ModelContext(container)
-            let predicate = #Predicate<SDSpendRecord> { $0.timestamp >= from && $0.timestamp < to }
+            let hermes = ProviderID.hermes.rawValue
+            let predicate = #Predicate<SDSpendRecord> {
+                $0.timestamp >= from && $0.timestamp < to && $0.provider != hermes
+            }
             let descriptor = FetchDescriptor<SDSpendRecord>(
                 predicate: predicate,
                 sortBy: [SortDescriptor(\.timestamp)]
@@ -144,10 +154,16 @@ nonisolated enum SpendLedger {
     }
 
     /// Timestamp of the oldest record (bounds the month picker), nil if empty.
+    /// Same Hermes exclusion as `fetch` — an all-agent month would otherwise
+    /// extend the picker into months that render empty.
     static func earliestTimestamp(completion: @escaping (Date?) -> Void) {
         queue.async {
             let ctx = ModelContext(container)
-            var descriptor = FetchDescriptor<SDSpendRecord>(sortBy: [SortDescriptor(\.timestamp)])
+            let hermes = ProviderID.hermes.rawValue
+            var descriptor = FetchDescriptor<SDSpendRecord>(
+                predicate: #Predicate { $0.provider != hermes },
+                sortBy: [SortDescriptor(\.timestamp)]
+            )
             descriptor.fetchLimit = 1
             completion((try? ctx.fetch(descriptor))?.first?.timestamp)
         }
