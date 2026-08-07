@@ -497,32 +497,14 @@ struct HermesSidebarView: View {
 
     private func deleteSession(_ session: HermesSessionInfo) {
         Task {
-            // NOT try? — a silently failed DELETE left the session alive on
-            // the gateway while this list dropped it: every other surface
-            // (the phone) kept showing "deleted" sessions and the user
-            // blamed their sync (e2e 2026-07-27). On failure the row stays
-            // and the reason lands in diagnostics.
+            // Gateway delete + full local cleanup live in the addon — one
+            // path for every delete button. On failure the row stays and
+            // the reason lands in diagnostics.
             do {
-                try await addon.transport().deleteSession(id: session.id)
+                try await addon.deleteSession(id: session.id)
             } catch {
                 Diagnostics.log("hermes", "session.delete.fail id=\(session.id) \(String(error.localizedDescription.prefix(120)))")
-                await loadSessions()
-                return
             }
-            settings.forgetSessionMarks(session.id)
-            // Unbind every thread pointing at the deleted session (default
-            // thread and the session's own conversation) so the next send
-            // starts fresh instead of 404-ing; drop the local mirror of the
-            // session thread — its source of truth is gone.
-            let sessionThread = role.conversationID(sessionID: session.id).storageKey
-            for key in [role.conversationID.storageKey, sessionThread]
-            where settings.sessionID(forConversationKey: key) == session.id {
-                settings.unbindSession(forConversationKey: key)
-            }
-            if settings.activeSession(roleID: role.id) == session.id {
-                settings.setActiveSession(nil, roleID: role.id)
-            }
-            ChatPersistence.deleteConversation(key: sessionThread)
             await loadSessions()
         }
     }

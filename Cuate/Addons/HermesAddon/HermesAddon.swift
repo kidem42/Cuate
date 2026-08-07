@@ -140,6 +140,39 @@ final class HermesAddon: ObservableObject {
         HermesTransport(baseURL: settings.baseURL, apiKey: APIKeyStore.key(aux: .hermes) ?? "")
     }
 
+    // MARK: - Session deletion
+
+    /// Deletes a gateway session AND every local trace of it — the ONE path
+    /// both delete buttons (sidebar list, settings list) go through.
+    ///
+    /// Gateway-first, and NOT fire-and-forget: a silently failed DELETE once
+    /// left the session alive on the gateway while a list dropped it — every
+    /// other surface (the phone) kept showing "deleted" sessions and the
+    /// user blamed their sync (e2e 2026-07-27). On failure nothing local is
+    /// touched; rethrows so the caller can keep its row.
+    ///
+    /// Local cleanup: the session's own mirrored thread is dropped (its
+    /// source of truth is gone) and every binding pointing at the session is
+    /// released so the next send starts fresh instead of 404-ing. A role's
+    /// DEFAULT thread keeps its messages on purpose — it is only unbound,
+    /// the on-screen chat must not vanish from under the user.
+    func deleteSession(id: String) async throws {
+        try await transport().deleteSession(id: id)
+        settings.forgetSessionMarks(id)
+        for role in roles {
+            let sessionThread = role.conversationID(sessionID: id).storageKey
+            for key in [role.conversationID.storageKey, sessionThread]
+            where settings.sessionID(forConversationKey: key) == id {
+                settings.unbindSession(forConversationKey: key)
+            }
+            if settings.activeSession(roleID: role.id) == id {
+                settings.setActiveSession(nil, roleID: role.id)
+            }
+            ChatPersistence.deleteConversation(key: sessionThread)
+        }
+        NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
+    }
+
     // MARK: - Probe
 
     /// Health + authorized discovery in one pass: verifies the gateway,

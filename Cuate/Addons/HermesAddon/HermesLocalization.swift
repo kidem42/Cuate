@@ -164,16 +164,6 @@ enum HermesAddonStrings {
             .russian: "Агент — чёрный ящик со своей конфигурацией: новые сессии идут на его модель, если здесь не выбрана другая."
         ],
 
-        // MARK: History retention
-        "hermes.history.header": [.english: "Conversation history", .spanish: "Historial de conversación", .russian: "История бесед"],
-        "hermes.history.mirror": [.english: "Mirror (recommended)", .spanish: "Espejo (recomendado)", .russian: "Зеркало (рекомендуется)"],
-        "hermes.history.archive": [.english: "Archive", .spanish: "Archivo", .russian: "Архив"],
-        "hermes.history.caption": [
-            .english: "Mirror: the agent keeps the full history; this app caches the newest messages and loads older ones from the agent on scroll. If the agent's session is ever deleted, the mirror empties too. Archive: everything is also stored here forever, like ordinary chats.",
-            .spanish: "Espejo: el agente guarda el historial completo; esta app almacena en caché los mensajes más recientes y carga los antiguos desde el agente al desplazarte. Si la sesión del agente se borra, el espejo también se vacía. Archivo: todo se guarda además aquí para siempre, como en los chats normales.",
-            .russian: "Зеркало: полная история живёт у агента; приложение кэширует свежие сообщения, а старые подгружает с гейтвея при прокрутке. Если сессию агента удалят — зеркало тоже опустеет. Архив: всё дополнительно хранится здесь навсегда, как в обычных чатах."
-        ],
-
         // MARK: Sessions section
         "hermes.sessions.header": [.english: "Agent sessions", .spanish: "Sesiones del agente", .russian: "Сессии агента"],
         "hermes.sessions.caption": [

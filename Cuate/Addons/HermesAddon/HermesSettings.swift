@@ -14,17 +14,6 @@ extension Notification.Name {
     static let hermesSessionsDidChange = Notification.Name("hermesSessionsDidChange")
 }
 
-/// How agent-conversation text is retained locally (AGENT-ADDONS-NOTES.md
-/// §6.1). The gateway is the source of truth either way; "mirror" keeps only
-/// a bounded local cache and pages older text in from the agent, "archive"
-/// keeps everything forever like ordinary chats.
-enum HermesHistoryMode: String, CaseIterable, Identifiable {
-    case mirror
-    case archive
-
-    var id: String { rawValue }
-}
-
 /// Persisted settings for the HermesAddon. Own `UserDefaults` keys (prefix
 /// `hermes.`), nothing in the app's `AppSettings` — the addon stays fully
 /// self-contained (pattern: `WorldTimeSettings`). The gateway token lives in
@@ -111,18 +100,6 @@ final class HermesSettings: ObservableObject {
     /// (configured in their own tabs); results stay local to this app.
     @Published var imageFeaturesEnabled: Bool {
         didSet { defaults.set(imageFeaturesEnabled, forKey: "hermes.imageFeaturesEnabled") }
-    }
-
-    // MARK: - History retention (mirror by default)
-
-    @Published var historyMode: HermesHistoryMode {
-        didSet { defaults.set(historyMode.rawValue, forKey: "hermes.historyMode") }
-    }
-
-    /// Mirror mode: how many newest messages stay in the local cache
-    /// (older text is paged in from the gateway on scroll).
-    @Published var mirrorCacheLimit: Int {
-        didSet { defaults.set(mirrorCacheLimit, forKey: "hermes.mirrorCacheLimit") }
     }
 
     // MARK: - Notifications
@@ -418,10 +395,6 @@ final class HermesSettings: ObservableObject {
         lockProvider = defaults.string(forKey: "hermes.lockProvider") ?? ""
         lockModel = defaults.string(forKey: "hermes.lockModel") ?? ""
         imageFeaturesEnabled = defaults.bool(forKey: "hermes.imageFeaturesEnabled")
-        historyMode = HermesHistoryMode(rawValue: defaults.string(forKey: "hermes.historyMode") ?? "")
-            ?? .mirror
-        let cache = defaults.integer(forKey: "hermes.mirrorCacheLimit")
-        mirrorCacheLimit = cache > 0 ? cache : 500
         hideNotificationDetails = defaults.bool(forKey: "hermes.hideNotificationDetails")
         reasoningEffort = defaults.string(forKey: "hermes.reasoningEffort") ?? ""
         activeSessionByRole = (defaults.dictionary(forKey: "hermes.activeSessionByRole") as? [String: String]) ?? [:]

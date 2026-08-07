@@ -143,7 +143,6 @@ struct HermesSettingsView: View {
             setupSection
             modelSection
             briefingSection
-            historySection
             appFeaturesSection
             notificationsSection
             sessionsSection
@@ -520,25 +519,6 @@ struct HermesSettingsView: View {
         }
     }
 
-    // MARK: - History
-
-    private var historySection: some View {
-        Section {
-            Picker(HL("hermes.history.header"), selection: $settings.historyMode) {
-                Text(HL("hermes.history.mirror")).tag(HermesHistoryMode.mirror)
-                Text(HL("hermes.history.archive")).tag(HermesHistoryMode.archive)
-            }
-            .pickerStyle(.segmented)
-        } header: {
-            Text(HL("hermes.history.header"))
-        } footer: {
-            Text(HL("hermes.history.caption"))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     // MARK: - Host app features (separate opt-in, ImageAddon + OCR)
 
     private var appFeaturesSection: some View {
@@ -610,7 +590,16 @@ struct HermesSettingsView: View {
                     .font(.caption)
                     Button(role: .destructive) {
                         Task {
-                            try? await addon.transport().deleteSession(id: session.id)
+                            // Shared path: gateway DELETE + full local
+                            // cleanup (unbind, drop the session's mirror).
+                            // This button used to fire the bare transport
+                            // call and leave an orphaned local thread that
+                            // 404-ed on the next send.
+                            do {
+                                try await addon.deleteSession(id: session.id)
+                            } catch {
+                                Diagnostics.log("hermes", "session.delete.fail id=\(session.id) \(String(error.localizedDescription.prefix(120)))")
+                            }
                             await refreshSessions()
                         }
                     } label: {
