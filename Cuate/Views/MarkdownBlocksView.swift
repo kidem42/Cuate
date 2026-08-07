@@ -209,6 +209,16 @@ struct MarkdownBlocksView: View {
         @State private var justCopied = false
         @State private var isHovering = false
         @Environment(\.themePalette) private var palette
+        @Environment(\.isInUserBubble) private var inUserBubble
+
+        /// On the panel the quote dims to the theme's secondary; on the USER
+        /// bubble that secondary can fight the fill (Yule: green on red), so
+        /// there it stays the bubble's own text color, slightly dimmed — the
+        /// accent bar alone marks the quote.
+        private var quoteTextColor: Color {
+            if palette.isGlass { return Color.secondary }
+            return inUserBubble ? palette.userText.opacity(0.9) : palette.secondaryText
+        }
 
         var body: some View {
             HStack(alignment: .top, spacing: 8) {
@@ -216,7 +226,7 @@ struct MarkdownBlocksView: View {
                     .fill(palette.isGlass ? Color.accentColor.opacity(0.6) : (palette.quoteColor ?? palette.accent))
                     .frame(width: 3)
                 MarkdownText(content, linkColor: linkColor)
-                    .foregroundColor(palette.isGlass ? .secondary : palette.secondaryText)
+                    .foregroundColor(quoteTextColor)
                 // Always in the layout (fixed width) so revealing it on hover
                 // only changes opacity — the quote text never reflows. Both
                 // glyphs share the frame, so the checkmark swap doesn't nudge

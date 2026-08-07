@@ -294,9 +294,9 @@ enum Localization {
         "appearance.themes.header": [.english: "Themes", .spanish: "Temas", .russian: "Темы"],
         "appearance.holidayThemes": [.english: "Holiday themes", .spanish: "Temas festivos", .russian: "Праздничные темы"],
         "appearance.holidayThemes.caption": [
-            .english: "Halloween (Oct 31) and Día de Muertos (Nov 1–2) switch on automatically and the previous theme comes back afterwards. A manual change always wins.",
-            .spanish: "Halloween (31 oct) y Día de Muertos (1–2 nov) se activan solos y después vuelve el tema anterior. Un cambio manual siempre gana.",
-            .russian: "Хеллоуин (31 окт) и День мёртвых (1–2 ноя) включаются сами, после праздника возвращается прежняя тема. Ручной выбор всегда в приоритете."
+            .english: "Halloween (Oct 31), Día de Muertos (Nov 1–2) and Yule (Dec 24 – Jan 1) switch on automatically and the previous theme comes back afterwards. A manual change always wins.",
+            .spanish: "Halloween (31 oct), Día de Muertos (1–2 nov) y Yule (24 dic – 1 ene) se activan solos y después vuelve el tema anterior. Un cambio manual siempre gana.",
+            .russian: "Хеллоуин (31 окт), День мёртвых (1–2 ноя) и Yule (24 дек – 1 янв) включаются сами, после праздника возвращается прежняя тема. Ручной выбор всегда в приоритете."
         ],
         "appearance.mode": [.english: "Mode", .spanish: "Modo", .russian: "Режим"],
         "appearance.language": [.english: "Language", .spanish: "Idioma", .russian: "Язык"],

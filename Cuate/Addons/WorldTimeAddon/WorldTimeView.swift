@@ -72,8 +72,9 @@ struct WorldTimeView: View {
                 // The measured block: everything with intrinsic height. Its
                 // ideal height drives the window's auto-fit (AppDelegate).
                 VStack(spacing: 10) {
+                    // Дата-стрип живёт в одном ряду с поиском (правый край
+                    // ряда — календарные контролы, ссылки и шестерёнка).
                     topBar
-                    dateStrip
                     if !busyBlocks.isEmpty {
                         busyLane
                     }
@@ -102,12 +103,14 @@ struct WorldTimeView: View {
             .padding(.top, 4)
             .frame(minWidth: 1000)
             // Same surface stack as the chat panel (glass stays resident on
-            // macOS 26 — never branch around it). Decorations are off: the
-            // panel is a working reference board. Blueprint's grid fades out
+            // macOS 26 — never branch around it). Decorations run in their
+            // calmer .worldTime variant (мокап: у Yule/Aurora/Café панель
+            // времени несёт свои элементы у краёв; старые праздничные темы
+            // держат доску чистой). Blueprint's grid fades out
             // where the data field begins (variant A «чистое поле»): full on
             // the row-header column and the top bar, gone over the hours.
             .themedPanelSurface(palette, cornerRadius: 18,
-                                decorations: false,
+                                decorationContext: .worldTime,
                                 patternMask: PatternFadeMask(solidWidth: Self.headerWidth,
                                                              fadeWidth: 60,
                                                              solidHeight: 80,
@@ -202,6 +205,8 @@ struct WorldTimeView: View {
             .buttonStyle(.borderless)
             .help(WTL(settings.pinned ? "wt.unpin" : "wt.pin"))
             searchField
+            dateStrip
+                .padding(.leading, 4)
             Spacer()
             // Jump to the Apple Calendar app — the created slots live there.
             // A text link, not an icon.
@@ -537,7 +542,6 @@ struct WorldTimeView: View {
                 .font(.caption)
                 .tint(wt.isGlass ? nil : wt.link)
             }
-            Spacer()
         }
     }
 

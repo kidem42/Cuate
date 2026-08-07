@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 
 /// Auto-switches the chat theme for seasonal holidays: Halloween on Oct 31,
-/// Día de Muertos on Nov 1–2 (local calendar). When a holiday starts, the
+/// Día de Muertos on Nov 1–2, Yule on Dec 24 – Jan 1 (local calendar). When a holiday starts, the
 /// user's current theme is remembered and the holiday theme applied; when it
 /// ends, the remembered theme comes back. A manual theme change during the
 /// holiday always wins — the manager backs off until the holiday's next
@@ -25,9 +25,23 @@ final class HolidayThemeManager {
     private let overriddenKey = "holidayOverriddenToken"
 
     private enum Holiday {
-        case halloween, diaDeMuertos
-        var theme: AppTheme { self == .halloween ? .halloween : .diaDeMuertos }
-        var slug: String { self == .halloween ? "halloween" : "dia" }
+        case halloween, diaDeMuertos, yule
+
+        var theme: AppTheme {
+            switch self {
+            case .halloween: return .halloween
+            case .diaDeMuertos: return .diaDeMuertos
+            case .yule: return .yule
+            }
+        }
+
+        var slug: String {
+            switch self {
+            case .halloween: return "halloween"
+            case .diaDeMuertos: return "dia"
+            case .yule: return "yule"
+            }
+        }
     }
 
     private init() {}
@@ -86,12 +100,20 @@ final class HolidayThemeManager {
         let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
         guard let y = c.year, let m = c.month, let d = c.day else { return nil }
         let holiday: Holiday?
+        // Yule's window crosses the year boundary (Dec 24 – Jan 1): Jan 1
+        // belongs to the PREVIOUS year's occurrence, so its token matches and
+        // a manual override on Dec 28 keeps holding on New Year's morning.
+        var tokenYear = y
         switch (m, d) {
         case (10, 31): holiday = .halloween
         case (11, 1), (11, 2): holiday = .diaDeMuertos
+        case (12, 24...31): holiday = .yule
+        case (1, 1):
+            holiday = .yule
+            tokenYear = y - 1
         default: holiday = nil
         }
-        return holiday.map { ($0, "\($0.slug)-\(y)") }
+        return holiday.map { ($0, "\($0.slug)-\(tokenYear)") }
     }
 
     /// Holiday over (or feature off): hand back the remembered theme.
@@ -112,7 +134,14 @@ final class HolidayThemeManager {
     /// before this deferred check runs.
     private func userPicked(_ newTheme: AppTheme) {
         guard let token = defaults.string(forKey: appliedKey) else { return }
-        let holidayTheme: AppTheme = token.hasPrefix("halloween") ? .halloween : .diaDeMuertos
+        let holidayTheme: AppTheme
+        if token.hasPrefix("halloween") {
+            holidayTheme = .halloween
+        } else if token.hasPrefix("yule") {
+            holidayTheme = .yule
+        } else {
+            holidayTheme = .diaDeMuertos
+        }
         guard newTheme != holidayTheme else { return }
         defaults.set(token, forKey: overriddenKey)
         defaults.removeObject(forKey: appliedKey)

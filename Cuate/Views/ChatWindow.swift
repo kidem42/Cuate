@@ -466,6 +466,14 @@ struct ChatWindow: View {
                     .padding(.vertical, 6)
                     .background(.ultraThinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    // Тонкая обводка в цвете поля ввода (мокап тем):
+                    // glass остаётся как был, без рамки.
+                    .overlay {
+                        if !palette.isGlass {
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(palette.inputStroke, lineWidth: 1)
+                        }
+                    }
                     .environment(\.themePalette, palette)
                     .fontDesign(palette.fontDesign)
                     .frame(width: rowWidth, alignment: .leading)
@@ -979,6 +987,14 @@ struct ChatWindow: View {
                                     .frame(width: 32, height: 32)
                                     .opacity(composerIsEmpty ? 0.3 : 1.0)
                                     .shadow(color: palette.isGlass ? .clear : (palette.sendGlow ?? .clear), radius: 6)
+
+                                    // Yule's gold band just inside the circle's edge.
+                                    if let rim = palette.sendRim, !palette.isGlass {
+                                        Circle()
+                                            .strokeBorder(rim, lineWidth: 2.5)
+                                            .frame(width: 32, height: 32)
+                                            .opacity(composerIsEmpty ? 0.3 : 1.0)
+                                    }
 
                                     Image(systemName: "paperplane.fill")
                                         .foregroundColor(palette.isGlass ? .white : palette.sendGlyphColor)

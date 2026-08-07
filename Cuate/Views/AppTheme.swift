@@ -17,6 +17,8 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
     case pastel
     case halloween
     case diaDeMuertos
+    case yule
+    case aurora
 
     var id: String { rawValue }
 
@@ -34,6 +36,8 @@ enum AppTheme: String, CaseIterable, Identifiable, Codable {
         case .pastel: return "Pastel"
         case .halloween: return "Halloween"
         case .diaDeMuertos: return "Día de Muertos"
+        case .yule: return "Yule"
+        case .aurora: return "Aurora"
         }
     }
 }
@@ -73,6 +77,7 @@ enum ThemeTimestamp {
     case seconds            // 22:08:14
     case uppercaseMeridiem  // 22:08 PM  (letter-spaced, in caller)
     case flowerSuffix       // 10:08 ✿
+    case snowSuffix         // 22:08 ❄
     case lowercaseMeridiem  // 10:08 p.m.
     case plain              // 10:08
 }
@@ -223,6 +228,8 @@ struct ThemePalette {
     var sendFill: AnyShapeStyle = AnyShapeStyle(Color.accentColor)
     var sendGlyphColor: Color = .white
     var sendGlow: Color? = nil
+    /// Inner rim ring on the send circle (Yule's gold band). nil → none.
+    var sendRim: Color? = nil
     /// Mic-button glyph tint (Día uses light teal). nil → accent.
     var micColor: Color? = nil
     /// Mic-button border/fill base tint (Día uses base teal, darker than glyph).
@@ -307,10 +314,120 @@ struct ThemePalette {
             return tinted(dark ? halloweenDark : halloweenLight, dark ? rgba(30, 16, 48, 0.45) : rgba(255, 249, 242, 0.5))
         case .diaDeMuertos:
             return tinted(dark ? diaDark : diaLight, dark ? rgba(38, 16, 44, 0.45) : rgba(255, 250, 240, 0.5))
+        case .yule:
+            return tinted(dark ? yuleDark : yuleLight, dark ? rgba(14, 36, 22, 0.45) : rgba(253, 250, 243, 0.55))
+        case .aurora:
+            return tinted(dark ? auroraDark : auroraLight, dark ? rgba(10, 26, 46, 0.45) : rgba(244, 250, 253, 0.6))
         }
     }
 
     /// Attaches the semi-transparent glass-panel tint to a base palette.
+    // MARK: Yule
+    // Хвоя + красный акцент + золото; гирлянда-лампочки и снег в декорациях
+    // (YuleDecorations), send — круг с золотым ободком (sendRim).
+    static let yuleDark = ThemePalette(
+        backgroundStyle: radial([hex(0x1c3a28), hex(0x0f2718), hex(0x071108)]),
+        userFill: AnyShapeStyle(rgba(196, 60, 72, 0.50)), userText: hex(0xfff0ef),
+        userStroke: nil, userCorners: rr(16),
+        assistantFill: AnyShapeStyle(rgba(18, 44, 29, 0.62)), assistantText: hex(0xeefaf0),
+        assistantStroke: BubbleStroke(color: rgba(242, 193, 78, 0.22)), assistantCorners: rr(16),
+        assistantGlyph: "🎄", glyphColor: hex(0xF2C14E),
+        accent: hex(0xE5484D), primaryText: hex(0xeefaf0), secondaryText: rgba(190, 230, 200, 0.65),
+        inputFill: AnyShapeStyle(rgba(242, 193, 78, 0.07)), inputStroke: rgba(242, 193, 78, 0.32), inputRadius: 6,
+        placeholderColor: rgba(190, 230, 200, 0.45),
+        timestampColor: rgba(190, 230, 200, 0.55), timestamp: .snowSuffix,
+        codeFill: AnyShapeStyle(rgba(242, 193, 78, 0.10)), codeText: hex(0xf5d896),
+        dictationColors: [hex(0xE5484D), hex(0xF2C14E), hex(0x58B368)], bulletGlyph: "❄",
+        quoteColor: hex(0xF2C14E),
+        sendFill: AnyShapeStyle(hex(0xE5484D)), sendGlyphColor: hex(0xFFE9B8), sendGlow: rgba(242, 193, 78, 0.45),
+        sendRim: rgba(242, 193, 78, 0.8),
+        micStroke: rgba(242, 193, 78, 0.55), micFill: AnyShapeStyle(rgba(242, 193, 78, 0.10)),
+        micGlyphColor: hex(0xF2C14E), micDashed: false,
+        divider: BubbleStroke(color: rgba(242, 193, 78, 0.30), width: 1, dash: [4, 3]),
+        panelBorder: rgba(242, 193, 78, 0.30),
+        glassSurface: true, accentInk: hex(0xF2C14E),
+        inlineCodeFill: rgba(242, 193, 78, 0.14), inlineCodeText: hex(0xf5d896),
+        recordingAccent: hex(0xE5484D)
+    )
+    static let yuleLight = ThemePalette(
+        backgroundStyle: radial([hex(0xf4f1e8), hex(0xdde6dc), hex(0xb7cdbb)]),
+        userFill: AnyShapeStyle(rgba(225, 95, 100, 0.5)), userText: hex(0x3d0d12),
+        userStroke: nil, userCorners: rr(16),
+        assistantFill: AnyShapeStyle(rgba(255, 255, 255, 0.72)), assistantText: hex(0x233324),
+        assistantStroke: BubbleStroke(color: rgba(168, 119, 24, 0.25)), assistantCorners: rr(16),
+        assistantGlyph: "🎄", glyphColor: hex(0x3E7A4E),
+        accent: hex(0xC43C42), primaryText: hex(0x233324), secondaryText: rgba(60, 95, 65, 0.72),
+        inputFill: AnyShapeStyle(rgba(255, 255, 255, 0.6)), inputStroke: rgba(168, 119, 24, 0.35), inputRadius: 6,
+        placeholderColor: rgba(60, 95, 65, 0.5),
+        timestampColor: rgba(60, 95, 65, 0.6), timestamp: .snowSuffix,
+        codeFill: AnyShapeStyle(rgba(168, 119, 24, 0.10)), codeText: hex(0x7a5410),
+        dictationColors: [hex(0xC43C42), hex(0xA87718), hex(0x3E7A4E)], bulletGlyph: "❄",
+        quoteColor: hex(0xA87718),
+        sendFill: AnyShapeStyle(hex(0xC43C42)), sendGlyphColor: .white, sendGlow: rgba(196, 60, 66, 0.4),
+        sendRim: rgba(242, 193, 78, 0.8),
+        micStroke: rgba(168, 119, 24, 0.5), micFill: AnyShapeStyle(rgba(255, 255, 255, 0.55)),
+        micGlyphColor: hex(0xA87718), micDashed: false,
+        divider: BubbleStroke(color: rgba(168, 119, 24, 0.35), width: 1, dash: [4, 3]),
+        panelBorder: rgba(255, 255, 255, 0.78),
+        glassSurface: true, accentInk: hex(0xA87718),
+        inlineCodeFill: rgba(168, 119, 24, 0.12), inlineCodeText: hex(0x7a5410),
+        recordingAccent: hex(0xC43C42)
+    )
+
+    // MARK: Aurora
+    // Полярная ночь: арктический индиго, ленты сияния (AuroraDecorations),
+    // мята #4AE3B5 → фиолет #7D6CFF; send — круг-градиент с paperplane.
+    static let auroraDark = ThemePalette(
+        backgroundStyle: linearV([hex(0x050f1e), hex(0x081827), hex(0x0a2230)]),
+        userFill: linear120([rgba(61, 220, 176, 0.42), rgba(125, 108, 255, 0.42)]), userText: hex(0xeafff7),
+        userStroke: nil, userCorners: rr(16),
+        assistantFill: AnyShapeStyle(rgba(9, 28, 46, 0.65)), assistantText: hex(0xeafff7),
+        assistantStroke: BubbleStroke(color: rgba(111, 227, 255, 0.20)), assistantCorners: rr(16),
+        assistantGlyph: "✦", glyphColor: hex(0x5EEAD4),
+        accent: hex(0x4AE3B5), primaryText: hex(0xeafff7), secondaryText: rgba(160, 220, 235, 0.62),
+        inputFill: AnyShapeStyle(rgba(74, 227, 181, 0.06)), inputStroke: rgba(111, 227, 255, 0.28), inputRadius: 6,
+        placeholderColor: rgba(160, 220, 235, 0.45),
+        timestampColor: rgba(140, 220, 230, 0.55), timestamp: .plain,
+        codeFill: AnyShapeStyle(rgba(111, 227, 255, 0.09)), codeText: hex(0x9ff0e2),
+        dictationColors: [hex(0x4AE3B5), hex(0x6FE3FF), hex(0x7D6CFF)], bulletGlyph: "✦",
+        quoteColor: hex(0x4AE3B5),
+        sendFill: AnyShapeStyle(LinearGradient(colors: [hex(0x4AE3B5), hex(0x7D6CFF)],
+                                               startPoint: .topLeading, endPoint: .bottomTrailing)),
+        sendGlyphColor: .white, sendGlow: rgba(74, 227, 181, 0.55),
+        micStroke: rgba(111, 227, 255, 0.5), micFill: AnyShapeStyle(rgba(111, 227, 255, 0.10)),
+        micGlyphColor: hex(0x8de9ff), micDashed: false,
+        divider: BubbleStroke(color: rgba(111, 227, 255, 0.18), width: 1, dash: []),
+        panelBorder: rgba(111, 227, 255, 0.28),
+        glassSurface: true, accentInk: hex(0x6FE3FF),
+        inlineCodeFill: rgba(111, 227, 255, 0.12), inlineCodeText: hex(0x9ff0e2),
+        recordingAccent: hex(0x4AE3B5)
+    )
+    static let auroraLight = ThemePalette(
+        backgroundStyle: linearV([hex(0xdfeef6), hex(0xd3e3f2), hex(0xbcd4e6)]),
+        userFill: linear120([rgba(64, 196, 160, 0.45), rgba(150, 130, 255, 0.4)]), userText: hex(0x0d2b33),
+        userStroke: nil, userCorners: rr(16),
+        assistantFill: AnyShapeStyle(rgba(255, 255, 255, 0.72)), assistantText: hex(0x0d2b33),
+        assistantStroke: BubbleStroke(color: rgba(14, 156, 139, 0.22)), assistantCorners: rr(16),
+        assistantGlyph: "✦", glyphColor: hex(0x0E9C8B),
+        accent: hex(0x0E9C8B), primaryText: hex(0x0d2b33), secondaryText: rgba(30, 100, 120, 0.7),
+        inputFill: AnyShapeStyle(rgba(255, 255, 255, 0.6)), inputStroke: rgba(14, 156, 139, 0.3), inputRadius: 6,
+        placeholderColor: rgba(30, 100, 120, 0.45),
+        timestampColor: rgba(30, 100, 120, 0.6), timestamp: .plain,
+        codeFill: AnyShapeStyle(rgba(14, 156, 139, 0.09)), codeText: hex(0x0a6e62),
+        dictationColors: [hex(0x0E9C8B), hex(0x38B6D6), hex(0x7D6CFF)], bulletGlyph: "✦",
+        quoteColor: hex(0x0E9C8B),
+        sendFill: AnyShapeStyle(LinearGradient(colors: [hex(0x0E9C8B), hex(0x7D6CFF)],
+                                               startPoint: .topLeading, endPoint: .bottomTrailing)),
+        sendGlyphColor: .white, sendGlow: rgba(14, 156, 139, 0.4),
+        micStroke: rgba(14, 156, 139, 0.45), micFill: AnyShapeStyle(rgba(255, 255, 255, 0.55)),
+        micGlyphColor: hex(0x0B7E70), micDashed: false,
+        divider: BubbleStroke(color: rgba(14, 156, 139, 0.22), width: 1, dash: []),
+        panelBorder: rgba(255, 255, 255, 0.8),
+        glassSurface: true, accentInk: hex(0x5B4BD6),
+        inlineCodeFill: rgba(14, 156, 139, 0.12), inlineCodeText: hex(0x0a6e62),
+        recordingAccent: hex(0x0E9C8B)
+    )
+
     private static func tinted(_ base: ThemePalette, _ tint: Color) -> ThemePalette {
         var p = base
         p.panelTint = tint
@@ -632,10 +749,22 @@ private struct ThemePaletteKey: EnvironmentKey {
     static let defaultValue = ThemePalette(isGlass: true)
 }
 
+/// Markdown inside the USER bubble: themed sub-blocks (quotes) must color for
+/// the user fill, not the panel — Yule's green secondary on the red bubble was
+/// unreadable.
+private struct InUserBubbleKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var themePalette: ThemePalette {
         get { self[ThemePaletteKey.self] }
         set { self[ThemePaletteKey.self] = newValue }
+    }
+
+    var isInUserBubble: Bool {
+        get { self[InUserBubbleKey.self] }
+        set { self[InUserBubbleKey.self] = newValue }
     }
 }
 
@@ -678,10 +807,11 @@ extension View {
     @ViewBuilder
     func themedPanelSurface(_ palette: ThemePalette, cornerRadius: CGFloat,
                             decorations: Bool = true,
+                            decorationContext: ThemeDecorationContext = .chat,
                             patternMask: PatternFadeMask? = nil) -> some View {
         if #available(macOS 26.0, *), !debugNoGlassNode {
             self
-                .background { PanelBackdrop(palette: palette, decorations: decorations, patternMask: patternMask) }
+                .background { PanelBackdrop(palette: palette, decorations: decorations, context: decorationContext, patternMask: patternMask) }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay {
                     if !palette.isGlass {
@@ -706,7 +836,7 @@ extension View {
             self.adaptiveGlass(cornerRadius: cornerRadius)
         } else {
             self
-                .background { PanelBackdrop(palette: palette, decorations: decorations, patternMask: patternMask) }
+                .background { PanelBackdrop(palette: palette, decorations: decorations, context: decorationContext, patternMask: patternMask) }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 .overlay(
                     RoundedRectangle(cornerRadius: cornerRadius)
@@ -747,6 +877,7 @@ extension View {
 private struct PanelBackdrop: View {
     let palette: ThemePalette
     var decorations: Bool = true
+    var context: ThemeDecorationContext = .chat
     var patternMask: PatternFadeMask? = nil
 
     var body: some View {
@@ -770,7 +901,7 @@ private struct PanelBackdrop: View {
                 }
                 pattern
                 if decorations {
-                    ThemeDecorations(themeID: palette.themeID)
+                    ThemeDecorations(themeID: palette.themeID, context: context)
                 }
             }
         }
@@ -850,17 +981,27 @@ struct ThemedBubble: ViewModifier {
     }
 }
 
+/// Where decorations are drawn: the chat panel gets the full set, the World
+/// Time board gets the calmer wt-variant from the mock (fewer/softer pieces,
+/// hugged to the edges); the older holiday themes keep the board clean.
+enum ThemeDecorationContext { case chat, worldTime }
+
 /// Per-theme decorative ornament overlay (papel picado, marigolds, candles…),
 /// placed behind the chat content and over the glass. Empty for themes without
 /// ornaments yet.
 struct ThemeDecorations: View {
     let themeID: AppTheme
+    var context: ThemeDecorationContext = .chat
+
+    @ViewBuilder
     var body: some View {
         switch themeID {
-        case .halloween: HalloweenDecorations()
-        case .diaDeMuertos: DiaDecorations()
-        case .sakura: SakuraDecorations()
-        case .pastel: PastelDecorations()
+        case .halloween: if context == .chat { HalloweenDecorations() } else { Color.clear }
+        case .diaDeMuertos: if context == .chat { DiaDecorations() } else { Color.clear }
+        case .sakura: if context == .chat { SakuraDecorations() } else { Color.clear }
+        case .pastel: if context == .chat { PastelDecorations() } else { Color.clear }
+        case .yule: YuleDecorations(worldTime: context == .worldTime)
+        case .aurora: AuroraDecorations(worldTime: context == .worldTime)
         default: Color.clear
         }
     }

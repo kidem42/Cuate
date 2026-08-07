@@ -286,6 +286,67 @@ struct WorldTimeTheme {
                 chip: wrgba(170, 80, 10, 0.14), daySel: wrgba(61, 13, 32, 0.10),
                 rail: wrgba(170, 80, 10, 0.15), link: whex(0x00897B)
             )
+
+        case .yule:
+            // Хвойная ночь, золотые плечи, работа — тёплый снег; выделение
+            // золотом со свечением (тёмная) / красным (светлая).
+            return dark ? WorldTimeTheme(
+                midnight: wrgba(10, 32, 21, 0.95), night: wrgba(38, 96, 62, 0.60),
+                shoulder: wrgba(242, 193, 78, 0.20), work: wrgba(255, 248, 235, 0.24),
+                cellDarkText: whex(0xeefaf0),
+                text: whex(0xeefaf0), secondary: wrgba(190, 230, 200, 0.65),
+                sep: wrgba(242, 193, 78, 0.20), bandStroke: wrgba(242, 193, 78, 0.24),
+                selStroke: whex(0xF2C14E), selFill: wrgba(242, 193, 78, 0.10),
+                selGlow: wrgba(242, 193, 78, 0.4),
+                hoverStroke: wrgba(242, 193, 78, 0.5),
+                now: wrgba(242, 193, 78, 0.9),
+                weekend: whex(0xff8a80), capsule: wrgba(242, 193, 78, 0.08),
+                chip: wrgba(242, 193, 78, 0.15), daySel: wrgba(238, 250, 240, 0.12),
+                rail: wrgba(190, 230, 200, 0.15), link: whex(0xF2C14E)
+            ) : WorldTimeTheme(
+                midnight: wrgba(23, 52, 38, 0.88), night: wrgba(62, 122, 78, 0.45),
+                shoulder: wrgba(242, 193, 78, 0.22), work: wrgba(255, 255, 255, 0.65),
+                cellDarkText: whex(0xe8f2e9),
+                text: whex(0x233324), secondary: wrgba(60, 95, 65, 0.72),
+                sep: wrgba(168, 119, 24, 0.20), bandStroke: wrgba(168, 119, 24, 0.28),
+                selStroke: whex(0xC43C42), selFill: wrgba(196, 60, 66, 0.08),
+                hoverStroke: wrgba(196, 60, 66, 0.5),
+                now: wrgba(168, 119, 24, 0.85),
+                weekend: whex(0xc62828), capsule: wrgba(255, 255, 255, 0.6),
+                chip: wrgba(168, 119, 24, 0.14), daySel: wrgba(35, 51, 36, 0.10),
+                rail: wrgba(60, 95, 65, 0.16), link: whex(0x8a6210)
+            )
+
+        case .aurora:
+            // Полярная ночь: индиго-ночь, мятные плечи сияния, ледяной день;
+            // выделение мятой со свечением.
+            return dark ? WorldTimeTheme(
+                midnight: wrgba(6, 14, 32, 0.95), night: wrgba(70, 88, 200, 0.50),
+                shoulder: wrgba(74, 227, 181, 0.18), work: wrgba(222, 244, 255, 0.22),
+                cellDarkText: whex(0xeafff7),
+                text: whex(0xeafff7), secondary: wrgba(160, 220, 235, 0.62),
+                sep: wrgba(111, 227, 255, 0.18), bandStroke: wrgba(111, 227, 255, 0.24),
+                selStroke: whex(0x4AE3B5), selFill: wrgba(74, 227, 181, 0.08),
+                selGlow: wrgba(74, 227, 181, 0.45),
+                hoverStroke: wrgba(111, 227, 255, 0.5),
+                now: wrgba(111, 227, 255, 0.9),
+                weekend: whex(0xff9a8f), capsule: wrgba(111, 227, 255, 0.07),
+                chip: wrgba(111, 227, 255, 0.14), daySel: wrgba(234, 255, 247, 0.12),
+                rail: wrgba(160, 220, 235, 0.15), link: whex(0x6FE3FF)
+            ) : WorldTimeTheme(
+                midnight: wrgba(16, 26, 64, 0.88), night: wrgba(90, 108, 220, 0.42),
+                shoulder: wrgba(14, 156, 139, 0.16), work: wrgba(255, 255, 255, 0.62),
+                cellDarkText: whex(0xe6ecfa),
+                text: whex(0x0d2b33), secondary: wrgba(30, 100, 120, 0.7),
+                sep: wrgba(14, 156, 139, 0.18), bandStroke: wrgba(14, 156, 139, 0.26),
+                selStroke: whex(0x0E9C8B), selFill: wrgba(14, 156, 139, 0.07),
+                hoverStroke: wrgba(14, 156, 139, 0.5),
+                now: wrgba(91, 75, 214, 0.85),
+                weekend: whex(0xc62828), capsule: wrgba(255, 255, 255, 0.6),
+                chip: wrgba(14, 156, 139, 0.14), daySel: wrgba(13, 43, 51, 0.10),
+                rail: wrgba(30, 100, 120, 0.16), link: whex(0x5B4BD6)
+            )
+
         }
     }
 }

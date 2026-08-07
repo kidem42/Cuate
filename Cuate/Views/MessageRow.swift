@@ -140,6 +140,8 @@ struct MessageRow: View {
                 .foregroundColor(palette.isGlass ? .secondary : palette.timestampColor)
         }
         .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
+        // Quotes (and future themed sub-blocks) color for the user fill here.
+        .environment(\.isInUserBubble, true)
     }
     
     private var assistantMessageBubble: some View {
@@ -292,6 +294,8 @@ struct MessageRow: View {
             return Self.posixFormatter("hh:mm a").string(from: date).uppercased()
         case .flowerSuffix:
             return "\(Self.posixFormatter("HH:mm").string(from: date)) ✿"
+        case .snowSuffix:
+            return "\(Self.posixFormatter("HH:mm").string(from: date)) ❄"
         case .lowercaseMeridiem:
             let ampm = Calendar.current.component(.hour, from: date) < 12 ? "a.m." : "p.m."
             return "\(Self.posixFormatter("hh:mm").string(from: date)) \(ampm)"
