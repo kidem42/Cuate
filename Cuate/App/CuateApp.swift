@@ -37,6 +37,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var worldTimeWindow: NSWindow? // WorldTimeAddon (Addons/WorldTimeAddon)
+    /// The panel was created while the app ran with a Dock icon (`.regular`)
+    /// — its `canJoinAllSpaces` is dead (see `makeWorldTimePanel`); rebuilt
+    /// on the next clean-state summon.
+    private var worldTimeWindowDegraded = false
+    private var worldTimeEscMonitorInstalled = false
     /// When the World Time panel was last summoned — a resign-key arriving
     /// within a beat of the summon is our own activation dance settling, not
     /// the user leaving (see `hideWorldTimePanel`).
@@ -97,6 +102,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         // Setup chat window
         setupChatWindow()
+
+        // World-time panel is born HERE, while the policy is still
+        // `.accessory` — see makeWorldTimePanel for why creation under
+        // `.regular` cripples its Spaces behavior.
+        setupWorldTimePanelIfEnabled()
 
         // Setup hotkey manager
         setupHotkeys()
@@ -667,57 +677,89 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     /// does focus moving elsewhere — same as the chat panel. The pin in its
     /// top bar (`WorldTimeSettings.pinned`) opts out, for using it as a
     /// reference board while writing in another app.
+    /// Builds the panel window. MUST be called while the app's activation
+    /// policy is `.accessory`: a window CREATED under `.regular` (Dock icon
+    /// shown — i.e. Settings open) permanently loses its `canJoinAllSpaces`
+    /// registration in the WindowServer — it behaves like a plain one-Space
+    /// window forever, and no later flag write, policy flip or re-show heals
+    /// it (measured via SLSCopySpacesForWindows, 2026-08-07: created
+    /// accessory → on all Spaces; created regular → pinned to one). That is
+    /// why the panel used to appear on a desktop Space instead of over the
+    /// app it was summoned on, while the chat panel — created at launch,
+    /// always accessory — was immune.
+    private func makeWorldTimePanel() -> FloatingPanelWindow {
+        let hostingView = NSHostingView(rootView: WorldTimeView())
+        hostingView.sizingOptions = []
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.clear.cgColor
+        container.layer?.cornerRadius = 18
+        container.layer?.masksToBounds = true
+        container.addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: container.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        let window = FloatingPanelWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1120, height: 340),
+            styleMask: [.borderless, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.minSize = NSSize(width: 1000, height: 260)
+        window.preservesContentDuringLiveResize = true
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        // NOT movable-by-background: AppKit would drag the window along
+        // with the row-reorder DragGesture (the gesture looks like
+        // "background" to it) and the rows jitter. Dragging goes through
+        // explicit DragHandle regions in the view instead.
+        window.isMovableByWindowBackground = false
+        window.level = .floating
+        window.hasShadow = true
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.hidesOnDeactivate = false
+        window.allowsToolTipsWhenApplicationIsInactive = true
+        window.role = .worldTime
+        window.contentView = container
+        // Never set before, which is why `windowWillClose` below could not
+        // see this panel either — closing it left the Dock icon behind.
+        window.delegate = self
+        window.setFrameAutosaveName(Self.worldTimeFrameName)
+        Diagnostics.log("ui", "worldTime.window.create policy=\(NSApp.activationPolicy() == .regular ? "regular" : "accessory")")
+        return window
+    }
+
+    /// Creates the panel at launch (accessory guaranteed) so it never has to
+    /// be born under `.regular`. Called from applicationDidFinishLaunching.
+    func setupWorldTimePanelIfEnabled() {
+        guard WorldTimeSettings.shared.enabled, worldTimeWindow == nil else { return }
+        worldTimeWindow = makeWorldTimePanel()
+        worldTimeWindowDegraded = false
+    }
+
     private func showWorldTimePanel() {
-        if worldTimeWindow == nil {
-            let hostingView = NSHostingView(rootView: WorldTimeView())
-            hostingView.sizingOptions = []
-            hostingView.translatesAutoresizingMaskIntoConstraints = false
-            hostingView.wantsLayer = true
-            hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-
-            let container = NSView()
-            container.wantsLayer = true
-            container.layer?.backgroundColor = NSColor.clear.cgColor
-            container.layer?.cornerRadius = 18
-            container.layer?.masksToBounds = true
-            container.addSubview(hostingView)
-            NSLayoutConstraint.activate([
-                hostingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                hostingView.topAnchor.constraint(equalTo: container.topAnchor),
-                hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-            ])
-
-            let window = FloatingPanelWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1120, height: 340),
-                styleMask: [.borderless, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.minSize = NSSize(width: 1000, height: 260)
-            window.preservesContentDuringLiveResize = true
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            // NOT movable-by-background: AppKit would drag the window along
-            // with the row-reorder DragGesture (the gesture looks like
-            // "background" to it) and the rows jitter. Dragging goes through
-            // explicit DragHandle regions in the view instead.
-            window.isMovableByWindowBackground = false
-            window.level = .floating
-            window.hasShadow = true
-            window.isReleasedWhenClosed = false
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            window.hidesOnDeactivate = false
-            window.allowsToolTipsWhenApplicationIsInactive = true
-            window.role = .worldTime
-            window.contentView = container
-            // Never set before, which is why `windowWillClose` below could not
-            // see this panel either — closing it left the Dock icon behind.
-            window.delegate = self
-            window.setFrameAutosaveName(Self.worldTimeFrameName)
-            worldTimeWindow = window
-
+        // Lazy fallback (addon enabled mid-session): if the window had to be
+        // created under `.regular`, it is Space-crippled — remember that and
+        // rebuild it fresh on the first summon in a clean state.
+        if worldTimeWindow == nil
+            || (worldTimeWindowDegraded && NSApp.activationPolicy() == .accessory) {
+            worldTimeWindow?.orderOut(nil)
+            worldTimeWindow = makeWorldTimePanel()
+            worldTimeWindowDegraded = NSApp.activationPolicy() == .regular
+        }
+        if !worldTimeEscMonitorInstalled {
+            worldTimeEscMonitorInstalled = true
             // Esc closes the panel (borderless windows get no close button).
+            // Installed once; reads the CURRENT window through self.
             NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53, // Esc
                    let panel = self?.worldTimeWindow, panel.isKeyWindow {
@@ -735,22 +777,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // user was looking at this screen (2026-07-29). Same-screen summons
         // keep the exact remembered spot.
         let screen = screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
-        if !window.setFrameUsingName(Self.worldTimeFrameName, force: true)
-            || !screen.frame.intersects(window.frame) {
+        let restored = window.setFrameUsingName(Self.worldTimeFrameName, force: true)
+        let recentered = !restored || !screen.frame.intersects(window.frame)
+        if recentered {
             spotlightCenter(window, on: screen)
         }
-        // Same raising dance as the chat panel (`activatePanel`): cooperative
-        // activation can be silently denied for an accessory app summoned by
-        // a global hotkey, and without an actual activation
-        // makeKeyAndOrderFront only orders the window front WITHIN this app —
-        // it stays behind other apps' (and fullscreen) windows.
+        // The one line that makes a misplaced summon debuggable from the log
+        // instead of from feelings (live case 2026-08-07: the panel came up
+        // on a desktop Space while the user summoned it over their app).
+        Diagnostics.log("ui", "worldTime.show restored=\(restored) recentered=\(recentered) screen=\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y)) frame=\(Int(window.frame.origin.x)),\(Int(window.frame.origin.y)) active=\(NSApp.isActive)")
+        // On screen FIRST, while the summoning app is still frontmost — the
+        // window then joins the CURRENT Space, including another app's
+        // fullscreen Space. This is the chat panel's protocol (its
+        // selection-grab path), and the chat panel is the one that appears
+        // in place. Activating in the same beat instead let macOS re-home
+        // the panel onto a plain desktop Space — summoned over an app, it
+        // showed up only after switching to the desktop (2026-08-07).
         window.orderFrontRegardless()
-        NSRunningApplication.current.activate()
-        if !NSApp.isActive {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        window.makeKeyAndOrderFront(nil)
         worldTimeShownAt = Date()
+        // Activation one tick later (same dance as `activatePanel`:
+        // cooperative activation can be silently denied for an accessory app
+        // summoned by a global hotkey; without it the panel never takes key
+        // focus and Esc/typing die).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.worldTimeWindow else { return }
+            NSRunningApplication.current.activate()
+            if !NSApp.isActive {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            window.makeKeyAndOrderFront(nil)
+            self.worldTimeShownAt = Date()
+        }
     }
 
     /// Chrome around the panel's measured content block: top padding (4) +
@@ -1101,7 +1158,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     // always trigger the frame autosave, so persist explicitly. A user drag
     // (not our own positioning) also records the custom relative position.
     func windowDidMove(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === chatWindow else { return }
+        guard let window = notification.object as? NSWindow else { return }
+        // The world-time panel needs the same safety net: without it the
+        // autosaved frame went STALE, and every summon force-restored the
+        // panel onto whichever display it lived on days ago before the
+        // recenter check ran (live 2026-08-07: defaults still held the
+        // external display while the panel actually sat on the built-in).
+        if window === worldTimeWindow {
+            window.saveFrame(usingName: Self.worldTimeFrameName)
+            return
+        }
+        guard window === chatWindow else { return }
         window.saveFrame(usingName: Self.panelFrameName)
 
         guard !isProgrammaticMove, window.isVisible, let screen = window.screen else { return }
@@ -1115,7 +1182,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === chatWindow else { return }
+        guard let window = notification.object as? NSWindow else { return }
+        if window === worldTimeWindow {
+            window.saveFrame(usingName: Self.worldTimeFrameName)
+            return
+        }
+        guard window === chatWindow else { return }
         window.saveFrame(usingName: Self.panelFrameName)
     }
 
