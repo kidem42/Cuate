@@ -23,13 +23,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -52,6 +59,8 @@ fun ThemeDecorationsOverlay(decoration: ThemeDecoration, dark: Boolean, modifier
             ThemeDecoration.PASTEL -> PastelDecorations(dark)
             ThemeDecoration.HALLOWEEN -> HalloweenDecorations(dark)
             ThemeDecoration.DIA -> DiaDecorations(dark)
+            ThemeDecoration.YULE -> YuleDecorations(dark)
+            ThemeDecoration.AURORA -> AuroraDecorations(dark)
             ThemeDecoration.NONE -> Unit
         }
     }
@@ -252,6 +261,340 @@ private fun FlickeringCandle(dark: Boolean, delayMs: Int, modifier: Modifier = M
     }
 }
 
+// MARK: - Yule (garland bulbs hugging the top edge + falling snow)
+
+/**
+ * Wall-clock milliseconds ticking every frame — the Compose analog of the
+ * mac's `TimelineView(.animation)`. The particle loops (snow, shooting
+ * stars) are pure functions of this clock, phase-shifted per particle, so
+ * they never drift or restart the way state-toggled repeatForever loops do.
+ */
+@Composable
+private fun rememberFrameClockMillis(): androidx.compose.runtime.State<Long> =
+    androidx.compose.runtime.produceState(0L) {
+        while (true) {
+            androidx.compose.runtime.withFrameMillis { value = it }
+        }
+    }
+
+/** Mock's snowflakes: (x fraction, fall duration s, phase offset s). */
+private val yuleFlakes = listOf(
+    Triple(0.08f, 11f, 0f), Triple(0.24f, 14f, 3f), Triple(0.43f, 9f, 6f),
+    Triple(0.58f, 13f, 1.5f), Triple(0.72f, 10f, 4.5f), Triple(0.88f, 12f, 7.5f),
+    Triple(0.33f, 15f, 9f), Triple(0.80f, 12f, 10f), Triple(0.50f, 12f, 2.2f),
+    Triple(0.16f, 10f, 7f),
+)
+
+@Composable
+private fun BoxScope.YuleDecorations(dark: Boolean) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        val width = maxWidth
+        // Bulb palette from the mock: red / gold / green / ice blue, one bulb
+        // per 10% of width at the mock's hand-tuned drops from the top.
+        val bulbColors = listOf(dhex(0xE5484D), dhex(0xF2C14E), dhex(0x58B368), dhex(0x6FB7E8))
+        val bulbTops = listOf(10, 17, 21, 18, 11, 16, 22, 17, 10, 15)
+        bulbTops.forEachIndexed { i, top ->
+            TwinklingBulb(
+                color = bulbColors[i % 4],
+                glowAlpha = if (dark) 0.8f else 0.47f,
+                periodMs = 2000 + (i % 3) * 500,
+                phaseMs = i * 350,
+                modifier = Modifier.offset(x = width * (0.05f + i * 0.10f), y = top.dp),
+            )
+        }
+        // Snow rides one shared clock: each flake's y is a phase-shifted loop
+        // over the panel height, x sways around its lane (mac Canvas port).
+        val clock by rememberFrameClockMillis()
+        val measurer = rememberTextMeasurer()
+        val flakeColor = if (dark) drgba(255, 255, 255, 0.85f) else drgba(120, 150, 170, 0.8f)
+        // Measured ONCE and drawn as a ready layout: per-frame drawText(text)
+        // derives its constraints from "canvas minus topLeft", and a flake
+        // BELOW the bottom edge (travel overshoots by design) made that
+        // negative — an IllegalArgumentException in the draw phase took the
+        // whole app down (device crash log 2026-08-07 18:00).
+        val flakeLayout = remember(measurer, flakeColor) {
+            measurer.measure(
+                androidx.compose.ui.text.AnnotatedString("❄"),
+                TextStyle(fontSize = 7.sp, color = flakeColor),
+            )
+        }
+        Canvas(Modifier.fillMaxSize()) {
+            val t = clock / 1000f
+            val travel = size.height + 40.dp.toPx()
+            for ((x, duration, phase) in yuleFlakes) {
+                val progress = ((t + phase) / duration).mod(1f)
+                val sway = kotlin.math.sin((t + phase) / (duration / 3.2f) * 2f * Math.PI.toFloat()) * 4.5.dp.toPx()
+                // Centered on the point, like the mac's ctx.draw(at:).
+                drawText(
+                    textLayoutResult = flakeLayout,
+                    topLeft = Offset(
+                        size.width * x + sway - flakeLayout.size.width / 2f,
+                        progress * travel - 24.dp.toPx() - flakeLayout.size.height / 2f,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One garland bulb, 1:1 with the mock's `box-shadow` + `twinkle`: a soft
+ * radial-gradient halo behind the drop (the CSS blur+spread), swelling and
+ * fading in step with the bulb's own brightness.
+ */
+@Composable
+private fun TwinklingBulb(
+    color: Color,
+    glowAlpha: Float,
+    periodMs: Int,
+    phaseMs: Int,
+    modifier: Modifier = Modifier,
+) {
+    val transition = rememberInfiniteTransition(label = "bulb$phaseMs")
+    // 0 = bright, 1 = dimmed (the mac's `dim` toggle, made continuous).
+    val dim by transition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(periodMs / 2),
+            RepeatMode.Reverse,
+            initialStartOffset = androidx.compose.animation.core.StartOffset(phaseMs),
+        ),
+        label = "dim$phaseMs",
+    )
+    Box(modifier.size(16.dp, 18.dp), contentAlignment = Alignment.Center) {
+        Canvas(
+            Modifier.fillMaxSize()
+                .scale(1.3f - 0.55f * dim)
+                .alpha(glowAlpha * (1f - 0.65f * dim))
+        ) {
+            drawOval(
+                androidx.compose.ui.graphics.Brush.radialGradient(
+                    listOf(color, color.copy(alpha = 0f)),
+                )
+            )
+        }
+        Box(
+            Modifier.size(6.dp, 8.dp)
+                .alpha(1f - 0.5f * dim)
+                .background(
+                    color,
+                    androidx.compose.foundation.shape.RoundedCornerShape(
+                        topStart = 2.7.dp, topEnd = 2.7.dp,
+                        bottomEnd = 3.dp, bottomStart = 3.dp,
+                    ),
+                ),
+        )
+    }
+}
+
+// MARK: - Aurora (breathing ribbons, twinkling stars, shooting stars)
+
+/** Mock's star field: (x fraction, y dp, diameter dp). */
+private val auroraStars = listOf(
+    Triple(0.12f, 34, 2f), Triple(0.30f, 16, 1.5f), Triple(0.52f, 28, 2f),
+    Triple(0.76f, 20, 1.5f), Triple(0.88f, 48, 2f), Triple(0.22f, 66, 1.5f),
+    Triple(0.64f, 58, 1.5f), Triple(0.41f, 46, 1.5f), Triple(0.83f, 84, 1.5f),
+    Triple(0.08f, 96, 1.5f),
+)
+
+@Composable
+private fun BoxScope.AuroraDecorations(dark: Boolean) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        val w = maxWidth
+        val h = maxHeight
+        if (dark) {
+            AuroraRibbon(drgba(61, 232, 176, 0.40f), periodMs = 11_000, phaseMs = 0,
+                Modifier.offset(x = -w * 0.18f, y = -h * 0.10f).size(w * 0.85f, h * 0.48f))
+            AuroraRibbon(drgba(125, 108, 255, 0.34f), periodMs = 14_000, phaseMs = 2_500,
+                Modifier.offset(x = w * 0.32f, y = -h * 0.06f).size(w * 0.90f, h * 0.54f))
+            AuroraRibbon(drgba(111, 227, 255, 0.22f), periodMs = 9_000, phaseMs = 5_000,
+                Modifier.offset(x = w * 0.16f, y = -h * 0.04f).size(w * 0.70f, h * 0.36f))
+            auroraStars.forEachIndexed { i, (x, y, d) ->
+                TwinklingStar(
+                    diameter = d.dp,
+                    periodMs = 2000 + (i % 4) * 700,
+                    phaseMs = i * 500,
+                    modifier = Modifier.offset(x = w * x, y = y.dp),
+                )
+            }
+            // Two shooting stars on offset cycles: each flares at a RANDOM
+            // point anywhere in the window (chat-only on the mac too).
+            ShootingStars(Modifier.fillMaxSize())
+        } else {
+            AuroraRibbon(drgba(64, 196, 160, 0.26f), periodMs = 12_000, phaseMs = 0,
+                Modifier.offset(x = -w * 0.14f, y = -h * 0.08f).size(w * 0.80f, h * 0.42f))
+            AuroraRibbon(drgba(150, 130, 255, 0.24f), periodMs = 15_000, phaseMs = 3_000,
+                Modifier.offset(x = w * 0.33f, y = -h * 0.02f).size(w * 0.85f, h * 0.48f))
+        }
+    }
+}
+
+/**
+ * One curtain of light, drifting and swelling on its own slow period (the
+ * mock's `ribbon` keyframe: x ±14, slight swell, opacity breathing). The
+ * radial gradient fades to transparent on its own — no platform blur needed,
+ * so the effect renders identically on every API level.
+ */
+@Composable
+private fun AuroraRibbon(color: Color, periodMs: Int, phaseMs: Int, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "ribbon$periodMs")
+    val t by transition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(periodMs, easing = LinearEasing),
+            RepeatMode.Restart,
+            initialStartOffset = androidx.compose.animation.core.StartOffset(phaseMs),
+        ),
+        label = "t$periodMs",
+    )
+    val angle = t * 2f * Math.PI.toFloat()
+    val drift = kotlin.math.sin(angle) * 14f
+    val swell = 1f + kotlin.math.sin(angle + Math.PI.toFloat() / 3f) * 0.10f
+    val breath = 0.82f + kotlin.math.sin(angle + Math.PI.toFloat() / 6f) * 0.18f
+    Canvas(
+        modifier.graphicsLayer(
+            translationX = drift,
+            scaleY = swell,
+            alpha = breath.coerceIn(0f, 1f),
+        )
+    ) {
+        drawOval(
+            androidx.compose.ui.graphics.Brush.radialGradient(
+                listOf(color, color.copy(alpha = 0f)),
+            )
+        )
+    }
+}
+
+/** A pin-prick star pulsing between bright and faint (mock's `starTw`). */
+@Composable
+private fun TwinklingStar(diameter: Dp, periodMs: Int, phaseMs: Int, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "star$phaseMs")
+    val dim by transition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(periodMs / 2),
+            RepeatMode.Reverse,
+            initialStartOffset = androidx.compose.animation.core.StartOffset(phaseMs),
+        ),
+        label = "dim$phaseMs",
+    )
+    Box(
+        modifier.size(diameter)
+            .scale(1f - 0.25f * dim)
+            .alpha(0.9f - 0.65f * dim)
+            .background(Color.White, androidx.compose.foundation.shape.CircleShape),
+    )
+}
+
+/**
+ * Shooting stars: invisible for most of a 12s cycle, then a bright streak
+ * slides down-left and fades. Each flight starts at a NEW pseudo-random point
+ * (fract-sin hash seeded by the flyby index) — a 1:1 port of the mac
+ * `ShootingStar`, both stars drawn from one frame-clock canvas.
+ */
+@Composable
+private fun ShootingStars(modifier: Modifier = Modifier) {
+    val clock by rememberFrameClockMillis()
+    val cycle = 12f
+    val visibleFrom = 0.92f
+    fun hash(v: Float): Float {
+        val s = kotlin.math.sin(v.toDouble()) * 43758.5453
+        return (s - kotlin.math.floor(s)).toFloat()
+    }
+    Canvas(modifier) {
+        for (seed in listOf(0f, 7f)) {
+            val raw = clock / 1000f + seed * cycle / 2f
+            val pass = kotlin.math.floor(raw / cycle)
+            val t = raw.mod(cycle) / cycle
+            val p = ((t - visibleFrom) / (1f - visibleFrom)).coerceAtLeast(0f)
+            if (p == 0f) continue
+            val opacity = if (p < 0.2f) p * 5f * 0.9f else 0.9f * (1f - (p - 0.2f) / 0.8f)
+            val startX = size.width * (0.18f + 0.72f * hash(pass * 12.9898f + seed))
+            val startY = size.height * (0.06f + 0.72f * hash(pass * 78.233f + seed * 3f))
+            val length = 46.dp.toPx()
+            val thickness = 1.5.dp.toPx()
+            val flightX = startX - 90.dp.toPx() * p
+            val flightY = startY + 54.dp.toPx() * p
+            withTransform({
+                translate(left = flightX, top = flightY)
+                rotate(150f, pivot = Offset(length, thickness / 2f))
+            }) {
+                drawRoundRect(
+                    brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                        listOf(Color.White.copy(alpha = 0.9f), Color.Transparent),
+                        startX = 0f, endX = length,
+                    ),
+                    size = androidx.compose.ui.geometry.Size(length, thickness),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
+                    alpha = opacity.coerceIn(0f, 1f),
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Candy-cane spinner (Yule "thinking", port of CandyCaneSpinner)
+
+/**
+ * Yule's "thinking" spinner: a candy-cane cylinder lying on its side, its
+ * red/cream spiral turning (the barber-pole read). 45° stripes, 6dp
+ * perpendicular width, one full period (12·√2 ≈ 16.97dp of horizontal
+ * travel) every 0.8s — the loop closes on itself exactly, so the motion
+ * never hiccups. Gloss (top highlight, bottom shade) is drawn OVER the
+ * stripes so the shine stays put while the spiral moves.
+ */
+@Composable
+fun CandyCaneSpinner(modifier: Modifier = Modifier) {
+    val travel = 16.9706f // dp of horizontal travel per turn
+    val transition = rememberInfiniteTransition(label = "candyCane")
+    val phase by transition.animateFloat(
+        initialValue = 0f, targetValue = travel,
+        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Restart),
+        label = "phase",
+    )
+    val red = dhex(0xE5484D)
+    val cream = dhex(0xFFF6EC)
+    Canvas(modifier.size(44.dp, 11.dp)) {
+        val h = size.height
+        val capsule = androidx.compose.ui.graphics.Path().apply {
+            addRoundRect(
+                androidx.compose.ui.geometry.RoundRect(
+                    0f, 0f, size.width, h,
+                    androidx.compose.ui.geometry.CornerRadius(h / 2f),
+                )
+            )
+        }
+        clipPath(capsule) {
+            drawRect(cream)
+            // Diagonal "/" stripes travelling right with phase; the margin on
+            // both sides covers the diagonal overhang.
+            val travelPx = travel.dp.toPx()
+            var x = -h - travelPx + phase.dp.toPx()
+            while (x < size.width + h) {
+                val stripe = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(x, h)
+                    lineTo(x + h, 0f)
+                    lineTo(x + h + travelPx / 2f, 0f)
+                    lineTo(x + travelPx / 2f, h)
+                    close()
+                }
+                drawPath(stripe, red)
+                x += travelPx
+            }
+            // Cylinder gloss: highlight on top, shadow below — both static.
+            drawRect(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = 0.45f),
+                    0.42f to Color.Transparent,
+                    0.62f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = 0.22f),
+                )
+            )
+        }
+    }
+}
+
 // MARK: - Thinking equalizer (port of ThinkingIndicator.swift)
 
 /**
@@ -264,6 +607,11 @@ private fun FlickeringCandle(dark: Boolean, delayMs: Int, modifier: Modifier = M
  */
 @Composable
 fun ThinkingEqualizer(palette: ChatPalette, accentFallback: Color, modifier: Modifier = Modifier) {
+    if (palette.themeID == ChatThemeID.YULE) {
+        // Yule: a candy-cane cylinder — the spiral spins "on its side".
+        CandyCaneSpinner(modifier)
+        return
+    }
     val barCount = 5
     val periodMs = 1100
     val cascadeMs = 150

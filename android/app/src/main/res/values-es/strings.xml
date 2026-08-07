@@ -145,7 +145,7 @@
     <string name="appearance_system">Sistema</string>
     <string name="appearance_light">Claro</string>
     <string name="appearance_dark">Oscuro</string>
-    <string name="settings_holiday">Temas festivos (31 oct – 2 nov)</string>
+    <string name="settings_holiday">Temas festivos (31 oct – 2 nov, 24 dic – 1 ene)</string>
     <string name="settings_max_tokens">Tokens máx. de respuesta</string>
 
     <string name="artifact_html_hint">HTML interactivo • toca para abrir</string>

@@ -22,8 +22,8 @@ android {
         applicationId = "com.aispotlight.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.5.0"
+        versionCode = 25
+        versionName = "2.6.0"
     }
 
     signingConfigs {

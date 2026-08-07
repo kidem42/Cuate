@@ -145,7 +145,7 @@
     <string name="appearance_system">Системный</string>
     <string name="appearance_light">Светлый</string>
     <string name="appearance_dark">Тёмный</string>
-    <string name="settings_holiday">Праздничные темы (31 окт – 2 ноя)</string>
+    <string name="settings_holiday">Праздничные темы (31 окт – 2 ноя, 24 дек – 1 янв)</string>
     <string name="settings_max_tokens">Макс. токенов ответа</string>
 
     <string name="artifact_html_hint">Интерактивный HTML • нажмите, чтобы открыть</string>

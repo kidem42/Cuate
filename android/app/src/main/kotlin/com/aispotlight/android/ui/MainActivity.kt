@@ -91,6 +91,10 @@ class MainActivity : ComponentActivity() {
         // Returning to the app refreshes the agent mirror — runs finished
         // while we were away surface as unread badges.
         viewModel.syncHermesSessions()
+        // The day may have rolled over while the process lived in the
+        // background — the mac re-checks on NSCalendarDayChanged, here the
+        // next foreground pass does it (idempotent).
+        com.aispotlight.android.settings.AppSettings.shared(this).reconcileHolidayTheme()
     }
 
     override fun onPause() {

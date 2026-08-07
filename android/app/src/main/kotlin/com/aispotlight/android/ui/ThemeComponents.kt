@@ -286,17 +286,19 @@ fun ThemeThumbnailCell(
                     // Background — mirrors themedPanelSurface's stacking.
                     if (palette.isDynamic) {
                         drawRect(dynSurface)
-                    } else if (palette.radialBackground) {
-                        drawRect(
-                            androidx.compose.ui.graphics.Brush.radialGradient(
-                                colors = palette.backgroundColors,
-                                center = Offset(size.width * 0.25f, size.height * 0.10f),
-                                radius = size.width,
-                            )
-                        )
-                        if (palette.glassSurface) drawRect(palette.panelTint)
                     } else {
-                        drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(palette.backgroundColors))
+                        if (palette.radialBackground) {
+                            drawRect(
+                                androidx.compose.ui.graphics.Brush.radialGradient(
+                                    colors = palette.backgroundColors,
+                                    center = Offset(size.width * 0.25f, size.height * 0.10f),
+                                    radius = size.width,
+                                )
+                            )
+                        } else {
+                            drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(palette.backgroundColors))
+                        }
+                        if (palette.glassSurface) drawRect(palette.panelTint)
                     }
                 }
                 .border(

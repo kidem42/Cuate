@@ -80,7 +80,7 @@ import com.aispotlight.android.settings.AppSettings
 import kotlinx.coroutines.launch
 
 /**
- * Settings — the "Eclipse" design (claude.ai/design «Редизайн меню настроек
+ * Settings — the "Eclipse" design (claude.ai/design "Eclipse settings-menu
  * Eclipse»): glass card sections with hairline dividers on a radial near-black
  * (or warm cream) background, the app icon's eclipse orange as the single
  * accent. Structure stays the Android-16 pattern: a top-level category list
@@ -680,7 +680,7 @@ private fun maskKey(raw: String?): String? {
 /**
  * One provider row, Eclipse-style: badge + name + purpose blurb, the masked
  * key on its own monospace line when saved, live status icon, and a trash
- * button to delete the key. Without a key the row shows a «+ Добавить»
+ * button to delete the key. Without a key the row shows a "+ Add"
  * outline chip that expands into the entry field with a gradient verify
  * button; tapping a saved row also opens the field (key replacement).
  */
@@ -1001,7 +1001,7 @@ private fun VoiceTab(settings: AppSettings) {
     }
 }
 
-// MARK: - Images tab (fal.ai model catalog, ТЗ §3.1)
+// MARK: - Images tab (fal.ai model catalog, spec §3.1)
 
 @Composable
 private fun ImagesTab(settings: AppSettings) {

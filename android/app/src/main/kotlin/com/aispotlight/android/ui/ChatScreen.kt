@@ -1025,7 +1025,7 @@ private fun PendingAttachmentChip(
             )
         } else {
             // Non-image file staged for the agent courier: a filename pill
-            // (desktop 4.2 "пилюли над композером").
+            // (desktop 4.2 "pills above the composer").
             Row(
                 Modifier
                     .clip(RoundedCornerShape(10.dp))
@@ -1797,6 +1797,7 @@ private fun formatTimestamp(timestamp: Long, style: TimestampStyle): String {
         TimestampStyle.LOWER_MERIDIEM ->
             "${fmt("hh:mm")} ${if (calendar.get(java.util.Calendar.HOUR_OF_DAY) < 12) "a.m." else "p.m."}"
         TimestampStyle.FLOWER -> "${fmt("HH:mm")} ✿"
+        TimestampStyle.SNOW -> "${fmt("HH:mm")} ❄"
     }
 }
 
@@ -1924,6 +1925,10 @@ private fun ThemedSendButton(palette: ChatPalette, onClick: () -> Unit) {
                     .themedGlow(palette.sendGlow, 6.dp,
                         cornerRadius = palette.composerButtonRadius?.dp ?: 16.dp)
                     .background(palette.sendBrush, shape)
+                    .then(
+                        // Yule's gold band just inside the circle's edge.
+                        palette.sendRim?.let { Modifier.border(2.5.dp, it, shape) } ?: Modifier
+                    )
                     .clip(shape)
                     .clickable(onClick = onClick),
                 contentAlignment = Alignment.Center,

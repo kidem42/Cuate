@@ -457,13 +457,24 @@ class AppSettings private constructor(context: Context) {
         prefs.edit().putString("theme", value).apply()
     }
 
-    /** Auto-switch to Halloween (Oct 31) / Día de Muertos (Nov 1-2). On by default. */
+    /** Auto-switch to Halloween (Oct 31) / Día (Nov 1-2) / Yule (Dec 24 – Jan 1). On by default. */
     private val _holidayThemes = MutableStateFlow(prefs.getBoolean("holidayThemes", true))
     val holidayThemes: StateFlow<Boolean> = _holidayThemes
 
     fun setHolidayThemes(value: Boolean) {
         _holidayThemes.value = value
         prefs.edit().putBoolean("holidayThemes", value).apply()
+        // Mac parity: toggling on re-checks today, toggling off hands the
+        // auto-applied theme back immediately instead of on the next launch.
+        if (value) reconcileHolidayTheme() else restoreHolidayThemeIfApplied()
+    }
+
+    /** Holiday over (or feature off): hand back the remembered theme. */
+    private fun restoreHolidayThemeIfApplied() {
+        if (prefs.getString("holidayAppliedToken", null) == null) return
+        val saved = prefs.getString("holidaySavedTheme", null) ?: "dynamic"
+        prefs.edit().remove("holidayAppliedToken").remove("holidaySavedTheme").apply()
+        setThemeId(saved)
     }
 
     /**
@@ -481,6 +492,11 @@ class AppSettings private constructor(context: Context) {
         val holiday: Pair<String, String>? = when {
             month == 10 && day == 31 -> "halloween" to "halloween-$year"
             month == 11 && day in 1..2 -> "diaDeMuertos" to "dia-$year"
+            month == 12 && day >= 24 -> "yule" to "yule-$year"
+            // Yule's window crosses the year boundary: Jan 1 belongs to the
+            // PREVIOUS year's occurrence, so a manual override on Dec 28
+            // keeps holding on New Year's morning (mac HolidayThemeManager).
+            month == 1 && day == 1 -> "yule" to "yule-${year - 1}"
             else -> null
         }
         val appliedToken = prefs.getString("holidayAppliedToken", null)
@@ -502,11 +518,9 @@ class AppSettings private constructor(context: Context) {
                     .remove("holidayAppliedToken")
                     .apply()
             }
-        } else if (appliedToken != null) {
+        } else {
             // Holiday over — hand the theme back.
-            val saved = prefs.getString("holidaySavedTheme", null) ?: "dynamic"
-            prefs.edit().remove("holidayAppliedToken").remove("holidaySavedTheme").apply()
-            setThemeId(saved)
+            restoreHolidayThemeIfApplied()
         }
     }
 

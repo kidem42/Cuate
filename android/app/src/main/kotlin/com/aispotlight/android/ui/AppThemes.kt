@@ -19,7 +19,9 @@ enum class ChatThemeID(val id: String) {
     SAKURA("sakura"),
     PASTEL("pastel"),
     HALLOWEEN("halloween"),
-    DIA_DE_MUERTOS("diaDeMuertos");
+    DIA_DE_MUERTOS("diaDeMuertos"),
+    YULE("yule"),
+    AURORA("aurora");
 
     val displayName: String
         get() = when (this) {
@@ -31,6 +33,8 @@ enum class ChatThemeID(val id: String) {
             PASTEL -> "Pastel"
             HALLOWEEN -> "Halloween"
             DIA_DE_MUERTOS -> "Día de Muertos"
+            YULE -> "Yule"
+            AURORA -> "Aurora"
         }
 
     companion object {
@@ -42,10 +46,10 @@ enum class ChatThemeID(val id: String) {
 enum class ThemePattern { NONE, GRID, SCANLINES }
 
 /** Timestamp rendering style (port of ThemePalette.timestamp on macOS). */
-enum class TimestampStyle { PLAIN, BRACKETED, SECONDS, UPPER_MERIDIEM, LOWER_MERIDIEM, FLOWER }
+enum class TimestampStyle { PLAIN, BRACKETED, SECONDS, UPPER_MERIDIEM, LOWER_MERIDIEM, FLOWER, SNOW }
 
 /** Which decoration overlay a theme carries (see Decorations.kt). */
-enum class ThemeDecoration { NONE, SAKURA, PASTEL, HALLOWEEN, DIA }
+enum class ThemeDecoration { NONE, SAKURA, PASTEL, HALLOWEEN, DIA, YULE, AURORA }
 
 /**
  * Bubble/divider stroke (port of macOS `BubbleStroke`). `dash` values are in
@@ -127,6 +131,8 @@ data class ChatPalette(
     val sendFill: List<Color> = emptyList(),
     val sendGlyph: Color = Color.White,
     val sendGlow: Color? = null,
+    /** Yule's gold band just inside the circle's edge (mac sendRim). */
+    val sendRim: Color? = null,
 
     // Mic button
     val micColor: Color? = null,
@@ -139,7 +145,7 @@ data class ChatPalette(
     // Timestamps
     val timestampColor: Color = Color.Gray,
     val timestampStyle: TimestampStyle = TimestampStyle.PLAIN,
-    /** Monospaced timestamps (Blueprint's мон-таймстампы). */
+    /** Monospaced timestamps (Blueprint's mono timestamps). */
     val timestampMono: Boolean = false,
 
     // Typography / markdown
@@ -200,6 +206,8 @@ object ChatThemes {
         ChatThemeID.PASTEL -> if (dark) pastelDark else pastelLight
         ChatThemeID.HALLOWEEN -> if (dark) halloweenDark else halloweenLight
         ChatThemeID.DIA_DE_MUERTOS -> if (dark) diaDark else diaLight
+        ChatThemeID.YULE -> if (dark) yuleDark else yuleLight
+        ChatThemeID.AURORA -> if (dark) auroraDark else auroraLight
     }.copy(dark = dark)
 
     // MARK: Blueprint
@@ -356,7 +364,7 @@ object ChatThemes {
         assistantGlyph = "❀", glyphColor = c(0xF48FB1),
         accent = c(0xF06292), primaryText = c(0xffeef5), secondaryText = rgba(255, 190, 215, 0.75f),
         inputFill = rgba(255, 170, 205, 0.08f), inputStroke = rgba(255, 170, 205, 0.3f), inputRadius = 15,
-        placeholderColor = rgba(255, 190, 215, 0.45f), placeholder = "Напиши что-нибудь милое…",
+        placeholderColor = rgba(255, 190, 215, 0.45f), placeholder = "Write something sweet…",
         divider = BubbleStroke(rgba(255, 170, 205, 0.2f), width = 1f),
         sendFill = listOf(c(0xF06292)), sendGlyph = Color.White, sendGlow = rgba(240, 98, 146, 0.45f),
         micFill = rgba(255, 170, 205, 0.12f), micGlyphColor = c(0xffc3d8), micDashed = false,
@@ -376,7 +384,7 @@ object ChatThemes {
         assistantGlyph = "❀", glyphColor = c(0xEC5F8F),
         accent = c(0xEC5F8F), primaryText = c(0x42101f), secondaryText = rgba(190, 70, 115, 0.75f),
         inputFill = rgba(255, 255, 255, 0.6f), inputStroke = rgba(230, 100, 150, 0.3f), inputRadius = 15,
-        placeholderColor = rgba(190, 70, 115, 0.45f), placeholder = "Напиши что-нибудь милое…",
+        placeholderColor = rgba(190, 70, 115, 0.45f), placeholder = "Write something sweet…",
         divider = BubbleStroke(rgba(230, 100, 150, 0.25f), width = 1f),
         sendFill = listOf(c(0xEC5F8F)), sendGlyph = Color.White, sendGlow = rgba(236, 95, 143, 0.4f),
         micFill = rgba(255, 255, 255, 0.6f), micGlyphColor = c(0xD8447A), micDashed = false,
@@ -532,5 +540,118 @@ object ChatThemes {
         dictationColors = listOf(c(0xF59E00), c(0xD81B60), c(0x00897B)),
         recordingAccent = c(0xD81B60),
         decoration = ThemeDecoration.DIA,
+    )
+
+    // MARK: Yule
+    // Winter-holiday hearth: deep spruce greens, garland gold, holly red.
+    // Decorations: twinkling garland bulbs + falling snow (YuleDecorations);
+    // "thinking" is the candy-cane cylinder; send — red circle with gold rim.
+    private val yuleDark = ChatPalette(
+        themeID = ChatThemeID.YULE,
+        backgroundColors = listOf(c(0x1c3a28), c(0x0f2718), c(0x071108)),
+        panelTint = rgba(14, 36, 22, 0.45f), glassSurface = true,
+        userFill = listOf(rgba(196, 60, 72, 0.50f)), userText = c(0xfff0ef),
+        userCorners = Corners(16),
+        assistantFill = rgba(18, 44, 29, 0.62f), assistantText = c(0xeefaf0),
+        assistantStroke = BubbleStroke(rgba(242, 193, 78, 0.22f)), assistantCorners = Corners(16),
+        assistantGlyph = "🎄", glyphColor = c(0xF2C14E),
+        accent = c(0xE5484D), primaryText = c(0xeefaf0), secondaryText = rgba(190, 230, 200, 0.65f),
+        accentInk = c(0xF2C14E),
+        inputFill = rgba(242, 193, 78, 0.07f), inputStroke = rgba(242, 193, 78, 0.32f), inputRadius = 6,
+        placeholderColor = rgba(190, 230, 200, 0.45f),
+        divider = BubbleStroke(rgba(242, 193, 78, 0.30f), width = 1f, dash = listOf(4f, 3f)),
+        sendFill = listOf(c(0xE5484D)), sendGlyph = c(0xFFE9B8), sendGlow = rgba(242, 193, 78, 0.45f),
+        sendRim = rgba(242, 193, 78, 0.8f),
+        micStroke = rgba(242, 193, 78, 0.55f), micFill = rgba(242, 193, 78, 0.10f),
+        micGlyphColor = c(0xF2C14E), micDashed = false,
+        timestampColor = rgba(190, 230, 200, 0.55f), timestampStyle = TimestampStyle.SNOW,
+        codeFill = rgba(242, 193, 78, 0.10f), codeText = c(0xf5d896),
+        inlineCodeFill = rgba(242, 193, 78, 0.14f), inlineCodeText = c(0xf5d896),
+        bulletGlyph = "❄", quoteColor = c(0xF2C14E),
+        dictationColors = listOf(c(0xE5484D), c(0xF2C14E), c(0x58B368)),
+        recordingAccent = c(0xE5484D),
+        decoration = ThemeDecoration.YULE,
+    )
+    private val yuleLight = ChatPalette(
+        themeID = ChatThemeID.YULE,
+        backgroundColors = listOf(c(0xf4f1e8), c(0xdde6dc), c(0xb7cdbb)),
+        panelTint = rgba(253, 250, 243, 0.55f), glassSurface = true,
+        userFill = listOf(rgba(225, 95, 100, 0.5f)), userText = c(0x3d0d12),
+        userCorners = Corners(16),
+        assistantFill = rgba(255, 255, 255, 0.72f), assistantText = c(0x233324),
+        assistantStroke = BubbleStroke(rgba(168, 119, 24, 0.25f)), assistantCorners = Corners(16),
+        assistantGlyph = "🎄", glyphColor = c(0x3E7A4E),
+        accent = c(0xC43C42), primaryText = c(0x233324), secondaryText = rgba(60, 95, 65, 0.72f),
+        accentInk = c(0xA87718),
+        inputFill = rgba(255, 255, 255, 0.6f), inputStroke = rgba(168, 119, 24, 0.35f), inputRadius = 6,
+        placeholderColor = rgba(60, 95, 65, 0.5f),
+        divider = BubbleStroke(rgba(168, 119, 24, 0.35f), width = 1f, dash = listOf(4f, 3f)),
+        sendFill = listOf(c(0xC43C42)), sendGlyph = Color.White, sendGlow = rgba(196, 60, 66, 0.4f),
+        sendRim = rgba(242, 193, 78, 0.8f),
+        micStroke = rgba(168, 119, 24, 0.5f), micFill = rgba(255, 255, 255, 0.55f),
+        micGlyphColor = c(0xA87718), micDashed = false,
+        timestampColor = rgba(60, 95, 65, 0.6f), timestampStyle = TimestampStyle.SNOW,
+        codeFill = rgba(168, 119, 24, 0.10f), codeText = c(0x7a5410),
+        inlineCodeFill = rgba(168, 119, 24, 0.12f), inlineCodeText = c(0x7a5410),
+        bulletGlyph = "❄", quoteColor = c(0xA87718),
+        dictationColors = listOf(c(0xC43C42), c(0xA87718), c(0x3E7A4E)),
+        recordingAccent = c(0xC43C42),
+        decoration = ThemeDecoration.YULE,
+    )
+
+    // MARK: Aurora
+    // Polar night: arctic indigo, breathing aurora ribbons (AuroraDecorations),
+    // mint #4AE3B5 → violet #7D6CFF; send — a gradient circle.
+    private val auroraDark = ChatPalette(
+        themeID = ChatThemeID.AURORA,
+        backgroundColors = listOf(c(0x050f1e), c(0x081827), c(0x0a2230)), radialBackground = false,
+        panelTint = rgba(10, 26, 46, 0.45f), glassSurface = true,
+        userFill = listOf(rgba(61, 220, 176, 0.42f), rgba(125, 108, 255, 0.42f)), userText = c(0xeafff7),
+        userCorners = Corners(16),
+        assistantFill = rgba(9, 28, 46, 0.65f), assistantText = c(0xeafff7),
+        assistantStroke = BubbleStroke(rgba(111, 227, 255, 0.20f)), assistantCorners = Corners(16),
+        assistantGlyph = "✦", glyphColor = c(0x5EEAD4),
+        accent = c(0x4AE3B5), primaryText = c(0xeafff7), secondaryText = rgba(160, 220, 235, 0.62f),
+        accentInk = c(0x6FE3FF),
+        inputFill = rgba(74, 227, 181, 0.06f), inputStroke = rgba(111, 227, 255, 0.28f), inputRadius = 6,
+        placeholderColor = rgba(160, 220, 235, 0.45f),
+        divider = BubbleStroke(rgba(111, 227, 255, 0.18f), width = 1f),
+        sendFill = listOf(c(0x4AE3B5), c(0x7D6CFF)),
+        sendGlyph = Color.White, sendGlow = rgba(74, 227, 181, 0.55f),
+        micStroke = rgba(111, 227, 255, 0.5f), micFill = rgba(111, 227, 255, 0.10f),
+        micGlyphColor = c(0x8de9ff), micDashed = false,
+        timestampColor = rgba(140, 220, 230, 0.55f), timestampStyle = TimestampStyle.PLAIN,
+        codeFill = rgba(111, 227, 255, 0.09f), codeText = c(0x9ff0e2),
+        inlineCodeFill = rgba(111, 227, 255, 0.12f), inlineCodeText = c(0x9ff0e2),
+        bulletGlyph = "✦", quoteColor = c(0x4AE3B5),
+        dictationColors = listOf(c(0x4AE3B5), c(0x6FE3FF), c(0x7D6CFF)),
+        recordingAccent = c(0x4AE3B5),
+        decoration = ThemeDecoration.AURORA,
+    )
+    private val auroraLight = ChatPalette(
+        themeID = ChatThemeID.AURORA,
+        backgroundColors = listOf(c(0xdfeef6), c(0xd3e3f2), c(0xbcd4e6)), radialBackground = false,
+        panelTint = rgba(244, 250, 253, 0.6f), glassSurface = true,
+        userFill = listOf(rgba(64, 196, 160, 0.45f), rgba(150, 130, 255, 0.4f)), userText = c(0x0d2b33),
+        userCorners = Corners(16),
+        assistantFill = rgba(255, 255, 255, 0.72f), assistantText = c(0x0d2b33),
+        assistantStroke = BubbleStroke(rgba(14, 156, 139, 0.22f)), assistantCorners = Corners(16),
+        assistantGlyph = "✦", glyphColor = c(0x0E9C8B),
+        accent = c(0x0E9C8B), primaryText = c(0x0d2b33), secondaryText = rgba(30, 100, 120, 0.7f),
+        accentInk = c(0x5B4BD6),
+        inputFill = rgba(255, 255, 255, 0.6f), inputStroke = rgba(14, 156, 139, 0.3f), inputRadius = 6,
+        placeholderColor = rgba(30, 100, 120, 0.45f),
+        divider = BubbleStroke(rgba(14, 156, 139, 0.22f), width = 1f),
+        sendFill = listOf(c(0x0E9C8B), c(0x7D6CFF)),
+        sendGlyph = Color.White, sendGlow = rgba(14, 156, 139, 0.4f),
+        micStroke = rgba(14, 156, 139, 0.45f), micFill = rgba(255, 255, 255, 0.55f),
+        micGlyphColor = c(0x0B7E70), micDashed = false,
+        timestampColor = rgba(30, 100, 120, 0.6f), timestampStyle = TimestampStyle.PLAIN,
+        codeFill = rgba(14, 156, 139, 0.09f), codeText = c(0x0a6e62),
+        inlineCodeFill = rgba(14, 156, 139, 0.12f), inlineCodeText = c(0x0a6e62),
+        bulletGlyph = "✦", quoteColor = c(0x0E9C8B),
+        dictationColors = listOf(c(0x0E9C8B), c(0x38B6D6), c(0x7D6CFF)),
+        recordingAccent = c(0x0E9C8B),
+        decoration = ThemeDecoration.AURORA,
     )
 }

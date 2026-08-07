@@ -147,7 +147,7 @@
     <string name="appearance_system">System</string>
     <string name="appearance_light">Light</string>
     <string name="appearance_dark">Dark</string>
-    <string name="settings_holiday">Holiday themes (Oct 31 – Nov 2)</string>
+    <string name="settings_holiday">Holiday themes (Oct 31 – Nov 2, Dec 24 – Jan 1)</string>
     <string name="settings_max_tokens">Max response tokens</string>
 
     <string name="artifact_html_hint">Interactive HTML • tap to open</string>
