@@ -93,6 +93,10 @@ enum AgentChatService {
                             }
                         case .step(let step):
                             journal.record(step)
+                            // The list as it stands — the pill renders the
+                            // steps while the turn runs, instead of only the
+                            // newest one flickering through the status line.
+                            continuation.yield(.agentStepsLive(journal.steps))
                             if step.status == .running {
                                 continuation.yield(.status(String(format: AGL("agent.status.tool"), step.toolName)))
                             } else {

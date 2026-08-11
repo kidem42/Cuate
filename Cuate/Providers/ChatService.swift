@@ -26,6 +26,12 @@ enum ChatService {
         /// Agent turns: the persisted tool-step summary for the reply
         /// (`ChatMessage.agentSteps`), emitted once at the end.
         case agentSteps(String)
+        /// Agent turns: the journal AS IT FILLS — the whole list so far, re-
+        /// sent on every step change (a turn emits tens of steps, not tens of
+        /// thousands of tokens, so a snapshot per step is cheaper than
+        /// reconciling deltas). Feeds the live list inside the thinking pill;
+        /// the persisted `.agentSteps` summary still lands at the end.
+        case agentStepsLive([AgentStep])
         /// Agent turns: the gateway asked the human for permission mid-run.
         /// The window renders the inline card; `resolve` answers the gateway
         /// (and clears the matching banner). Dormant on Hermes 0.19.0 —

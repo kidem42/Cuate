@@ -244,6 +244,91 @@ struct AgentStepJournalView: View {
     }
 }
 
+/// The step journal WHILE the turn runs, rendered inside the thinking pill:
+/// the steps appear as the agent takes them instead of arriving all at once
+/// with the answer. Collapsed by default, exactly like the journal on a
+/// delivered reply — a 40-step turn must not inflate the pill to half the
+/// screen.
+///
+/// The disclosure state is OWNED BY THE CALLER on purpose: the pill's row is
+/// rebuilt on every step (transcript revision pass swaps the hosting view's
+/// rootView), so a `@State` here would be at the mercy of that rebuild and
+/// could snap shut mid-turn. No per-step detail level either — details only
+/// exist in the gateway transcript once the turn has been recorded; the full
+/// journal attaches to the reply at delivery (`AgentStepJournalView`).
+struct AgentLiveStepsView: View {
+    @Environment(\.themePalette) private var palette
+
+    let steps: [AgentStep]
+    let expanded: Bool
+    let toggle: () -> Void
+
+    /// Newest steps rendered when expanded; everything older collapses into
+    /// one counting line, so even an open journal stays bounded.
+    private static let visibleLimit = 12
+
+    var body: some View {
+        let earlier = max(0, steps.count - Self.visibleLimit)
+        VStack(alignment: .leading, spacing: 3) {
+            Button(action: toggle) {
+                HStack(spacing: 4) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("\(AGL("agent.steps.title")) · \(steps.count)")
+                        .font(.system(size: 11, design: palette.fontDesign))
+                }
+                .foregroundColor(palette.secondaryText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            if expanded {
+                if earlier > 0 {
+                    Text(String(format: AGL("agent.steps.earlier"), earlier))
+                        .font(.system(size: 10, design: palette.fontDesign))
+                        .foregroundColor(palette.secondaryText)
+                }
+                ForEach(steps.suffix(Self.visibleLimit)) { step in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: symbol(step.status))
+                            .font(.system(size: 9))
+                            .foregroundColor(step.status == .failed ? .red : palette.ink)
+                        Text(step.toolName)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(palette.primaryText)
+                        Text(detail(step))
+                            .font(.system(size: 10.5, design: palette.fontDesign))
+                            .foregroundColor(palette.secondaryText)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.leading, 14)
+            }
+        }
+    }
+
+    private func symbol(_ status: AgentStep.Status) -> String {
+        switch status {
+        case .completed: return "checkmark.circle"
+        case .failed: return "xmark.circle"
+        case .running: return "circle.dotted"
+        }
+    }
+
+    /// Duration once the step is over, its state while it is not — the row
+    /// must never look identical before and after a tool returns.
+    private func detail(_ step: AgentStep) -> String {
+        switch step.status {
+        case .running: return AGL("agent.steps.running")
+        case .completed, .failed:
+            let word = step.status == .failed
+                ? AGL("agent.steps.failed") : AGL("agent.steps.completed")
+            guard let duration = step.duration else { return word }
+            return String(format: "%@ · %.1fs", word, duration)
+        }
+    }
+}
+
 /// Header chip for the active agent role: icon + name + connection dot, in
 /// the same visual language as the other header controls (11pt secondary
 /// text, fixed 20pt row — see `ChatWindow.headerControlLabel`).

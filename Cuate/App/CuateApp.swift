@@ -71,7 +71,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
 
         // Opt-in logging + hang watchdog — first, so launch events are captured.
         Diagnostics.startIfEnabled()
-        Diagnostics.log("app", "launch")
+        // Version in the launch line: "is the build I just installed the one
+        // running?" is otherwise unanswerable from the log alone.
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        Diagnostics.log("app", "launch version=\(short) build=\(build)")
 
         // Hide dock icon - app will run in background
         NSApp.setActivationPolicy(.accessory)

@@ -45,9 +45,11 @@ struct HermesTranscriptMessage {
     let toolName: String?
     /// tool rows: which call this result answers.
     let toolCallID: String?
-    /// assistant shells: the calls with their raw JSON arguments — the
-    /// journal's expanded detail shows the command text from here.
-    let toolCallArguments: [(id: String, arguments: String)]
+    /// assistant shells: the calls with their tool name and raw JSON
+    /// arguments — the journal's expanded detail shows the command text from
+    /// here, and the name is what labels a call still awaiting its result
+    /// (`HermesLiveTurnDetector`; tool ROWS carry `toolName`, shells don't).
+    let toolCallArguments: [(id: String, name: String, arguments: String)]
     let timestamp: Date?
 
     func externalID(sessionID: String) -> String {
@@ -301,24 +303,55 @@ nonisolated struct HermesTransport {
                            body: ["model": model, "provider": provider])
     }
 
+    /// A transcript row's text. `content` comes back either as a plain
+    /// string or as an OpenAI-style parts array — the very shape WE send
+    /// whenever a message carries an image (`inputPayload`), and what phone
+    /// clients send for media. Read as a string only, those rows arrived
+    /// EMPTY and the mirror dropped them as contentless: a long session held
+    /// on the phone mirrored onto the desktop as a couple of bubbles
+    /// (diagnosed 2026-08-10 from `mirror.catchUp rows=289 merged=2`).
+    ///
+    /// Image/audio parts become bracketed placeholders on purpose: the
+    /// gateway keeps no pixels, and the mirror's matcher strips `[…]` tokens
+    /// before comparing with our local copy, which holds the real attachment
+    /// (`AgentAttachNote.normalizedForMatching`).
+    static func transcriptText(_ raw: Any?) -> String {
+        if let text = raw as? String { return text }
+        guard let parts = raw as? [[String: Any]] else { return "" }
+        return parts.compactMap { part -> String? in
+            switch part["type"] as? String {
+            case "image_url", "input_image", "image": return "[image]"
+            case "input_audio", "audio": return "[audio]"
+            case "file", "input_file": return "[file]"
+            // Text parts — and any shape we don't know, which still carries
+            // its text under the same key on every variant seen so far.
+            default: return part["text"] as? String
+            }
+        }.joined(separator: "\n")
+    }
+
     @concurrent
     func messages(sessionID: String) async throws -> [HermesTranscriptMessage] {
         let object = try await json("GET", "api/sessions/\(sessionID)/messages")
         let data = object["data"] as? [[String: Any]] ?? []
         return data.compactMap { row in
             guard let id = row["id"] as? Int, let role = row["role"] as? String else { return nil }
-            var callArguments: [(String, String)] = []
+            var callArguments: [(String, String, String)] = []
             if let calls = row["tool_calls"] as? [[String: Any]] {
                 for call in calls {
                     guard let callID = (call["id"] ?? call["call_id"]) as? String else { continue }
                     let function = call["function"] as? [String: Any]
-                    callArguments.append((callID, function?["arguments"] as? String ?? ""))
+                    callArguments.append((
+                        callID,
+                        (function?["name"] as? String) ?? (call["name"] as? String) ?? "tool",
+                        function?["arguments"] as? String ?? ""
+                    ))
                 }
             }
             return HermesTranscriptMessage(
                 id: id,
                 role: role,
-                content: row["content"] as? String ?? "",
+                content: Self.transcriptText(row["content"]),
                 toolName: row["tool_name"] as? String,
                 toolCallID: row["tool_call_id"] as? String,
                 toolCallArguments: callArguments,

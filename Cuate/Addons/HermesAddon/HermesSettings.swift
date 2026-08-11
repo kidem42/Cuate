@@ -307,6 +307,25 @@ final class HermesSettings: ObservableObject {
         }
     }
 
+    /// Transcript row count at the last live-turn look, per session.
+    /// PERSISTED so the first fetch after a relaunch can already tell
+    /// growth from stillness — in-memory counts made every restart blind
+    /// until the second poll (the exact window the user relaunches into).
+    private var liveTurnRowCounts: [String: Int] {
+        get { (defaults.dictionary(forKey: "hermes.liveTurnRowCounts") as? [String: Int]) ?? [:] }
+        set { defaults.set(newValue, forKey: "hermes.liveTurnRowCounts") }
+    }
+
+    func liveTurnRowCount(forSession sessionID: String) -> Int? {
+        liveTurnRowCounts[sessionID]
+    }
+
+    func setLiveTurnRowCount(_ count: Int, forSession sessionID: String) {
+        if liveTurnRowCounts[sessionID] != count {
+            liveTurnRowCounts[sessionID] = count
+        }
+    }
+
     // MARK: - Session marks (pin / color)
     //
     // LOCAL metadata: the gateway stores neither pins nor colors (the

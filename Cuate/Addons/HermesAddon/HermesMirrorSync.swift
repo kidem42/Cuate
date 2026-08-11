@@ -65,13 +65,25 @@ enum HermesMirrorSync {
             var gateCount: Int?
             if let sessions = try? await HermesAddon.shared.transport().sessions(limit: 50),
                let row = sessions.first(where: { $0.id == sessionID }) {
-                if lastMergedCounts[sessionID] == row.messageCount { return true }
+                if lastMergedCounts[sessionID] == row.messageCount {
+                    // Proof the transcript did NOT grow — retires a turn that
+                    // was only inferred from growth (an interim reply mid-run
+                    // looks exactly like a final one).
+                    HermesAddon.shared.noteNoGrowth(sessionID: sessionID)
+                    return true
+                }
                 gateCount = row.messageCount
             }
             let clock = ContinuousClock()
             var mark = clock.now
             let rows = try await HermesAddon.shared.transport().messages(sessionID: sessionID)
             let fetchMs = elapsedMs(since: &mark, clock: clock)
+            // Is the gateway mid-turn right now? Read off the same fetch —
+            // this is what restores the progress pill after a relaunch, and
+            // what shows a run someone started from the phone.
+            HermesAddon.shared.noteLiveTurn(
+                HermesLiveTurnDetector.detect(rows: rows),
+                rows: rows, sessionID: sessionID)
             // The user may have switched conversations during the fetch.
             guard store.conversation == conversationID, store.isHistoryLoaded else { return true }
             let (merged, changed) = merge(local: store.messages, gateway: rows, sessionID: sessionID)
@@ -80,6 +92,25 @@ enum HermesMirrorSync {
             // read before it — committing the earlier count can only err
             // low, which re-fetches next tick (the safe direction).
             if let gateCount { lastMergedCounts[sessionID] = gateCount }
+            // A transcript that mirrors into far fewer bubbles than it holds
+            // rows is the signature of rows being dropped wholesale (an old
+            // phone-held session came back as two bubbles out of 289 rows —
+            // 2026-08-10, content parts read as empty strings). Log WHY, in
+            // counts only, never text: the next occurrence is then
+            // diagnosable from the log alone, with no gateway access.
+            if merged.count * 4 < rows.count {
+                var roles: [String: Int] = [:]
+                for row in rows { roles[row.role, default: 0] += 1 }
+                let empty = rows.filter {
+                    $0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }.count
+                let synthetic = rows.filter {
+                    $0.role == "user" && HermesCompaction.visibleUserText($0.content) == nil
+                }.count
+                let roleTally = roles.sorted { $0.key < $1.key }
+                    .map { "\($0.key):\($0.value)" }.joined(separator: ",")
+                Diagnostics.log("hermes", "mirror.thin session=\(sessionID) rows=\(rows.count) merged=\(merged.count) roles=\(roleTally) empty=\(empty) synthetic=\(synthetic)")
+            }
             if changed {
                 store.applyAgentMerge(merged)
                 Diagnostics.log("hermes", "mirror.catchUp session=\(sessionID) rows=\(rows.count) merged=\(merged.count) fetch=\(fetchMs)ms merge=\(mergeMs)ms")
@@ -130,12 +161,24 @@ enum HermesMirrorSync {
         gateway: [HermesTranscriptMessage],
         sessionID: String
     ) -> (messages: [ChatMessage], changed: Bool) {
-        // Only user/assistant turns with content mirror into the chat as
-        // bubbles. Tool rows and empty tool-call shells are folded into a
-        // step summary attached to the NEXT content-bearing assistant row —
-        // without this, a mirror rebuild (app restart) lost the whole tool
-        // trail of a turn (e2e 2026-07-25).
-        let contentRows: [HermesTranscriptMessage] = gateway.compactMap { row in
+        // Long sessions re-merge only their tail (the claim pass is
+        // gateway-rows × local-rows, and the transcript arrives whole on
+        // every sync — there is no pagination to lean on).
+        if let split = incrementalSplit(local: local, gateway: gateway) {
+            let (tail, changed) = mergeFull(
+                local: split.localTail, gateway: split.gatewayTail, sessionID: sessionID)
+            return (split.head + tail, changed)
+        }
+        return mergeFull(local: local, gateway: gateway, sessionID: sessionID)
+    }
+
+    /// Only user/assistant turns with content mirror into the chat as
+    /// bubbles. Tool rows and empty tool-call shells are folded into a step
+    /// summary attached to the NEXT content-bearing assistant row — without
+    /// this, a mirror rebuild (app restart) lost the whole tool trail of a
+    /// turn (e2e 2026-07-25).
+    private static func contentRows(_ gateway: [HermesTranscriptMessage]) -> [HermesTranscriptMessage] {
+        gateway.compactMap { row in
             guard row.role == "user" || row.role == "assistant" else { return nil }
             var content = row.content
             if row.role == "user" {
@@ -155,7 +198,54 @@ enum HermesMirrorSync {
                 toolCallArguments: row.toolCallArguments, timestamp: row.timestamp
             )
         }
-        guard !contentRows.isEmpty else { return (local, false) }
+    }
+
+    /// Overlap kept below the anchor: the newest stamped rows re-merge every
+    /// time, so a turn whose text or step trail was still settling on the
+    /// gateway can still be adopted (containment match, late step summary).
+    private static let incrementalOverlap = 6
+    /// Transcripts below this stay on the full path — the quadratic pass is
+    /// milliseconds there, and the split's own scan would not pay for itself.
+    private static let incrementalFloor = 200
+
+    /// Splits local+gateway into an untouched head and the tail worth
+    /// re-merging, or nil when the whole thing must be merged.
+    ///
+    /// The anchor is a local row carrying a gateway `seq`, taken `overlap`
+    /// rows back from the newest one; everything before it is already
+    /// mirrored, so neither side needs re-scanning. Two guards keep this
+    /// honest: no anchor (a young or never-synced chat) and an INCOMPLETE
+    /// head both fall back to the full merge — the latter is what lets a
+    /// session that once mirrored thin (content parts read as empty, fixed
+    /// 2026-08-10) heal itself on the next sync instead of being fenced off
+    /// behind its own anchor forever.
+    private static func incrementalSplit(
+        local: [ChatMessage],
+        gateway: [HermesTranscriptMessage]
+    ) -> (head: [ChatMessage], localTail: [ChatMessage], gatewayTail: [HermesTranscriptMessage])? {
+        guard gateway.count >= incrementalFloor else { return nil }
+        let stamped = local.indices.filter { local[$0].seq != nil }
+        guard let anchorIndex = stamped.dropLast(incrementalOverlap).last,
+              let anchorSeq = local[anchorIndex].seq else { return nil }
+        // User rows never collapse into one another (only assistant runs do),
+        // so they count the head's completeness one for one.
+        let gatewayUsersBefore = contentRows(gateway)
+            .filter { $0.role == "user" && $0.id < anchorSeq }.count
+        let localUsersBefore = local[..<anchorIndex]
+            .filter { $0.isUser && $0.messageType != .system }.count
+        guard localUsersBefore >= gatewayUsersBefore else { return nil }
+        let gatewayTail = gateway.filter { $0.id >= anchorSeq }
+        Diagnostics.log("hermes", "mirror.incremental rows=\(gateway.count) tail=\(gatewayTail.count) head=\(anchorIndex)")
+        return (Array(local[..<anchorIndex]), Array(local[anchorIndex...]), gatewayTail)
+    }
+
+    private static func mergeFull(
+        local: [ChatMessage],
+        gateway: [HermesTranscriptMessage],
+        sessionID: String
+    ) -> (messages: [ChatMessage], changed: Bool) {
+        let filtered = contentRows(gateway)
+        guard !filtered.isEmpty else { return (local, false) }
         var stepsByRowID = stepSummaries(gateway: gateway)
 
         // Collapse consecutive assistant rows into ONE row joined by blank
@@ -165,7 +255,7 @@ enum HermesMirrorSync {
         // own duplicate bubble (e2e 2026-07-27). The run keeps the HEAD
         // segment's identity; follow-up segments' step trails fold into it.
         var gwRows: [HermesTranscriptMessage] = []
-        for row in contentRows {
+        for row in filtered {
             if row.role == "assistant", let last = gwRows.last, last.role == "assistant" {
                 if let extra = stepsByRowID.removeValue(forKey: row.id) {
                     stepsByRowID[last.id] = [stepsByRowID[last.id], extra]

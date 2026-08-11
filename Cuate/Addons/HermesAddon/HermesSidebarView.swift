@@ -600,11 +600,14 @@ struct HermesSidebarView: View {
         loadedModel = true
     }
 
-    /// Whether a turn WE started is running in this session right now. The
+    /// Whether a turn is running in this session right now — ours or the
+    /// gateway's own (a run started from the phone, or one that outlived our
+    /// relaunch; `liveTurns` is rebuilt from the polled transcript). The
     /// registry keys by conversation, the sidebar rows by session — the
     /// (small, @Published) session map bridges the two, so rows re-render on
     /// every turn start/end.
     private func isAgentWorking(_ sessionID: String) -> Bool {
+        if addon.liveTurn(sessionID: sessionID) != nil { return true }
         guard let key = settings.sessionMap.first(where: { $0.value == sessionID })?.key
         else { return false }
         return addon.isTurnActive(forConversationKey: key)

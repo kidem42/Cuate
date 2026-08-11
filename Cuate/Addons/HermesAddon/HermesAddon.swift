@@ -53,12 +53,114 @@ final class HermesAddon: ObservableObject {
         guard let count = activeTurnKeys[conversationKey] else { return }
         if count <= 1 {
             activeTurnKeys.removeValue(forKey: conversationKey)
+            // Our own finished turn must not resurface as a GATEWAY-side one:
+            // a poll that landed mid-run left a live-turn record behind, and
+            // the pill would flash back the moment our slot retires.
+            if let sessionID = settings.sessionID(forConversationKey: conversationKey) {
+                liveTurns.removeValue(forKey: sessionID)
+            }
         } else {
             activeTurnKeys[conversationKey] = count - 1
         }
     }
     func isTurnActive(forConversationKey key: String) -> Bool {
         activeTurnKeys[key] != nil
+    }
+
+    /// sessionID → a turn running ON THE GATEWAY (started elsewhere, or by
+    /// us before a restart). Rebuilt from the transcripts the mirror and the
+    /// poll already fetch, so nothing extra goes over the wire. This is what
+    /// puts the progress pill back after a relaunch — our own slots die with
+    /// the process, the gateway's run does not.
+    @Published private(set) var liveTurns: [String: HermesLiveTurn] = [:]
+
+    /// Publishes (or retires) the turn detected in a freshly fetched
+    /// transcript. Equality-gated: an unchanged turn must not invalidate the
+    /// transcript row on every 20-second poll.
+    /// How long a growth-detected turn survives WITHOUT new rows. The agent
+    /// writes in bursts (a long exec flushes only on completion — observed
+    /// gaps of several minutes between rows of one working stretch), so the
+    /// first quiet poll must not retire the pill: that made it live exactly
+    /// 16 seconds (app.log 2026-08-10 16:39:42→16:39:58). The cost is the
+    /// reverse error: after the agent's LAST monologue message the pill
+    /// overstays by up to this long.
+    private static let growthHold: TimeInterval = 5 * 60
+
+    func noteLiveTurn(_ detected: HermesLiveTurn?, rows: [HermesTranscriptMessage], sessionID: String) {
+        let previous = settings.liveTurnRowCount(forSession: sessionID)
+        settings.setLiveTurnRowCount(rows.count, forSession: sessionID)
+
+        // Unfinished tail — the strongest evidence, stands on its own.
+        if let detected {
+            apply(detected, sessionID: sessionID)
+            return
+        }
+        // Tail reads finished. New rows since the last look tell which kind
+        // of finish it was:
+        // - the segment contains a REAL user message → an exchange — a
+        //   question got its answer, the turn is over;
+        // - pure assistant/tool rows → a monologue — Hermes narrates interim
+        //   results mid-run ("подготовлено 14 из 36…") and keeps working.
+        //   That interim reply is indistinguishable from a final one by
+        //   shape, but nobody asked for it — which is the tell.
+        if let previous, rows.count > previous {
+            let segment = rows.suffix(rows.count - previous)
+            let isExchange = segment.contains {
+                $0.role == "user" && HermesCompaction.visibleUserText($0.content) != nil
+            }
+            apply(isExchange ? nil : HermesLiveTurn(steps: [], lastRowAt: Date(), source: .growth),
+                  sessionID: sessionID)
+            return
+        }
+        // No growth: a monologue-detected turn coasts through the hold
+        // (bursty writes), then retires. Anything else is plain idle.
+        if let turn = liveTurns[sessionID], turn.source == .growth,
+           Date().timeIntervalSince(turn.lastRowAt) < Self.growthHold {
+            return
+        }
+        apply(nil, sessionID: sessionID)
+    }
+
+    /// Called when the count gate proved the transcript did NOT grow (no
+    /// rows were fetched). Same coasting rule as above; tail-detected turns
+    /// are untouched — they expire by staleness.
+    func noteNoGrowth(sessionID: String) {
+        guard let turn = liveTurns[sessionID], turn.source == .growth,
+              Date().timeIntervalSince(turn.lastRowAt) >= Self.growthHold else { return }
+        apply(nil, sessionID: sessionID)
+    }
+
+    private func apply(_ turn: HermesLiveTurn?, sessionID: String) {
+        // Logged on every EDGE (idle↔running), never per poll: "the pill did
+        // not come back" is otherwise indistinguishable from "the gateway
+        // was idle by then" — both look like silence.
+        let wasActive = liveTurns[sessionID] != nil
+        if wasActive != (turn != nil) {
+            let steps = turn.map { "\($0.steps.count)" } ?? "-"
+            let via = turn.map { "\($0.source)" } ?? "-"
+            let age = turn.map { Int(Date().timeIntervalSince($0.lastRowAt)) } ?? 0
+            Diagnostics.log("hermes", "liveTurn session=\(sessionID) active=\(turn != nil) via=\(via) steps=\(steps) tailAge=\(age)s")
+        }
+        if let turn {
+            if liveTurns[sessionID] != turn { liveTurns[sessionID] = turn }
+        } else if liveTurns[sessionID] != nil {
+            liveTurns.removeValue(forKey: sessionID)
+        }
+    }
+
+    /// The running turn of a conversation, once staleness is applied — a run
+    /// that died mid-tool leaves an unfinished tail behind forever, and the
+    /// pill must not outlive it.
+    func liveTurn(forConversationKey key: String) -> HermesLiveTurn? {
+        guard let sessionID = settings.sessionID(forConversationKey: key) else { return nil }
+        return liveTurn(sessionID: sessionID)
+    }
+
+    func liveTurn(sessionID: String) -> HermesLiveTurn? {
+        guard let turn = liveTurns[sessionID],
+              Date().timeIntervalSince(turn.lastRowAt) < HermesLiveTurnDetector.staleAfter
+        else { return nil }
+        return turn
     }
 
     /// Background gateway poll (§7.1: notifications must also cover runs we
@@ -402,9 +504,14 @@ final class HermesAddon: ObservableObject {
             // fetch stays until the parse moves off the main actor.)
             var preview = session.preview ?? ""
             let previewStart = ContinuousClock.now
-            if let rows = try? await transport().messages(sessionID: session.id),
-               let lastReply = rows.last(where: { $0.role == "assistant" && !$0.content.isEmpty }) {
-                preview = lastReply.content
+            if let rows = try? await transport().messages(sessionID: session.id) {
+                // Same fetch also answers "is this session working right
+                // now" for every bound session, not just the open one.
+                noteLiveTurn(HermesLiveTurnDetector.detect(rows: rows),
+                             rows: rows, sessionID: session.id)
+                if let lastReply = rows.last(where: { $0.role == "assistant" && !$0.content.isEmpty }) {
+                    preview = lastReply.content
+                }
                 let elapsed = previewStart.duration(to: .now)
                 let ms = Int(elapsed.components.seconds) * 1000
                     + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)

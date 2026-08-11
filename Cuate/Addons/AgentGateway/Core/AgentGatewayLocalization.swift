@@ -111,6 +111,19 @@ enum AgentGatewayStrings {
             .spanish: "falló",
             .russian: "ошибка"
         ],
+        // Pill for a turn running on the gateway rather than in this app
+        // (sent from another client, or ours before a relaunch).
+        "agent.status.external": [
+            .english: "The agent is working on this session",
+            .spanish: "El agente está trabajando en esta sesión",
+            .russian: "Агент работает над этой сессией"
+        ],
+        // Live list inside the pill: older steps beyond the visible tail.
+        "agent.steps.earlier": [
+            .english: "%d earlier steps",
+            .spanish: "%d pasos anteriores",
+            .russian: "ранее — шагов: %d"
+        ],
 
         // MARK: Code blocks / terminal output (§7.2–7.3)
         "agent.code.showAll": [
