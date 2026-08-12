@@ -55,7 +55,22 @@ struct WorldTimeView: View {
     @State private var hoverSlot: SlotRef? = nil
     @State private var composerSlot: SlotRef? = nil
 
-    private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+    /// The clock, alive only while the panel is on screen: the window lives
+    /// for the whole app run and is merely ordered in/out, so an always-on
+    /// timer kept re-rendering the grid and running a synchronous EventKit
+    /// query twice a minute for a window nobody could see.
+    ///
+    /// A plain Foundation timer feeds this subject rather than
+    /// `Timer.publish` driving the view directly: a `TimerPublisher` is
+    /// one-shot — once its connection is cancelled it never emits again, even
+    /// after a fresh `connect()` (measured) — so it cannot model show/hide
+    /// cycles. The subject stays put as the view's stable publisher.
+    private let ticks = PassthroughSubject<Date, Never>()
+    @State private var ticker: Timer? = nil
+    /// Mirrors `WorldTimeSettings.panelIsOnScreen` — gates the clock and the
+    /// calendar-change refreshes. Every summon rebuilds state from scratch,
+    /// so nothing is lost by standing still while hidden.
+    @State private var isOnScreen = false
 
     /// Width of the row-header column; keeps hour columns aligned across rows.
     private static let headerWidth: CGFloat = 250
@@ -119,12 +134,27 @@ struct WorldTimeView: View {
         // Terminal → monospaced, Pastel → rounded (the chat panel's rule).
         .fontDesign(palette.fontDesign)
         .onAppear {
-            dayStart = homeCalendar.startOfDay(for: .now)
-            selectedColumn = nowColumn ?? 12
-            refreshBusy()
+            resetToNow()
+            setOnScreen(WorldTimeSettings.panelIsOnScreen)
         }
-        .onReceive(timer) {
-            now = $0
+        .onDisappear { setOnScreen(false) }
+        .onReceive(NotificationCenter.default.publisher(for: .worldTimeDidSummon)) { _ in
+            resetToNow()
+            setOnScreen(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .worldTimeDidHide)) { _ in
+            setOnScreen(false)
+        }
+        .onReceive(ticks) { tick in
+            // A pinned panel can sit open across midnight: if it was showing
+            // "today", follow the calendar over. A day the user deliberately
+            // browsed to stays put.
+            let wasToday = homeCalendar.isDate(dayStart, inSameDayAs: now)
+            now = tick
+            if wasToday, !homeCalendar.isDate(dayStart, inSameDayAs: now) {
+                dayStart = homeCalendar.startOfDay(for: now)
+                selectedColumn = nowColumn ?? 12
+            }
             refreshBusy() // events change while the panel sits open
         }
         .onChange(of: settings.homeZoneID) { _, _ in
@@ -132,11 +162,13 @@ struct WorldTimeView: View {
             dayStart = homeCalendar.startOfDay(for: dayStart.addingTimeInterval(12 * 3600))
         }
         .onChange(of: dayStart) { _, _ in refreshBusy() }
+        // Calendar changes are picked up on the next summon when hidden —
+        // `resetToNow` re-reads the day anyway.
         .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
-            refreshBusy()
+            if isOnScreen { refreshBusy() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .calendarAddonDidChange)) { _ in
-            refreshBusy()
+            if isOnScreen { refreshBusy() }
         }
     }
 
@@ -575,6 +607,40 @@ struct WorldTimeView: View {
 
     private func select(day: Date) {
         dayStart = homeCalendar.startOfDay(for: day)
+    }
+
+    /// Starts or stops the 30s clock with the panel's visibility. Idempotent —
+    /// summon fires both `onAppear` (first render) and the notification.
+    private func setOnScreen(_ visible: Bool) {
+        isOnScreen = visible
+        ticker?.invalidate() // never leave one scheduled on the run loop
+        ticker = nil
+        guard visible else { return }
+        let ticks = self.ticks
+        let timer = Timer(timeInterval: 30, repeats: true) { _ in ticks.send(Date()) }
+        // Slack lets macOS coalesce the wake-up with other work — invisible on
+        // a clock this coarse, and the point of the exercise is energy.
+        timer.tolerance = 5
+        // `.common` so the clock keeps running through menu tracking and live
+        // resize, as it did before.
+        RunLoop.main.add(timer, forMode: .common)
+        ticker = timer
+    }
+
+    /// Brings the panel back to the present: today in the home zone, the
+    /// current hour highlighted, transient UI (date popover, slot composer,
+    /// search) dropped. Runs on first appearance and on every summon.
+    private func resetToNow() {
+        now = .now
+        dayStart = homeCalendar.startOfDay(for: now)
+        selectedColumn = nowColumn ?? 12
+        hoverColumn = nil
+        hoverSlot = nil
+        composerSlot = nil
+        showDatePicker = false
+        searchText = ""
+        searchResults = []
+        refreshBusy()
     }
 
     // MARK: - Grid

@@ -226,7 +226,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             Task { @MainActor in self?.showWorldTimePanel() }
         }
         NotificationCenter.default.addObserver(forName: .closeWorldTimeWindow, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.worldTimeWindow?.orderOut(nil) }
+            Task { @MainActor in self?.dismissWorldTimePanel() }
         }
         // Auto-fit the panel's height to its rows (grow on add, shrink on
         // remove), clamped to the screen. Width stays the user's.
@@ -670,10 +670,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     /// user is actually in it (key); otherwise (re-)summon to the front.
     @objc private func openWorldTime(_ sender: Any?) {
         if let window = worldTimeWindow, window.isVisible, window.isKeyWindow {
-            window.orderOut(nil)
+            dismissWorldTimePanel()
         } else {
             showWorldTimePanel()
         }
+    }
+
+    /// The ONLY way the panel leaves the screen. Every dismissal path (this
+    /// toggle, Esc, the close button, focus loss) funnels here so the view is
+    /// always told — it stops its 30s clock on the notification, and a path
+    /// that ordered the window out behind our back would leave that clock
+    /// running for an invisible window.
+    private func dismissWorldTimePanel() {
+        WorldTimeSettings.panelIsOnScreen = false
+        worldTimeWindow?.orderOut(nil)
+        NotificationCenter.default.post(name: .worldTimeDidHide, object: nil)
     }
 
     /// Summons the timezone grid as a Spotlight-like floating panel: glass,
@@ -757,7 +768,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // rebuild it fresh on the first summon in a clean state.
         if worldTimeWindow == nil
             || (worldTimeWindowDegraded && NSApp.activationPolicy() == .accessory) {
-            worldTimeWindow?.orderOut(nil)
+            // Through the dismissal path, so the outgoing view's clock stops
+            // with it instead of ticking on inside a discarded window.
+            dismissWorldTimePanel()
             worldTimeWindow = makeWorldTimePanel()
             worldTimeWindowDegraded = NSApp.activationPolicy() == .regular
         }
@@ -768,7 +781,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 if event.keyCode == 53, // Esc
                    let panel = self?.worldTimeWindow, panel.isKeyWindow {
-                    panel.orderOut(nil)
+                    self?.dismissWorldTimePanel()
                     return nil
                 }
                 return event
@@ -776,6 +789,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         }
 
         guard let window = worldTimeWindow else { return }
+        // Every summon starts on "now": the panel window lives for the whole
+        // app run and is only ordered in/out, so the view sees `onAppear`
+        // once. Posted BEFORE the window comes on screen so a day the user
+        // browsed to last time never flashes. The flag goes up first: the
+        // view reads it from `onAppear` on the very first render, which may
+        // land either side of this post.
+        WorldTimeSettings.panelIsOnScreen = true
+        NotificationCenter.default.post(name: .worldTimeDidSummon, object: nil)
         // Saved frame first (size + position where the user left it) — but
         // ALWAYS on the screen the user is on now: a frame saved on another
         // display summoned the panel "somewhere else entirely" while the
@@ -1365,6 +1386,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             return
         }
         Diagnostics.log("ui", "worldTime.hide")
-        window.orderOut(nil)
+        dismissWorldTimePanel()
     }
 }

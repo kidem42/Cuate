@@ -27,6 +27,15 @@ extension Notification.Name {
     static let openWorldTimeWindow = Notification.Name("openWorldTimeWindow")
     /// Posted by the panel's own close button (the AppDelegate hides it).
     static let closeWorldTimeWindow = Notification.Name("closeWorldTimeWindow")
+    /// Posted by the AppDelegate every time the panel is summoned. The window
+    /// is created once and only ordered in/out, so the view's `onAppear` fires
+    /// exactly once per app run — without this the day the user browsed to
+    /// stayed selected after hiding and re-opening the panel.
+    static let worldTimeDidSummon = Notification.Name("worldTimeDidSummon")
+    /// Paired with the above: posted whenever the panel leaves the screen, by
+    /// whichever of the dismissal paths ran (Esc, hotkey toggle, close button,
+    /// focus loss). The view stops its clock on it.
+    static let worldTimeDidHide = Notification.Name("worldTimeDidHide")
     /// Posted by the panel view whenever its ideal content height changes
     /// (rows added/removed, busy lane appears) — userInfo["height"]: CGFloat.
     /// The AppDelegate resizes the window to fit.
@@ -48,6 +57,13 @@ enum WorldTimeFormat: String, CaseIterable, Identifiable {
 @MainActor
 final class WorldTimeSettings: ObservableObject {
     static let shared = WorldTimeSettings()
+
+    /// Is the panel on screen right now? Transient (never persisted), kept in
+    /// sync by the AppDelegate, which owns the window the view cannot reach.
+    /// The view's `onAppear` can run either before or after the summon
+    /// notification — AppKit decides when it first renders the hosting view —
+    /// so it reads this instead of relying on having caught the post.
+    static var panelIsOnScreen = false
 
     private let defaults = UserDefaults.standard
 
