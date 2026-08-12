@@ -564,6 +564,9 @@ struct ChatWindow: View {
         hasher.combine(baseRevision)
         hasher.combine(message.text)
         hasher.combine(message.messageType.rawValue)
+        // A mirror sync can FLIP a row's side with the text unchanged
+        // (legacy service notices migrating to the assistant side).
+        hasher.combine(message.isUser)
         hasher.combine(message.audioURL)
         // Agent step journal attaches at delivery, after the last text
         // checkpoint — without this the row never rebuilds to show it.

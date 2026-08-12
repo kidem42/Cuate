@@ -161,15 +161,42 @@ enum HermesMirrorSync {
         gateway: [HermesTranscriptMessage],
         sessionID: String
     ) -> (messages: [ChatMessage], changed: Bool) {
+        // Gateway service notifications (delegation results, background-
+        // process reports) ride the transcript as `role == "user"` rows —
+        // older builds mirrored them as bubbles the USER supposedly sent.
+        // They render assistant-side now (`message(from:)` below); this
+        // pre-pass migrates the legacy copies wherever they sit, including
+        // the head the incremental split fences off.
+        var local = local
+        var converted = false
+        for index in local.indices
+        where local[index].isUser && local[index].messageType != .system
+            && HermesServiceNotice.isNotice(local[index].text) {
+            local[index] = assistantSide(local[index])
+            converted = true
+        }
         // Long sessions re-merge only their tail (the claim pass is
         // gateway-rows × local-rows, and the transcript arrives whole on
         // every sync — there is no pagination to lean on).
         if let split = incrementalSplit(local: local, gateway: gateway) {
             let (tail, changed) = mergeFull(
                 local: split.localTail, gateway: split.gatewayTail, sessionID: sessionID)
-            return (split.head + tail, changed)
+            return (split.head + tail, changed || converted)
         }
-        return mergeFull(local: local, gateway: gateway, sessionID: sessionID)
+        let (messages, changed) = mergeFull(local: local, gateway: gateway, sessionID: sessionID)
+        return (messages, changed || converted)
+    }
+
+    /// The same message flipped to the assistant side (service notices; all
+    /// other identity — gateway stamp, timestamp — is preserved).
+    private static func assistantSide(_ message: ChatMessage) -> ChatMessage {
+        ChatMessage(
+            id: message.id, text: message.text, isUser: false,
+            timestamp: message.timestamp, messageType: message.messageType,
+            audioURL: message.audioURL, attachments: message.attachments,
+            toolContext: message.toolContext, externalID: message.externalID,
+            seq: message.seq, agentSteps: message.agentSteps
+        )
     }
 
     /// Only user/assistant turns with content mirror into the chat as
@@ -228,9 +255,14 @@ enum HermesMirrorSync {
         guard let anchorIndex = stamped.dropLast(incrementalOverlap).last,
               let anchorSeq = local[anchorIndex].seq else { return nil }
         // User rows never collapse into one another (only assistant runs do),
-        // so they count the head's completeness one for one.
+        // so they count the head's completeness one for one. Service notices
+        // are user-role on the gateway but mirror assistant-side — counting
+        // them here would fail the completeness guard on every sync.
         let gatewayUsersBefore = contentRows(gateway)
-            .filter { $0.role == "user" && $0.id < anchorSeq }.count
+            .filter {
+                $0.role == "user" && $0.id < anchorSeq
+                    && !HermesServiceNotice.isNotice($0.content)
+            }.count
         let localUsersBefore = local[..<anchorIndex]
             .filter { $0.isUser && $0.messageType != .system }.count
         guard localUsersBefore >= gatewayUsersBefore else { return nil }
@@ -401,7 +433,11 @@ enum HermesMirrorSync {
             }
             if let previous = healed.last,
                !row.isUser, !previous.isUser,
-               row.messageType != .system, previous.messageType != .system {
+               row.messageType != .system, previous.messageType != .system,
+               // Service-notice cards are assistant-side but never halves of
+               // a split reply — keep them out of containment absorption.
+               !HermesServiceNotice.isNotice(row.text),
+               !HermesServiceNotice.isNotice(previous.text) {
                 let a = previous.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let b = row.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if min(a.count, b.count) >= 40 {
@@ -435,12 +471,16 @@ enum HermesMirrorSync {
         }
 
         func message(from row: HermesTranscriptMessage, sessionID: String) -> ChatMessage {
-            ChatMessage(
+            // Service notifications are user-role only formally (see the
+            // merge pre-pass) — they mirror as an assistant-side card.
+            let isNotice = row.role == "user" && HermesServiceNotice.isNotice(row.content)
+            return ChatMessage(
                 id: UUID(),
                 // A briefed first send rebuilt from the gateway (app
                 // reinstall, another Cuate) must not show the preamble.
-                text: row.role == "user" ? HermesBriefing.stripped(row.content) : row.content,
-                isUser: row.role == "user",
+                text: row.role == "user" && !isNotice
+                    ? HermesBriefing.stripped(row.content) : row.content,
+                isUser: row.role == "user" && !isNotice,
                 timestamp: row.timestamp ?? Date(),
                 messageType: .text,
                 audioURL: nil,

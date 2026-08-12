@@ -32,6 +32,23 @@ enum HermesAddonStrings {
             .russian: "👉 Гейтвею не удалось обратиться к модели этой сессии. Выберите другую в меню модели под композером."
         ],
 
+        // MARK: Service-notice cards (delegation / process reports)
+        "hermes.notice.delegation": [
+            .english: "Subagent results",
+            .spanish: "Resultados de subagentes",
+            .russian: "Результаты субагентов"
+        ],
+        "hermes.notice.process": [
+            .english: "Background process",
+            .spanish: "Proceso en segundo plano",
+            .russian: "Фоновый процесс"
+        ],
+        "hermes.notice.task": [
+            .english: "Task %@",
+            .spanish: "Tarea %@",
+            .russian: "Задача %@"
+        ],
+
         // MARK: General tab master switch
         "hermes.general.enable": [
             .english: "Hermes Agent (beta)",

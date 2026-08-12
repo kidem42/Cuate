@@ -58,12 +58,35 @@ struct MessageRow: View {
             } else if message.isUser {
                 Spacer()
                 userMessageBubble
+            } else if message.externalID != nil,
+                      HermesServiceNotice.isNotice(message.text) {
+                // Gateway service notification (delegation results, process
+                // reports) — a collapsed service card, not a reply bubble.
+                serviceNoticeColumn
+                Spacer()
             } else {
                 assistantMessageBubble
                 Spacer()
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    /// Service card + timestamp, mirroring the assistant column's layout.
+    @ViewBuilder
+    private var serviceNoticeColumn: some View {
+        if let notice = HermesServiceNotice.cached(message.text) {
+            VStack(alignment: .leading, spacing: 4) {
+                HermesServiceNoticeView(notice: notice)
+                Text(formatTime(message.timestamp))
+                    .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
+                    .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
+                    .foregroundColor(palette.isGlass ? .secondary : palette.timestampColor)
+            }
+            .frame(maxWidth: maxBubbleWidth, alignment: .leading)
+        } else {
+            assistantMessageBubble
+        }
     }
     
     private var userMessageBubble: some View {
