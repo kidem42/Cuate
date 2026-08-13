@@ -240,8 +240,28 @@ object HermesChatService {
                     emit(AgentEvent.Status(null))
                     emit(AgentEvent.SegmentCompleted(event.content))
                     segmentStarted = false
+                    // Ground truth of what the turn ACTUALLY ran on — the
+                    // stored label follows it (reroute / lock changed
+                    // elsewhere shows up immediately, desktop parity).
+                    val model = event.runtimeModel
+                    if (model != null && model != "hermes-agent") {
+                        settings.setHermesSessionModel(
+                            sessionID, "${event.runtimeProvider ?: ""}|$model")
+                    }
                 }
-                is HermesStreamEvent.RunCompleted -> { /* usage is the agent's own billing */ }
+                is HermesStreamEvent.RunCompleted -> {
+                    // Usage itself is the agent's own billing — but the
+                    // context fill drives the gauge. Patched gateways send
+                    // the true number; the stock fallback (run-cumulative
+                    // input+cache+output) is capped by the gauge at the
+                    // window, same as the desktop.
+                    val fill = event.contextTokens
+                        ?: (event.usage.inputTokens + event.usage.cacheReadTokens + event.usage.outputTokens)
+                    settings.recordHermesContextTokens(sessionID, fill)
+                    // The agent's own effective window (OAuth caps included) —
+                    // tier 0 of the gauge denominator.
+                    event.windowTokens?.let { settings.recordHermesContextWindow(sessionID, it) }
+                }
                 is HermesStreamEvent.Done -> { }
                 is HermesStreamEvent.Unknown -> {
                     Diagnostics.log("hermes", "sse.unknown ${event.event}")

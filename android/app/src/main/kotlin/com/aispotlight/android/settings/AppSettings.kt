@@ -196,6 +196,60 @@ class AppSettings private constructor(context: Context) {
      */
     val hermesEffortLevels = listOf("", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
+    /**
+     * Cached `model/info` answer (desktop hermes.agentContextModel/Length):
+     * the agent's configured model and the context window Hermes itself
+     * resolved for it — the gauge's authoritative source. Fetched through
+     * the DASHBOARD URL (the API server has never served the route).
+     */
+    private val _hermesAgentContext = MutableStateFlow(
+        (prefs.getString("hermesAgentContextModel", "") ?: "") to
+            prefs.getInt("hermesAgentContextLength", 0)
+    )
+    val hermesAgentContext: StateFlow<Pair<String, Int>> = _hermesAgentContext
+
+    fun recordHermesAgentContext(model: String, length: Int) {
+        if (model.isEmpty() || length <= 0) return
+        _hermesAgentContext.value = model to length
+        prefs.edit().putString("hermesAgentContextModel", model)
+            .putInt("hermesAgentContextLength", length).apply()
+    }
+
+    /**
+     * Actual context fill per session, from `run.completed` (desktop
+     * hermes.sessionContextTokens). Patched gateways send the true number
+     * (`usage.context_tokens`); the stock fallback is the run's capped sums.
+     * Runtime-only on purpose: a fresh launch re-learns from the next turn.
+     */
+    private val _hermesSessionContextTokens = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val hermesSessionContextTokens: StateFlow<Map<String, Int>> = _hermesSessionContextTokens
+
+    fun recordHermesContextTokens(sessionId: String, tokens: Int) {
+        if (tokens <= 0) return
+        _hermesSessionContextTokens.value =
+            _hermesSessionContextTokens.value + (sessionId to tokens)
+    }
+
+    /**
+     * Effective context window per session, straight from the agent
+     * (`usage.context_window`, patched gateways) — the only source that
+     * knows OAuth caps. Persisted (desktop parity): a relaunch must not
+     * fall back to the table's direct-API number.
+     */
+    private val _hermesSessionContextWindows = MutableStateFlow(
+        readStringMap("hermesSessionContextWindows").mapValues { it.value.toIntOrNull() ?: 0 }
+            .filterValues { it > 0 }
+    )
+    val hermesSessionContextWindows: StateFlow<Map<String, Int>> = _hermesSessionContextWindows
+
+    fun recordHermesContextWindow(sessionId: String, tokens: Int) {
+        if (tokens <= 0 || _hermesSessionContextWindows.value[sessionId] == tokens) return
+        _hermesSessionContextWindows.value =
+            _hermesSessionContextWindows.value + (sessionId to tokens)
+        writeStringMap("hermesSessionContextWindows",
+            _hermesSessionContextWindows.value.mapValues { it.value.toString() })
+    }
+
     /** Pinned sessions sort first in the sidebar (desktop hermes.pinnedSessions). */
     private val _hermesPinnedSessions = MutableStateFlow(
         prefs.getStringSet("hermesPinnedSessions", emptySet())!!.toSet()
@@ -208,6 +262,21 @@ class AppSettings private constructor(context: Context) {
         _hermesPinnedSessions.value = next
         prefs.edit().putStringSet("hermesPinnedSessions", next).apply()
     }
+
+    /**
+     * Wholesale replacement after reconciling with the gateway's server-side
+     * pins (Hermes 0.20) — see `ChatViewModel.syncHermesSessions`.
+     */
+    fun replaceHermesSessionPins(ids: Set<String>) {
+        if (_hermesPinnedSessions.value == ids) return
+        _hermesPinnedSessions.value = ids
+        prefs.edit().putStringSet("hermesPinnedSessions", ids).apply()
+    }
+
+    /** One-shot flag: local pins already pushed to a pin-capable gateway. */
+    var hermesPinsPushed: Boolean
+        get() = prefs.getBoolean("hermesPinsPushed", false)
+        set(value) { prefs.edit().putBoolean("hermesPinsPushed", value).apply() }
 
     /** Session accent colors, sessionId → hex (desktop hermes.sessionColors). */
     private val _hermesSessionColors = MutableStateFlow(readStringMap("hermesSessionColors"))

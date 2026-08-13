@@ -47,6 +47,12 @@ data class HermesSessionInfo(
     val inputTokens: Int,
     val outputTokens: Int,
     val preview: String?,
+    /**
+     * Server-side pin (Hermes 0.20: PATCH persists it, the list backfills
+     * pinned sessions past the recency window). null = gateway predates the
+     * field — local pins stay the only truth then.
+     */
+    val pinned: Boolean? = null,
 )
 
 /**
@@ -111,8 +117,25 @@ sealed class HermesStreamEvent {
      * can carry SEVERAL of these (interim assistant messages) — glue, don't
      * replace.
      */
-    data class AssistantCompleted(val content: String, val interrupted: Boolean) : HermesStreamEvent()
-    data class RunCompleted(val usage: TokenUsage) : HermesStreamEvent()
+    data class AssistantCompleted(
+        val content: String,
+        val interrupted: Boolean,
+        /** ACTUAL (provider, model) this turn ran on (`runtime`, 0.20) — null on older gateways. */
+        val runtimeProvider: String? = null,
+        val runtimeModel: String? = null,
+    ) : HermesStreamEvent()
+    /**
+     * `contextTokens` — the prompt size of the run's LAST model call, i.e.
+     * the session's actual context fill (Hermes' own status-bar number).
+     * Only patched gateways send it (`usage.context_tokens`, the Cuate
+     * gateway patch); stock reports run-CUMULATIVE sums in `usage`.
+     */
+    data class RunCompleted(
+        val usage: TokenUsage,
+        val contextTokens: Int? = null,
+        /** The agent's effective window (`usage.context_window`, OAuth caps included). */
+        val windowTokens: Int? = null,
+    ) : HermesStreamEvent()
     object Done : HermesStreamEvent()
     /** Approval frames (feature-flagged, dormant in 0.19.0) and future events. */
     data class Unknown(val event: String, val payload: JSONObject) : HermesStreamEvent()
@@ -225,6 +248,19 @@ class HermesTransport(
         return HermesModelOptions(current, providers)
     }
 
+    /**
+     * `/api/model/info`: the agent's CURRENT model plus the context window
+     * Hermes resolved for it (config override → probes → OAuth caps →
+     * table). ⚠️ The route belongs to the DASHBOARD server, not the API
+     * server — build this transport on the dashboard URL (the route is in
+     * the dashboard's public paths, the courier token is optional there).
+     * Against the API server it 404s; callers treat that as "no data".
+     */
+    suspend fun modelInfo(): Pair<String, Int> {
+        val obj = json("GET", "api/model/info")
+        return obj.optString("model", "") to obj.optInt("effective_context_length", 0)
+    }
+
     // MARK: Sessions
 
     private fun sessionInfo(row: JSONObject): HermesSessionInfo? {
@@ -244,6 +280,8 @@ class HermesTransport(
             inputTokens = row.optInt("input_tokens", 0),
             outputTokens = row.optInt("output_tokens", 0),
             preview = row.optString("preview", "").ifEmpty { null },
+            pinned = if (row.has("pinned") && !row.isNull("pinned"))
+                row.optBoolean("pinned") else null,
         )
     }
 
@@ -268,18 +306,75 @@ class HermesTransport(
     }
 
     /**
+     * Persists a pin on the gateway (Hermes 0.20; 0.19 rejected the field
+     * with a 400 — callers treat failure as "server can't, local pin only").
+     */
+    suspend fun setSessionPinned(id: String, pinned: Boolean) {
+        json("PATCH", "api/sessions/$id", JSONObject().put("pinned", pinned))
+    }
+
+    /**
+     * `POST /api/sessions/{id}/steer` — the Cuate gateway patch (0.20+,
+     * advertised as `features.session_steer`): injects follow-up text into
+     * the RUNNING turn (rides the next tool-batch boundary, no interrupt).
+     * Returns true when queued, false when the agent refused. Throws
+     * [HermesTransportException] with status 409 (`no_active_turn`) when
+     * nothing is running — callers fall back to an ordinary send.
+     */
+    suspend fun steer(sessionID: String, text: String): Boolean {
+        val obj = json("POST", "api/sessions/$sessionID/steer",
+            JSONObject().put("text", text))
+        return obj.optString("status") == "queued"
+    }
+
+    /**
      * ⚠️ Required after [createSession]: a fresh session inherits the literal
      * model "hermes-agent" and every turn 404s until locked (fixtures).
      * Provider+model pairs come from [modelOptions].
+     *
+     * Returns what the gateway ACTUALLY locked (provider, model): 0.20 runs
+     * the body through config `model_routes` first, and an alias route there
+     * silently overrides the explicit provider (found live 2026-08-13 —
+     * picked Codex, got Nous Portal; the 200 carried the truth in
+     * `runtime`). Callers must compare and surface a reroute.
      */
-    suspend fun lockModel(sessionID: String, provider: String, model: String) {
-        json("POST", "api/sessions/$sessionID/model",
+    suspend fun lockModel(sessionID: String, provider: String, model: String): Pair<String, String> {
+        val obj = json("POST", "api/sessions/$sessionID/model",
             JSONObject().put("model", model).put("provider", provider))
+        val runtime = obj.optJSONObject("runtime")
+        return (runtime?.optString("provider")?.ifEmpty { null } ?: provider) to
+            (runtime?.optString("model")?.ifEmpty { null } ?: model)
     }
 
+    /**
+     * Full transcript. Hermes 0.20 paginated `/messages` — an unqualified GET
+     * there returns only the LATEST 500, silently beheading long sessions —
+     * so this walks explicit oldest-first pages until a short one. A 0.19
+     * gateway ignores the params (and sends no `pagination` block), so the
+     * loop stops after its single full answer either way.
+     */
     suspend fun messages(sessionID: String): List<HermesTranscriptMessage> {
-        val obj = json("GET", "api/sessions/$sessionID/messages")
-        val data = obj.optJSONArray("data") ?: JSONArray()
+        val pageSize = 500 // server cap per page (0.20)
+        val maxPages = 40  // 20k rows — a runaway bound, not a target
+        val rows = mutableListOf<HermesTranscriptMessage>()
+        var offset = 0
+        for (page in 0 until maxPages) {
+            val obj = json(
+                "GET", "api/sessions/$sessionID/messages",
+                query = mapOf(
+                    "order" to "oldest",
+                    "limit" to pageSize.toString(),
+                    "offset" to offset.toString(),
+                ))
+            val data = obj.optJSONArray("data") ?: JSONArray()
+            rows += parseTranscript(data)
+            if (data.length() < pageSize || !obj.has("pagination")) break
+            offset += data.length()
+        }
+        return rows
+    }
+
+    private fun parseTranscript(data: JSONArray): List<HermesTranscriptMessage> {
         return (0 until data.length()).mapNotNull { i ->
             val row = data.optJSONObject(i) ?: return@mapNotNull null
             if (!row.has("id") || row.isNull("id")) return@mapNotNull null
@@ -502,9 +597,14 @@ class HermesTransport(
                     payload.optString("tool_name", "?"), payload.optString("delta", ""))
                 "tool.completed" -> HermesStreamEvent.ToolCompleted(payload.optString("tool_name", "?"))
                 "assistant.delta" -> HermesStreamEvent.AssistantDelta(payload.optString("delta", ""))
-                "assistant.completed" -> HermesStreamEvent.AssistantCompleted(
-                    content = payload.optString("content", ""),
-                    interrupted = payload.optBoolean("interrupted", false))
+                "assistant.completed" -> {
+                    val runtime = payload.optJSONObject("runtime")
+                    HermesStreamEvent.AssistantCompleted(
+                        content = payload.optString("content", ""),
+                        interrupted = payload.optBoolean("interrupted", false),
+                        runtimeProvider = runtime?.optString("provider")?.ifEmpty { null },
+                        runtimeModel = runtime?.optString("model")?.ifEmpty { null })
+                }
                 "run.completed" -> {
                     var usage = TokenUsage()
                     payload.optJSONObject("usage")?.let { raw ->
@@ -516,7 +616,13 @@ class HermesTransport(
                             reasoningTokens = raw.optInt("reasoning_tokens", 0),
                         )
                     }
-                    HermesStreamEvent.RunCompleted(usage)
+                    val contextTokens = payload.optJSONObject("usage")?.let { raw ->
+                        if (raw.has("context_tokens")) raw.optInt("context_tokens") else null
+                    }
+                    val windowTokens = payload.optJSONObject("usage")?.let { raw ->
+                        if (raw.has("context_window")) raw.optInt("context_window").takeIf { it > 0 } else null
+                    }
+                    HermesStreamEvent.RunCompleted(usage, contextTokens, windowTokens)
                 }
                 "done" -> HermesStreamEvent.Done
                 else -> HermesStreamEvent.Unknown(name, payload)

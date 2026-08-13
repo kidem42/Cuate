@@ -189,6 +189,7 @@
     <string name="hermes_unpin_session">Открепить сессию</string>
     <string name="hermes_effort_default">усилие: авто</string>
     <string name="hermes_menu_model">Модель сессии</string>
+    <string name="hermes_context_gauge">Контекст (нажмите для сжатия)</string>
     <string name="hermes_menu_effort">Уровень размышлений</string>
     <string name="hermes_file_saved">Сохранено: %1$s</string>
     <string name="hermes_file_download_failed">Не удалось скачать — путь скопирован</string>
@@ -221,6 +222,9 @@
     <string name="hermes_dashboard_token">Токен дашборда</string>
     <string name="hermes_dashboard_hint">Прикреплённые файлы (кроме изображений) попадают на хост агента через файловый API дашборда Hermes (свой URL и токен). Изображения всегда уходят инлайн, дашборд не нужен.</string>
     <string name="hermes_setup">Настройка удалённого гейтвея (SSH)</string>
+    <string name="hermes_lock_rerouted">⚠️ Гейтвей перенаправил лок: вы просили %1$s, но его конфиг прибивает эту модель к другому провайдеру — сессия теперь работает на %2$s через %3$s.</string>
+    <string name="hermes_patch_title">Патч гейтвея: гейдж контекста + досылка сообщений</string>
+    <string name="hermes_patch_hint">Вставьте в терминал машины агента ПОСЛЕ обновления Hermes до 0.20 (hermes update). Добавляет usage.context_tokens (реальное заполнение контекста) и POST /steer (сообщения доходят до агента прямо в работающий ход). Бэкап рядом с файлом; на незнакомой структуре откажется. Повторный запуск безопасен; после каждого обновления Hermes — повторить.</string>
     <string name="hermes_setup_hint">Выполните на машине агента (VPS, облако, Mac дома), затем вставьте выведенный API_SERVER_KEY выше. API_SERVER_HOST=0.0.0.0 обязателен — по умолчанию сервер слушает только loopback.</string>
 
     <!-- Costs (spend analytics) -->

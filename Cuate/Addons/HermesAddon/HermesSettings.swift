@@ -159,6 +159,31 @@ final class HermesSettings: ObservableObject {
         return (parts[0], parts[1])
     }
 
+    /// True when the two ids name the same model, tolerating the vendor
+    /// prefix the gateway adds ("openai/gpt-5.6-luna" vs "gpt-5.6-luna").
+    static func sameModelID(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        return a.hasSuffix("/" + b) || b.hasSuffix("/" + a)
+    }
+
+    /// Reconciles the stored lock with the gateway's OWN answer (session
+    /// row model, or a turn's `assistant.completed.runtime`). The server is
+    /// the truth: a lock changed from another surface, a gateway restart or
+    /// a model-routes reroute must show up at launch, not persist the pair
+    /// this app once requested (user call-out 2026-08-13). An empty
+    /// provider keeps the stored one when the model still matches.
+    func reconcileSessionModel(sessionID: String, provider: String, model: String) {
+        guard !model.isEmpty, model != "hermes-agent" else { return }
+        let stored = modelLock(forSession: sessionID)
+        if let stored, Self.sameModelID(stored.model, model) {
+            guard !provider.isEmpty, provider != stored.provider else { return }
+            sessionModelLocks[sessionID] = "\(provider)|\(stored.model)"
+            return
+        }
+        sessionModelLocks[sessionID] = "\(provider)|\(model)"
+    }
+
     func recordModelLock(provider: String, model: String, forSession sessionID: String) {
         sessionModelLocks[sessionID] = "\(provider)|\(model)"
     }
@@ -229,6 +254,23 @@ final class HermesSettings: ObservableObject {
 
     func contextTokens(forSession sessionID: String) -> Int? {
         sessionContextTokens[sessionID]
+    }
+
+    /// Effective context window per session, straight from the agent
+    /// (`usage.context_window`, patched gateways) — the ONLY source that
+    /// knows OAuth caps. Persisted: a relaunch must not fall back to the
+    /// table's direct-API number (1050K vs Codex's real 272K).
+    @Published private(set) var sessionContextWindows: [String: Int] {
+        didSet { defaults.set(sessionContextWindows, forKey: "hermes.sessionContextWindows") }
+    }
+
+    func recordContextWindow(_ tokens: Int, forSession sessionID: String) {
+        guard tokens > 0, sessionContextWindows[sessionID] != tokens else { return }
+        sessionContextWindows[sessionID] = tokens
+    }
+
+    func contextWindow(forSession sessionID: String) -> Int? {
+        sessionContextWindows[sessionID]
     }
 
     /// LAST-RESORT context window for the gauge, when neither the gateway
@@ -343,6 +385,16 @@ final class HermesSettings: ObservableObject {
 
     func isSessionPinned(_ id: String) -> Bool { pinnedSessions.contains(id) }
 
+    /// Snapshot for the server-pin reconciliation (`HermesAddon.syncServerPins`).
+    var pinnedSessionIDs: [String] { pinnedSessions }
+
+    /// Wholesale replacement after reconciling with the gateway's pins —
+    /// order is not meaningful server-side, keep whatever arrives.
+    func replaceSessionPins(_ ids: [String]) {
+        guard Set(pinnedSessions) != Set(ids) else { return }
+        pinnedSessions = ids
+    }
+
     func toggleSessionPin(_ id: String) {
         if let index = pinnedSessions.firstIndex(of: id) {
             pinnedSessions.remove(at: index)
@@ -420,6 +472,7 @@ final class HermesSettings: ObservableObject {
         sessionReadCounts = (defaults.dictionary(forKey: "hermes.sessionReadCounts") as? [String: Int]) ?? [:]
         pinnedMessagesByConversation = (defaults.dictionary(forKey: "hermes.pinnedMessages") as? [String: [String]]) ?? [:]
         sessionModelLocks = (defaults.dictionary(forKey: "hermes.sessionModelLocks") as? [String: String]) ?? [:]
+        sessionContextWindows = (defaults.dictionary(forKey: "hermes.sessionContextWindows") as? [String: Int]) ?? [:]
         sessionContextTokens = (defaults.dictionary(forKey: "hermes.sessionContextTokens") as? [String: Int]) ?? [:]
         sessionsAwaitingTitle = defaults.stringArray(forKey: "hermes.sessionsAwaitingTitle") ?? []
         briefingEnabled = defaults.object(forKey: "hermes.briefingEnabled") as? Bool ?? true

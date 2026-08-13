@@ -1401,20 +1401,43 @@ struct ChatWindow: View {
     /// Compact "model · effort" menu — the Hermes composer's own control:
     /// picking a model re-locks the CURRENT gateway session (and becomes the
     /// default for new ones); effort rides as `model_options` per request.
+    /// Whether this provider row owns the ACTIVE pair — so the top level of
+    /// the menu answers "whose model runs now" at a glance (user ask
+    /// 2026-08-13). A reconciled label may carry the model without a
+    /// provider — then the row that lists the model wins.
+    private func providerOwnsActivePair(_ provider: HermesProviderOption) -> Bool {
+        guard let pair = composerModelPair else { return false }
+        if !pair.provider.isEmpty { return pair.provider == provider.slug }
+        return provider.models.contains { HermesSettings.sameModelID($0, pair.model) }
+    }
+
     private var agentModelControl: some View {
         Menu {
             ForEach(hermesAddon.cachedProviders.filter { !$0.models.isEmpty }) { provider in
-                Menu(provider.name) {
+                Menu {
                     ForEach(provider.models, id: \.self) { model in
                         Button {
                             switchSessionModel(provider: provider.slug, model: model)
                         } label: {
-                            if composerModelPair?.model == model, composerModelPair?.provider == provider.slug {
+                            // Model ids tolerate the vendor prefix drift
+                            // ("openai/gpt-5.6-luna" vs "gpt-5.6-luna") and
+                            // an unknown provider on a reconciled label.
+                            if let pair = composerModelPair,
+                               HermesSettings.sameModelID(pair.model, model),
+                               pair.provider.isEmpty || pair.provider == provider.slug {
                                 Label(model, systemImage: "checkmark")
                             } else {
                                 Text(model)
                             }
                         }
+                    }
+                } label: {
+                    // Same selection glyph as the model rows below — one
+                    // style across every picker (user ask 2026-08-13).
+                    if providerOwnsActivePair(provider) {
+                        Label(provider.name, systemImage: "checkmark")
+                    } else {
+                        Text(provider.name)
                     }
                 }
             }
@@ -1423,17 +1446,21 @@ struct ChatWindow: View {
                 Button {
                     hermesSettings.reasoningEffort = ""
                 } label: {
-                    hermesSettings.reasoningEffort.isEmpty
-                        ? Label(HL("hermes.composer.effort.default"), systemImage: "checkmark")
-                        : Label(HL("hermes.composer.effort.default"), systemImage: "circle")
+                    if hermesSettings.reasoningEffort.isEmpty {
+                        Label(HL("hermes.composer.effort.default"), systemImage: "checkmark")
+                    } else {
+                        Text(HL("hermes.composer.effort.default"))
+                    }
                 }
                 ForEach(HermesSettings.effortLevels, id: \.self) { level in
                     Button {
                         hermesSettings.reasoningEffort = level
                     } label: {
-                        hermesSettings.reasoningEffort == level
-                            ? Label(level.capitalized, systemImage: "checkmark")
-                            : Label(level.capitalized, systemImage: "circle")
+                        if hermesSettings.reasoningEffort == level {
+                            Label(level.capitalized, systemImage: "checkmark")
+                        } else {
+                            Text(level.capitalized)
+                        }
                     }
                 }
             }
@@ -1484,12 +1511,32 @@ struct ChatWindow: View {
         let providerName = hermesAddon.cachedProviders.first { $0.slug == provider }?.name ?? provider
         Task {
             do {
-                try await hermesAddon.transport().lockModel(sessionID: sessionID, provider: provider, model: model)
-                hermesSettings.recordModelLock(provider: provider, model: model, forSession: sessionID)
-                Diagnostics.log("hermes", "sessionLock.switch ok \(provider)/\(model) session=\(sessionID)")
-                let notice = HL("hermes.lock.switched")
-                    .replacingOccurrences(of: "%provider%", with: providerName)
-                    .replacingOccurrences(of: "%model%", with: model)
+                let locked = try await hermesAddon.transport()
+                    .lockModel(sessionID: sessionID, provider: provider, model: model)
+                // 0.20: a config `model_routes` alias can silently override
+                // the requested provider (picked Codex, got Nous — live
+                // 2026-08-13). The 200 carries the truth in `runtime` —
+                // record and announce what was ACTUALLY locked, and call the
+                // hijack out instead of celebrating the request.
+                let hijacked = !locked.provider.isEmpty && locked.provider != provider
+                hermesSettings.recordModelLock(
+                    provider: hijacked ? locked.provider : provider,
+                    model: locked.model.isEmpty ? model : locked.model,
+                    forSession: sessionID)
+                Diagnostics.log("hermes", "sessionLock.switch ok requested=\(provider)/\(model) locked=\(locked.provider)/\(locked.model) route=\(locked.routeSource) session=\(sessionID)")
+                let notice: String
+                if hijacked {
+                    let lockedName = hermesAddon.cachedProviders
+                        .first { $0.slug == locked.provider }?.name ?? locked.provider
+                    notice = HL("hermes.lock.rerouted")
+                        .replacingOccurrences(of: "%requested%", with: providerName)
+                        .replacingOccurrences(of: "%provider%", with: lockedName)
+                        .replacingOccurrences(of: "%model%", with: locked.model)
+                } else {
+                    notice = HL("hermes.lock.switched")
+                        .replacingOccurrences(of: "%provider%", with: providerName)
+                        .replacingOccurrences(of: "%model%", with: model)
+                }
                 NotificationCenter.default.post(name: .hermesSystemNotice, object: notice)
             } catch {
                 Diagnostics.log("hermes", "sessionLock.switch fail \(provider)/\(model) session=\(sessionID) \(String(error.localizedDescription.prefix(120)))")
@@ -2278,11 +2325,67 @@ struct ChatWindow: View {
         performSend(text: text, attachments: pendingAttachments)
     }
 
+    /// Whether a follow-up typed right now should STEER the running agent
+    /// turn instead of opening a competing one: an agent conversation with a
+    /// turn in flight (ours or one detected on the gateway — phone/CLI), a
+    /// steer-capable gateway (the Cuate 0.20 patch advertises
+    /// `session_steer`), and a text-only send (the steer channel is text —
+    /// attachments keep the pre-steer behavior).
+    private func shouldSteer(attachments: [ChatAttachment]) -> Bool {
+        guard chatStore.conversation.isAgent,
+              attachments.isEmpty,
+              agentTurnInFlight || externalTurn != nil,
+              HermesAddon.shared.capabilities?.supports("session_steer") == true,
+              HermesSettings.shared.sessionID(
+                  forConversationKey: chatStore.conversation.storageKey) != nil
+        else { return false }
+        return true
+    }
+
+    /// Mid-turn follow-up: the bubble lands in the chat as usual, the text
+    /// rides into the RUNNING turn via `/steer` (the agent sees it on its
+    /// next tool-batch boundary). When the turn is already over by the time
+    /// the request lands (409) — or the gateway balks — the text goes out as
+    /// an ordinary new turn instead: the bubble is already in the store, so
+    /// the fallback only starts the stream.
+    private func performSteer(text: String) {
+        let conversationKey = chatStore.conversation.storageKey
+        guard let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationKey) else { return }
+        chatStore.appendNow(ChatMessage(text: text, isUser: true))
+        messageText = ""
+        quotedText = nil
+        clearPendingAttachments()
+        Task { @MainActor in
+            do {
+                let queued = try await HermesAddon.shared.transport()
+                    .steer(sessionID: sessionID, text: text)
+                Diagnostics.log("hermes", "steer session=\(sessionID) queued=\(queued)")
+                guard queued else {
+                    streamAssistantReply() // agent refused — ordinary turn
+                    return
+                }
+                // Queued into the running turn. The pill keeps streaming;
+                // the reply to this follow-up arrives within the same turn.
+            } catch {
+                // 409 no_active_turn (the race window), or any transport
+                // failure: deliver as a normal turn so the message is never
+                // lost. The user bubble is already on screen.
+                Diagnostics.log("hermes", "steer fallback: \(String(error.localizedDescription.prefix(120)))")
+                streamAssistantReply()
+            }
+        }
+    }
+
     /// Appends the user message and streams the reply, clearing the composer.
     /// The whole staged batch rides on ONE message — providers turn each
     /// attachment into a vision content part (or OCR text for non-vision
     /// models) in `buildMessages`.
     private func performSend(text: String, attachments: [ChatAttachment]) {
+        // Agent turn already running → steer it instead of racing it.
+        if shouldSteer(attachments: attachments) {
+            performSteer(text: text)
+            return
+        }
         // An attachment restored from an existing chat message (ImageAddon
         // "continue editing") already owns a store row; posting the
         // same id again would collide with the unique index and persist an

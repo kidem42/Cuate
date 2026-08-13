@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -285,6 +286,24 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
         ?.filter { it.isNotEmpty() }?.joinToString(" · ")?.ifEmpty { null }
     val hermesEffort = viewModel.activeHermesSessionId
         ?.let { hermesSessionEfforts[it] } ?: ""
+    // Context gauge numbers (desktop sidebar parity): actual fill from
+    // run.completed (true value on patched gateways), window from the
+    // model/info cache → ported Hermes table → 256K fallback.
+    val hermesContextTokens by settings.hermesSessionContextTokens.collectAsStateWithLifecycle()
+    val hermesContextWindows by settings.hermesSessionContextWindows.collectAsStateWithLifecycle()
+    val hermesAgentContext by settings.hermesAgentContext.collectAsStateWithLifecycle()
+    val hermesContextGauge: Pair<Int, Int>? = viewModel.activeHermesSessionId?.let { sid ->
+        val used = hermesContextTokens[sid] ?: return@let null
+        val model = hermesSessionModels[sid]?.substringAfter("|")?.ifEmpty { null }
+        // Tier 0: the agent's own window for THIS session (patched
+        // gateways) — the only source that knows OAuth caps.
+        val window = hermesContextWindows[sid]
+            ?: com.aispotlight.android.hermes.HermesModelContext.limit(
+                model, hermesAgentContext.first.ifEmpty { null }, hermesAgentContext.second)
+        // Stock gateways report run-cumulative sums — cap at the window so
+        // the fallback stays plausible (desktop gauge rule).
+        minOf(used, window) to window
+    }
 
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var confirmClear by rememberSaveable { mutableStateOf(false) }
@@ -534,6 +553,37 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                                 viewModel.loadChatFiles()
                             },
                         )
+                        // Context gauge (desktop sidebar parity): the actual
+                        // fill of the agent's context window for this session.
+                        // Tap = the gateway's own /compact as an ordinary
+                        // turn, exactly like the desktop gauge click.
+                        hermesContextGauge?.let { (used, window) ->
+                            val percent = (used * 100 / maxOf(window, 1)).coerceIn(0, 100)
+                            androidx.compose.material3.DropdownMenuItem(
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.DataUsage, contentDescription = null)
+                                },
+                                text = {
+                                    Text(androidx.compose.ui.res.stringResource(
+                                        com.aispotlight.android.R.string.hermes_context_gauge))
+                                },
+                                trailingIcon = {
+                                    Text(
+                                        "$percent% · ${formatTokens(used)}/${formatTokens(window)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = when {
+                                            percent >= 85 -> MaterialTheme.colorScheme.error
+                                            percent >= 60 -> MaterialTheme.colorScheme.tertiary
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    viewModel.send("/compact")
+                                },
+                            )
+                        }
                         // Session model opens the structured picker dialog
                         // (providers → vendors → models, search); the effort
                         // stays a nested page — it's 4 rows.
@@ -640,7 +690,9 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                 },
                 creatingSession = hermesCreating,
                 onRename = { id, title -> viewModel.renameHermesConversation(id, title) },
-                onTogglePin = { settings.toggleHermesSessionPin(it) },
+                // Via the view model: the pin also persists on the gateway
+                // (Hermes 0.20), so it survives on every device.
+                onTogglePin = { viewModel.toggleHermesSessionPin(it) },
                 onSetColor = { id, hex -> settings.setHermesSessionColor(id, hex) },
                 onDelete = { viewModel.deleteHermesConversation(it) },
             )
@@ -775,4 +827,11 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
             },
         )
     }
+}
+
+/** Compact token count for the context gauge: 312K, 1.0M. */
+private fun formatTokens(value: Int): String = when {
+    value >= 1_000_000 -> "%.1fM".format(value / 1_000_000.0)
+    value >= 1_000 -> "${value / 1_000}K"
+    else -> value.toString()
 }

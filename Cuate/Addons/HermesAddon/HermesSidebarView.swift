@@ -142,9 +142,14 @@ struct HermesSidebarView: View {
         if let sessionID = HermesSettings.shared.activeSession(roleID: role.id),
            !sessionID.isEmpty,
            let used = HermesSettings.shared.contextTokens(forSession: sessionID),
-           case let limit = HermesModelContext.limit(
-               forModel: gaugeModel(forSession: sessionID), settings: settings
-           ),
+           // Tier 0: the window the agent itself reported for THIS session
+           // (`usage.context_window`, patched gateways) — the only source
+           // that knows OAuth caps (Codex: 272K real vs 1050K table). The
+           // resolution chain stays as fallback for unpatched gateways.
+           case let limit = HermesSettings.shared.contextWindow(forSession: sessionID)
+               ?? HermesModelContext.limit(
+                   forModel: gaugeModel(forSession: sessionID), settings: settings
+               ),
            limit > 0 {
             let used = min(used, limit)
             let fraction = Double(used) / Double(limit)
@@ -430,7 +435,9 @@ struct HermesSidebarView: View {
                 }
                 Button(settings.isSessionPinned(session.id)
                        ? HL("hermes.sessions.unpin") : HL("hermes.sessions.pin")) {
-                    settings.toggleSessionPin(session.id)
+                    // Local flip + best-effort server persist (0.20 keeps the
+                    // pin across devices; 0.19 400s and the local pin stands).
+                    addon.toggleSessionPin(session.id)
                 }
                 Menu(HL("hermes.sessions.color")) {
                     ForEach(Self.markColors, id: \.name) { mark in
@@ -529,6 +536,11 @@ struct HermesSidebarView: View {
     private func loadSessions() async {
         sessions = (try? await addon.transport().sessions(limit: 50)) ?? []
         addon.updateReadWatermarks(sessions: sessions)
+        // Server pins (0.20): first list from a pin-capable gateway migrates
+        // the local pins up; afterwards the server's view is adopted.
+        addon.syncServerPins(sessions: sessions)
+        // Composer/gauge labels follow the gateway's actual session models.
+        addon.reconcileSessionModels(sessions: sessions)
         loadedSessions = true
     }
 

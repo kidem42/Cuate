@@ -15,6 +15,7 @@ import com.aispotlight.android.data.MessageEntity
 import com.aispotlight.android.data.toDomain
 import com.aispotlight.android.data.toEntity
 import com.aispotlight.android.hermes.HermesChatService
+import com.aispotlight.android.hermes.HermesTransport
 import com.aispotlight.android.providers.TranscriptionService
 import com.aispotlight.android.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
@@ -1224,8 +1225,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = activeConversation?.hermesSessionId ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                HermesChatService.transport(settings).lockModel(sessionId, provider, model)
-                settings.setHermesSessionModel(sessionId, "$provider|$model")
+                val (lockedProvider, lockedModel) =
+                    HermesChatService.transport(settings).lockModel(sessionId, provider, model)
+                // 0.20: a config model_routes alias can silently reroute the
+                // lock to another provider — record and surface the TRUTH,
+                // not the request (desktop parity, live find 2026-08-13).
+                settings.setHermesSessionModel(sessionId, "$lockedProvider|$lockedModel")
+                if (lockedProvider != provider) {
+                    _errorText.value = getApplication<android.app.Application>().getString(
+                        R.string.hermes_lock_rerouted, provider, lockedModel, lockedProvider)
+                    com.aispotlight.android.core.Diagnostics.log(
+                        "hermes", "lock.rerouted requested=$provider/$model locked=$lockedProvider/$lockedModel")
+                }
             } catch (e: Exception) {
                 _errorText.value = "Hermes: ${e.message?.take(160)}"
             }
@@ -1275,6 +1286,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val transport = HermesChatService.transport(settings)
                 val remote = transport.sessions(limit = 50)
+                // Context window of the agent's model, resolved by Hermes
+                // itself — the gauge's authoritative source. The route lives
+                // on the DASHBOARD server only (public path — the courier
+                // token is passed but optional). Once per process: the value
+                // moves when the agent's model changes, not per sync.
+                if (!hermesModelInfoFetched &&
+                    settings.hermesDashboardUrl.value.isNotEmpty()) {
+                    hermesModelInfoFetched = true
+                    try {
+                        val token = com.aispotlight.android.settings.ApiKeyStore
+                            .auxKey(com.aispotlight.android.settings.ApiKeyStore.AuxKey.HERMES_DASHBOARD) ?: ""
+                        val (model, length) = HermesTransport(
+                            settings.hermesDashboardUrl.value, token).modelInfo()
+                        settings.recordHermesAgentContext(model, length)
+                    } catch (e: Exception) {
+                        com.aispotlight.android.core.Diagnostics.log(
+                            "hermes", "modelinfo.fail ${e.message?.take(80)}")
+                    }
+                }
                 for (info in remote) {
                     // The session row knows the agent's ACTUAL model — keep
                     // the label map current for sessions locked elsewhere
@@ -1327,6 +1357,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (!title.isNullOrEmpty() && title != existing.title) {
                             dao.setTitle(existing.id, title, existing.updatedAt)
                         }
+                    }
+                }
+                // Server-side pins (Hermes 0.20; rows then carry `pinned`).
+                // First contact with a pin-capable gateway pushes the LOCAL
+                // pins up — the pins made before the upgrade must survive it,
+                // not be wiped by an empty server state. From then on the
+                // server owns the truth (pins made on the desktop land here).
+                if (remote.any { it.pinned != null }) {
+                    val serverPinned = remote.filter { it.pinned == true }.map { it.id }.toSet()
+                    val known = remote.map { it.id }.toSet()
+                    if (!settings.hermesPinsPushed) {
+                        settings.hermesPinsPushed = true
+                        val toPush = settings.hermesPinnedSessions.value
+                            .filter { it in known && it !in serverPinned }
+                        for (id in toPush) {
+                            try { transport.setSessionPinned(id, true) } catch (_: Exception) { }
+                        }
+                        if (toPush.isNotEmpty()) {
+                            com.aispotlight.android.core.Diagnostics.log(
+                                "hermes", "pins.migrated count=${toPush.size}")
+                        }
+                    } else {
+                        val preserved = settings.hermesPinnedSessions.value.filter { it !in known }
+                        settings.replaceHermesSessionPins(serverPinned + preserved)
                     }
                 }
                 // The gateway owns the list: sessions deleted on ANOTHER
@@ -1477,13 +1531,103 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Pin toggle used by the sidebar: local flip immediately (works against
+     * any gateway), server write best-effort (0.19 400s — the local pin
+     * still stands, exactly the pre-0.20 behavior).
+     */
+    fun toggleHermesSessionPin(sessionId: String) {
+        settings.toggleHermesSessionPin(sessionId)
+        val pinned = sessionId in settings.hermesPinnedSessions.value
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                HermesChatService.transport(settings).setSessionPinned(sessionId, pinned)
+            } catch (e: Exception) {
+                com.aispotlight.android.core.Diagnostics.log(
+                    "hermes", "pins.server write failed (kept local): ${e.message?.take(80)}")
+            }
+        }
+    }
+
+    /**
+     * Follow-ups typed while a turn streams, awaiting delivery per
+     * conversation. Steer-first: the text rides into the RUNNING turn via
+     * `/steer` (Hermes 0.20 + the Cuate gateway patch). When the gateway
+     * cannot steer (no patch, 409 race, transport error) the message waits
+     * here and goes out as an ordinary turn the moment the stream ends —
+     * before the patch such a send was silently DROPPED by the streaming
+     * guard (composer cleared, message gone).
+     */
+    private val pendingHermesFollowUps = mutableMapOf<String, MutableList<ChatMessage>>()
+
+    /** `model/info` fetched this process (it moves on model change, not per sync). */
+    private var hermesModelInfoFetched = false
+
+    /** Steer the in-flight turn, or queue for delivery right after it. */
+    private fun hermesSteerOrQueue(
+        userMessage: ChatMessage, conversationId: String, sessionId: String
+    ) {
+        viewModelScope.launch {
+            val queued = try {
+                withContext(Dispatchers.IO) {
+                    HermesChatService.transport(settings).steer(sessionId, userMessage.text)
+                }
+            } catch (e: Exception) {
+                com.aispotlight.android.core.Diagnostics.log(
+                    "hermes", "steer.fallback ${e.message?.take(120)}")
+                false
+            }
+            if (queued) {
+                // The agent sees the text inside the running turn — the
+                // bubble lands in the chat now, exactly like a normal send.
+                if (_activeConversationId.value == conversationId) {
+                    _messages.value = _messages.value + userMessage
+                    totalMessageCount += 1
+                }
+                dao.upsertMessage(userMessage.toEntity(conversationId))
+                dao.touch(conversationId, System.currentTimeMillis())
+            } else {
+                // Not steerable: hold it; the stream-end hook re-dispatches
+                // (the bubble appears then, in its true delivery order).
+                pendingHermesFollowUps.getOrPut(conversationId) { mutableListOf() }
+                    .add(userMessage)
+            }
+        }
+    }
+
+    /** Stream ended for [conversationId] — deliver any held follow-ups. */
+    private fun deliverPendingHermesFollowUps(conversationId: String) {
+        val held = pendingHermesFollowUps.remove(conversationId) ?: return
+        if (_activeConversationId.value != conversationId) {
+            // Conversation switched away mid-hold: requeue for its return.
+            pendingHermesFollowUps[conversationId] = held
+            return
+        }
+        held.firstOrNull()?.let { first ->
+            if (held.size > 1) {
+                // Coalesce: one turn carrying all held texts, in order.
+                val joined = held.joinToString("\n\n") { it.text }
+                hermesDispatch(first.copy(text = joined))
+            } else {
+                hermesDispatch(first)
+            }
+        }
+    }
+
     /** Runs the agent send pipeline (the Hermes analog of [dispatch]). */
     private fun hermesDispatch(userMessage: ChatMessage) {
         val conversationId = _activeConversationId.value ?: return
         val conversation = activeConversation ?: return
         val sessionId = conversation.hermesSessionId ?: return
         if (conversation.id != conversationId) return
-        if (conversationId in streamingIds.value) return
+        if (conversationId in streamingIds.value) {
+            // Turn in flight: steer it (text-only — attachments keep the
+            // pre-steer behavior of waiting for the turn).
+            if (userMessage.attachments.isEmpty()) {
+                hermesSteerOrQueue(userMessage, conversationId, sessionId)
+            }
+            return
+        }
 
         _errorText.value = null
         _messages.value = _messages.value + userMessage
@@ -1693,6 +1837,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 com.aispotlight.android.hermes.HermesRunService.end(getApplication())
+                // Follow-ups the steer path had to hold (gateway without the
+                // patch, 409 race) go out as an ordinary turn now.
+                deliverPendingHermesFollowUps(conversationId)
             }
         }
         streamJobs[conversationId] = job

@@ -33,6 +33,10 @@ struct HermesSessionInfo: Identifiable, Equatable {
     var inputTokens: Int
     var outputTokens: Int
     var preview: String?
+    /// Server-side pin (Hermes 0.20: PATCH persists it, the list backfills
+    /// pinned sessions past the recency window). nil = gateway predates the
+    /// field — local pins stay the only truth then.
+    var pinned: Bool?
 }
 
 /// One transcript row from `GET /api/sessions/{id}/messages`. `id` is the
@@ -96,13 +100,20 @@ enum HermesStreamEvent {
     case assistantDelta(String)
     /// Definitive full text. NOTE: a turn that failed on the gateway ALSO
     /// arrives this way — as error text with HTTP 200 (see fixtures).
-    case assistantCompleted(content: String, interrupted: Bool)
+    /// `runtime` — the ACTUAL (provider, model) this turn ran on
+    /// (`assistant.completed.runtime`, 0.20): the ground truth the label
+    /// reconciliation records, whatever was requested or rerouted.
+    case assistantCompleted(content: String, interrupted: Bool,
+                            runtime: (provider: String, model: String)?)
     /// `contextTokens` — the prompt size of the run's LAST model call, i.e.
     /// the session's actual context fill (what Hermes' own status bar shows).
     /// Only patched gateways send it (`usage.context_tokens`, our carried
     /// commit); stock 0.19.0 reports run-CUMULATIVE sums in `usage` — summed
     /// across every tool-loop call, so a 26-step turn "uses" 2M+ tokens.
-    case runCompleted(usage: TokenUsage, contextTokens: Int?)
+    /// `windowTokens` — the window the agent ACTUALLY operates with (OAuth
+    /// caps included; `usage.context_window`, the second line of the Cuate
+    /// gateway patch). Both gauge numbers ride the same frame.
+    case runCompleted(usage: TokenUsage, contextTokens: Int?, windowTokens: Int?)
     case done
     /// Approval frames (feature-flagged; exact name pinned down in stage 6
     /// against the live gateway) and anything a future Hermes adds.
@@ -238,9 +249,12 @@ nonisolated struct HermesTransport {
 
     /// `/api/model/info`: the agent's CURRENT model plus the context window
     /// Hermes resolved for it through its own full chain (config override →
-    /// probes → OAuth caps → table). Route is newer than 0.19.0-era VPS
-    /// deployments — absent there it 404s (probed 2026-07-29), which the
-    /// caller treats as "no data", never an error.
+    /// probes → OAuth caps → table). ⚠️ The route belongs to the DASHBOARD
+    /// server, not the API server (absent from both the 0.19 and 0.20 route
+    /// tables — established 2026-08-12; the earlier "newer than the VPS"
+    /// reading of the 404 was wrong). Callers reach it via a transport built
+    /// on `dashboardBaseURL`; against the API server it 404s, which reads as
+    /// "no data", never an error.
     func modelInfo() async throws -> (model: String, contextLength: Int) {
         let object = try await json("GET", "api/model/info")
         let model = object["model"] as? String ?? ""
@@ -263,7 +277,8 @@ nonisolated struct HermesTransport {
             toolCallCount: row["tool_call_count"] as? Int ?? 0,
             inputTokens: row["input_tokens"] as? Int ?? 0,
             outputTokens: row["output_tokens"] as? Int ?? 0,
-            preview: row["preview"] as? String
+            preview: row["preview"] as? String,
+            pinned: row["pinned"] as? Bool
         )
     }
 
@@ -295,12 +310,46 @@ nonisolated struct HermesTransport {
         _ = try await json("PATCH", "api/sessions/\(id)", body: ["title": title])
     }
 
+    /// Persists a pin on the gateway (Hermes 0.20; 0.19 rejected the field
+    /// with a 400 — callers treat failure as "server can't, local pin only").
+    func setSessionPinned(id: String, pinned: Bool) async throws {
+        _ = try await json("PATCH", "api/sessions/\(id)", body: ["pinned": pinned])
+    }
+
+    /// `POST /api/sessions/{id}/steer` — the Cuate gateway patch (0.20+,
+    /// advertised as `features.session_steer`): injects follow-up text into
+    /// the session's RUNNING turn via the agent's own steer primitive — it
+    /// rides on the next completed tool batch, no interrupt. Returns true
+    /// when queued, false when the agent refused the text. Throws
+    /// `.http(409, …)` (`no_active_turn`) when nothing is running — the
+    /// caller then falls back to an ordinary send.
+    func steer(sessionID: String, text: String) async throws -> Bool {
+        let object = try await json("POST", "api/sessions/\(sessionID)/steer",
+                                    body: ["text": text])
+        return (object["status"] as? String) == "queued"
+    }
+
     /// ⚠️ Required after `createSession`: a fresh session inherits the
     /// literal model "hermes-agent" and every turn 404s until locked
     /// (fixtures). Provider+model pairs come from `modelOptions()`.
-    func lockModel(sessionID: String, provider: String, model: String) async throws {
-        _ = try await json("POST", "api/sessions/\(sessionID)/model",
-                           body: ["model": model, "provider": provider])
+    ///
+    /// Returns what the gateway ACTUALLY locked. 0.20's handler runs the
+    /// body through config `model_routes` first, and an alias route there
+    /// silently overrides the explicit provider (found live 2026-08-13:
+    /// picked Codex, got Nous Portal — the 200 "success" carried
+    /// `runtime.provider: nous` all along). Callers must compare and tell
+    /// the user instead of celebrating the 200.
+    @discardableResult
+    func lockModel(sessionID: String, provider: String, model: String) async throws
+        -> (provider: String, model: String, routeSource: String) {
+        let object = try await json("POST", "api/sessions/\(sessionID)/model",
+                                    body: ["model": model, "provider": provider])
+        let runtime = object["runtime"] as? [String: Any] ?? [:]
+        return (
+            provider: runtime["provider"] as? String ?? provider,
+            model: runtime["model"] as? String ?? model,
+            routeSource: runtime["route_source"] as? String ?? ""
+        )
     }
 
     /// A transcript row's text. `content` comes back either as a plain
@@ -330,10 +379,41 @@ nonisolated struct HermesTransport {
         }.joined(separator: "\n")
     }
 
+    /// Hermes 0.20 paginated `/messages` (unqualified GET now serves the
+    /// LATEST 500, silently beheading long transcripts — the mirror merge
+    /// needs the whole thing). Explicit oldest-first pages restore the full
+    /// fetch: loop until a short page. A 0.19 gateway ignores the params and
+    /// serves everything at once — the first page is then short by the same
+    /// rule, so both generations converge on one code path.
     @concurrent
     func messages(sessionID: String) async throws -> [HermesTranscriptMessage] {
-        let object = try await json("GET", "api/sessions/\(sessionID)/messages")
-        let data = object["data"] as? [[String: Any]] ?? []
+        let pageSize = 500 // server cap per page (0.20)
+        let maxPages = 40  // 20k rows — far beyond any live session; a bound, not a target
+        var rows: [[String: Any]] = []
+        var offset = 0
+        for page in 0..<maxPages {
+            let object = try await json(
+                "GET", "api/sessions/\(sessionID)/messages",
+                query: [
+                    URLQueryItem(name: "order", value: "oldest"),
+                    URLQueryItem(name: "limit", value: String(pageSize)),
+                    URLQueryItem(name: "offset", value: String(offset)),
+                ])
+            let data = object["data"] as? [[String: Any]] ?? []
+            rows.append(contentsOf: data)
+            // 0.19 has no `pagination` block AND ignores the params — looping
+            // there would refetch the same full transcript forever.
+            if data.count < pageSize || object["pagination"] == nil { break }
+            offset += data.count
+            if page == maxPages - 1 {
+                // Never truncate silently — a session this size deserves a trace.
+                Diagnostics.log("hermes", "messages: page cap hit session=\(sessionID) rows=\(rows.count)")
+            }
+        }
+        return Self.parseTranscript(rows)
+    }
+
+    private static func parseTranscript(_ data: [[String: Any]]) -> [HermesTranscriptMessage] {
         return data.compactMap { row in
             guard let id = row["id"] as? Int, let role = row["role"] as? String else { return nil }
             var callArguments: [(String, String, String)] = []
@@ -514,11 +594,23 @@ nonisolated struct HermesTransport {
         case "assistant.delta":
             return .assistantDelta(payload["delta"] as? String ?? "")
         case "assistant.completed":
+            // The turn's factual runtime (0.20). Absent/empty on older
+            // gateways — nil keeps the stored label untouched.
+            var runtime: (provider: String, model: String)?
+            if let raw = payload["runtime"] as? [String: Any] {
+                let provider = raw["provider"] as? String ?? ""
+                let model = raw["model"] as? String ?? ""
+                if !provider.isEmpty || !model.isEmpty {
+                    runtime = (provider, model)
+                }
+            }
             return .assistantCompleted(content: payload["content"] as? String ?? "",
-                                       interrupted: payload["interrupted"] as? Bool ?? false)
+                                       interrupted: payload["interrupted"] as? Bool ?? false,
+                                       runtime: runtime)
         case "run.completed":
             var usage = TokenUsage()
             var contextTokens: Int?
+            var windowTokens: Int?
             if let raw = payload["usage"] as? [String: Any] {
                 usage.inputTokens = raw["input_tokens"] as? Int ?? 0
                 usage.outputTokens = raw["output_tokens"] as? Int ?? 0
@@ -528,8 +620,11 @@ nonisolated struct HermesTransport {
                 if let context = raw["context_tokens"] as? Int, context > 0 {
                     contextTokens = context
                 }
+                if let window = raw["context_window"] as? Int, window > 0 {
+                    windowTokens = window
+                }
             }
-            return .runCompleted(usage: usage, contextTokens: contextTokens)
+            return .runCompleted(usage: usage, contextTokens: contextTokens, windowTokens: windowTokens)
         case "done":
             return .done
         default:

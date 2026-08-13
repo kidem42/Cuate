@@ -7,9 +7,12 @@ import Foundation
 /// their gateway identity (`externalID`/`seq`) and inserts everything that
 /// happened past us, in gateway order.
 ///
-/// Hermes 0.19.0 serves the FULL transcript only (`limit`/`offset`/`before_id`
-/// are ignored — probed live, see fixtures), so both catch-up and deep
-/// backfill work from one fetch; the local cache bound decides what stays.
+/// The transport's `messages()` always delivers the FULL transcript: on
+/// Hermes 0.20 it walks the paginated endpoint oldest-first (an unqualified
+/// GET there returns only the newest 500 — it would silently behead long
+/// sessions), on 0.19 the params are ignored and everything arrives at once.
+/// Either way both catch-up and deep backfill work from one complete fetch;
+/// the local cache bound decides what stays.
 @MainActor
 enum HermesMirrorSync {
 
@@ -63,7 +66,16 @@ enum HermesMirrorSync {
             // the full fetch — the gate only ever SKIPS work it can prove
             // redundant.
             var gateCount: Int?
-            if let sessions = try? await HermesAddon.shared.transport().sessions(limit: 50),
+            let gateSessions = try? await HermesAddon.shared.transport().sessions(limit: 50)
+            if let gateSessions {
+                // Same fetch doubles as the label reconcile: the composer
+                // shows the gateway's ACTUAL session model at launch and on
+                // every poll, however the model was changed (user call-out
+                // 2026-08-13 — the app must show real state, not our own
+                // last request).
+                HermesAddon.shared.reconcileSessionModels(sessions: gateSessions)
+            }
+            if let sessions = gateSessions,
                let row = sessions.first(where: { $0.id == sessionID }) {
                 if lastMergedCounts[sessionID] == row.messageCount {
                     // Proof the transcript did NOT grow — retires a turn that

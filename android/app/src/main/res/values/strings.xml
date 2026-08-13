@@ -191,6 +191,7 @@
     <string name="hermes_unpin_session">Unpin session</string>
     <string name="hermes_effort_default">effort: auto</string>
     <string name="hermes_menu_model">Session model</string>
+    <string name="hermes_context_gauge">Context (tap to compact)</string>
     <string name="hermes_menu_effort">Thinking level</string>
     <string name="hermes_file_saved">Saved: %1$s</string>
     <string name="hermes_file_download_failed">Download failed — path copied</string>
@@ -223,6 +224,9 @@
     <string name="hermes_dashboard_token">Dashboard token</string>
     <string name="hermes_dashboard_hint">Attached non-image files reach the agent\'s host through the Hermes dashboard files API (its own URL and token). Images always travel inline, no dashboard needed.</string>
     <string name="hermes_setup">Remote gateway setup (SSH)</string>
+    <string name="hermes_lock_rerouted">⚠️ Gateway rerouted the lock: you asked for %1$s, but its config pins this model elsewhere — the session now runs %2$s via %3$s.</string>
+    <string name="hermes_patch_title">Gateway patch: context gauge + mid-turn follow-ups</string>
+    <string name="hermes_patch_hint">Paste into the agent host\'s terminal AFTER updating Hermes to 0.20 (hermes update). Adds usage.context_tokens (the real context fill) and POST /steer (messages reach the agent mid-turn). Backup next to the file; refuses on unknown layouts. Safe to re-run; repeat after every Hermes update.</string>
     <string name="hermes_setup_hint">Run on the agent\'s machine (VPS, cloud, a Mac at home), then paste the printed API_SERVER_KEY above. API_SERVER_HOST=0.0.0.0 is required — by default the server listens on loopback only.</string>
 
     <!-- Costs (spend analytics) -->

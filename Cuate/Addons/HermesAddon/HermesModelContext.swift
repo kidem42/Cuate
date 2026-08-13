@@ -20,7 +20,9 @@ import Foundation
 ///      override for models neither source knows.
 enum HermesModelContext {
 
-    /// Hermes `DEFAULT_CONTEXT_LENGTHS` (agent/model_metadata.py, v0.19.0).
+    /// Hermes `DEFAULT_CONTEXT_LENGTHS` (agent/model_metadata.py, v0.20.0 —
+    /// re-diffed 2026-08-12: 0.20 added qwen3.8-max and grok-4.6, no other
+    /// table changes since the v0.19.0 port).
     /// Keys are stored lowercased — Hermes compares them against a
     /// lowercased model id, so its few mixed-case entries (HF org/name ids)
     /// can never match there; lowercasing makes them do what they intend.
@@ -74,6 +76,7 @@ enum HermesModelContext {
         // Qwen
         "qwen3.6-plus": 1_048_576,
         "qwen3.7-plus": 1_048_576,
+        "qwen3.8-max": 1_000_000,
         "qwen3-coder-plus": 1_000_000,
         "qwen3-coder": 262_144,
         "qwen3-max": 262_144,
@@ -85,6 +88,7 @@ enum HermesModelContext {
         "glm-5.2": 1_048_576,
         "glm": 202_752,
         // xAI Grok
+        "grok-4.6": 500_000,
         "grok-composer": 200_000,
         "grok-build-latest": 500_000,
         "grok-build": 256_000,

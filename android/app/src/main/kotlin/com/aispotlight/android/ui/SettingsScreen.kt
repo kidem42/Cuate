@@ -1608,4 +1608,42 @@ private fun HermesSection(settings: AppSettings) {
         }
         SettingsFootnote(stringResource(R.string.hermes_setup_hint))
     }
+
+    // Gateway patch block (assets/hermes_gateway_patch.sh — the same two
+    // anchored edits the desktop's one-click patcher makes): the real
+    // context fill in the API (usage.context_tokens) + POST /steer for
+    // mid-turn follow-ups. Paste-into-the-server-terminal, idempotent,
+    // backup next to the file, refuses on unknown layouts.
+    Column {
+        SettingsGroup(stringResource(R.string.hermes_patch_title)) {
+            item {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val patchCommands = remember {
+                    try {
+                        context.assets.open("hermes_gateway_patch.sh")
+                            .bufferedReader().use { it.readText() }
+                    } catch (_: Exception) { "" }
+                }
+                if (patchCommands.isNotEmpty()) {
+                    Column {
+                        Text(
+                            patchCommands,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 6,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        )
+                        EclipseTextButton(
+                            stringResource(R.string.action_copy),
+                            onClick = {
+                                clipboard.setText(androidx.compose.ui.text.AnnotatedString(patchCommands))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        SettingsFootnote(stringResource(R.string.hermes_patch_hint))
+    }
 }

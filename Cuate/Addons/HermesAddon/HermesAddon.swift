@@ -303,11 +303,24 @@ final class HermesAddon: ObservableObject {
                 currentModelPair = options.current
             }
             // Context window of the agent's model, resolved by Hermes itself
-            // (the gauge's authoritative source). Older gateways 404 the
-            // route — `try?` leaves the cached value / table fallback in
-            // charge (HermesModelContext.limit).
+            // (the gauge's authoritative source). `/api/model/info` has NEVER
+            // lived on the API server (checked against 0.19 and 0.20 route
+            // tables, 2026-08-12) — it belongs to the DASHBOARD server, so
+            // the primary call is only kept for a future/proxied gateway that
+            // does answer. The real source is the dashboard base URL when the
+            // user configured one (the route is in the dashboard's public
+            // paths — the courier token is passed but not required). Failing
+            // both, `try?` leaves the cached value / table fallback in charge
+            // (HermesModelContext.limit).
             if let info = try? await transport.modelInfo() {
                 settings.recordAgentContext(model: info.model, length: info.contextLength)
+            } else if let dashboard = settings.dashboardBaseURL {
+                let dashTransport = HermesTransport(
+                    baseURL: dashboard,
+                    apiKey: APIKeyStore.key(aux: .hermesDashboard) ?? "")
+                if let info = try? await dashTransport.modelInfo() {
+                    settings.recordAgentContext(model: info.model, length: info.contextLength)
+                }
             }
             if settings.cachedAgentIDs != models {
                 settings.cachedAgentIDs = models
@@ -399,6 +412,75 @@ final class HermesAddon: ObservableObject {
             }
         }
         refreshUnreadBadges(sessions: sessions)
+    }
+
+    /// Adopts the gateway's session-row models into the stored lock labels —
+    /// what the composer shows at LAUNCH must be the server's reality, not
+    /// the pair this app once requested (a lock changed from the phone/CLI,
+    /// a gateway restart, or a model-routes reroute all drift otherwise).
+    /// The row knows only the model — the provider survives when the model
+    /// still matches, and empties out when it does not (honest "unknown").
+    func reconcileSessionModels(sessions rows: [HermesSessionInfo]) {
+        for row in rows {
+            guard let model = row.model else { continue }
+            settings.reconcileSessionModel(sessionID: row.id, provider: "", model: model)
+        }
+    }
+
+    // MARK: - Server-side session pins (Hermes 0.20)
+
+    /// Reconciles pins with a fresh sessions list. On the FIRST contact with
+    /// a pin-capable gateway (rows carry `pinned`), local pins migrate UP —
+    /// the user's existing desktop pins must survive the 0.20 upgrade, not
+    /// be wiped by an empty server state. From then on the server owns the
+    /// truth (pins made on other devices land here), and local storage is
+    /// just its mirror plus any sessions the fetch window missed.
+    func syncServerPins(sessions rows: [HermesSessionInfo]) {
+        guard rows.contains(where: { $0.pinned != nil }) else { return } // 0.19 gateway
+        let serverPinned = Set(rows.filter { $0.pinned == true }.map(\.id))
+        let known = Set(rows.map(\.id))
+        let migrationFlag = "hermes.sessionPinsPushed"
+        if !UserDefaults.standard.bool(forKey: migrationFlag) {
+            let toPush = settings.pinnedSessionIDs.filter {
+                known.contains($0) && !serverPinned.contains($0)
+            }
+            UserDefaults.standard.set(true, forKey: migrationFlag)
+            guard toPush.isEmpty else {
+                Task { [weak self] in
+                    for id in toPush {
+                        try? await self?.transport().setSessionPinned(id: id, pinned: true)
+                    }
+                    Diagnostics.log("hermes", "pins.migrated count=\(toPush.count)")
+                    await self?.reloadSessionsListeners()
+                }
+                return // adopt on the refresh the push triggers
+            }
+        }
+        // Adopt: server state for sessions this fetch covered, local state
+        // kept for ids outside the window (pinned rows are backfilled by the
+        // server, so a REAL server pin is always in `rows`).
+        let preserved = settings.pinnedSessionIDs.filter { !known.contains($0) }
+        settings.replaceSessionPins(Array(serverPinned) + preserved)
+    }
+
+    /// Pin toggle used by the sidebar: local flip immediately (works against
+    /// any gateway), server write best-effort (0.19 400s — the local pin
+    /// still stands, exactly the pre-0.20 behavior).
+    func toggleSessionPin(_ sessionID: String) {
+        settings.toggleSessionPin(sessionID)
+        let pinned = settings.isSessionPinned(sessionID)
+        Task { [weak self] in
+            do { try await self?.transport().setSessionPinned(id: sessionID, pinned: pinned) }
+            catch { Diagnostics.log("hermes", "pins.server write failed (kept local): \(String(error.localizedDescription.prefix(80)))") }
+        }
+    }
+
+    /// Asks sidebar/settings surfaces to refetch their session lists (pin
+    /// migration just changed server state behind their backs). The sidebar
+    /// listens on `.hermesSessionsDidChange` — the same signal a turn's
+    /// session-create fires.
+    private func reloadSessionsListeners() {
+        NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
     }
 
     /// Immediate read-marking for the session whose conversation just came

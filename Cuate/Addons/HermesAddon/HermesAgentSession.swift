@@ -193,7 +193,16 @@ final class HermesAgentSession: AgentSession {
                         case .assistantDelta(let delta):
                             deltaCount += 1
                             continuation.yield(.text(delta))
-                        case .assistantCompleted(let content, _):
+                        case .assistantCompleted(let content, _, let runtime):
+                            // Ground truth of what this turn ACTUALLY ran on —
+                            // the stored label follows it (a reroute or a lock
+                            // changed elsewhere shows up right here).
+                            if let runtime {
+                                self.settings.reconcileSessionModel(
+                                    sessionID: sessionID,
+                                    provider: runtime.provider,
+                                    model: runtime.model)
+                            }
                             // Authoritative full text — with the agent's own
                             // streaming off, this is the ONLY text event.
                             // Gateway-side failures arrive HERE as error text
@@ -201,7 +210,13 @@ final class HermesAgentSession: AgentSession {
                             // "switch the model" hint so the user knows the
                             // way out (live 2026-07-29: quota cooldown).
                             continuation.yield(.finalText(Self.annotateGatewayFailure(content)))
-                        case .runCompleted(let usage, let contextTokens):
+                        case .runCompleted(let usage, let contextTokens, let windowTokens):
+                            // The agent's own effective window (OAuth caps
+                            // included) — tier 0 of the gauge denominator.
+                            if let windowTokens {
+                                self.settings.recordContextWindow(
+                                    windowTokens, forSession: sessionID)
+                            }
                             if !usage.isEmpty {
                                 continuation.yield(.usage(usage))
                                 // Context fill of THIS session. Patched
