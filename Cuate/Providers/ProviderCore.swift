@@ -153,6 +153,57 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
             return []
         }
     }
+
+    /// Preferred models for the dictation cleanup pass, best first — matched
+    /// the same way as `preferredDefaultModels`, against the provider's live
+    /// list.
+    ///
+    /// Cleanup is a trivial task (fillers, punctuation, a translation at most)
+    /// that runs once per PHRASE and strictly in order, so latency and price
+    /// bind and a frontier model buys nothing: these are each provider's small
+    /// tier, cheapest first. Chat defaults deliberately differ — there the same
+    /// providers list their flagship first.
+    ///
+    /// Prices below are $ per 1M input/output tokens, from each provider's own
+    /// pricing docs (checked 2026-08-12). They are a comment, not a contract:
+    /// the resolver matches these ids against the provider's LIVE model list,
+    /// so an id a provider stops serving is skipped rather than sent.
+    var cleanupPreferredModels: [String] {
+        switch self {
+        case .openai:
+            // luna (0.20/1.20) is the current generation's small tier, sold for
+            // exactly this shape of work ("cost-sensitive, high-volume") and
+            // able to turn reasoning off entirely. The fallbacks are the older
+            // non-reasoning small models — cheaper on paper, but the whole spread
+            // here is under a dollar a year at dictation volume, so latency
+            // decides, not price.
+            return ["gpt-5.6-luna", "gpt-4.1-nano", "gpt-4o-mini", "gpt-5-nano"]
+        case .anthropic:
+            // 1.00/5.00 — the cheapest and fastest Claude (Opus 5 is 5.00/25.00).
+            return ["claude-haiku-4-5"]
+        case .gemini:
+            // Flash-Lite is the budget tier; 2.5 Flash-Lite is 0.10/0.40.
+            return ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+        case .mistral:
+            // 0.06/0.18 — cheaper than both Ministral tiers (8B is 0.15/0.15).
+            return ["mistral-small-latest", "ministral-3b-latest", "ministral-8b-latest"]
+        case .deepseek:
+            // 0.14/0.28 — half of deepseek-chat (0.28/0.42).
+            return ["deepseek-v4-flash", "deepseek-chat"]
+        case .openrouter:
+            return []
+        case .kimi:
+            // 0.95/4.00 — the cheapest general Kimi (K3 is 3.00/15.00), but a
+            // whole order of magnitude above OpenAI's and Mistral's small tiers.
+            return ["kimi-k2.6"]
+        case .ollama:
+            // Small local models: free and instant, but the pull has to exist —
+            // `cleanupCheapMarkers` catches any other small tag the user has.
+            return ["gemma3:1b", "llama3.2:1b", "qwen2.5:3b", "gemma3", "llama3.2"]
+        case .hermes:
+            return []
+        }
+    }
 }
 
 // MARK: - Model catalog metadata
@@ -427,6 +478,12 @@ struct ChatRequestOptions {
     /// by the caller (on the main actor, where the model catalog lives) so the
     /// provider layer never has to reach into app state.
     var modelSupportsReasoning: Bool = false
+    /// Mechanical rewrites (dictation cleanup) want no reasoning at all: the
+    /// thinking tokens cost latency on a pass that runs once per phrase and
+    /// buys nothing on "strip the fillers, add the commas". Honored only where
+    /// the model documents an off switch (see `supportsNoReasoning`);
+    /// elsewhere the request falls back to the lowest effort it does accept.
+    var preferNoReasoning: Bool = false
 }
 
 // MARK: - Protocols
@@ -479,6 +536,14 @@ enum ModelCapabilities {
         case .mistral, .deepseek, .openrouter, .kimi, .ollama, .hermes:
             return false
         }
+    }
+
+    /// Whether the model documents `effort: "none"` — reasoning fully off, not
+    /// merely shallow. Only OpenAI's 5.6 generation states it (luna's model
+    /// page: "none, low, medium (default), high, xhigh, max"); everything else
+    /// gets the lowest effort it accepts instead of a value it would reject.
+    static func supportsNoReasoning(provider: ProviderID, model: String) -> Bool {
+        provider == .openai && model.lowercased().contains("gpt-5.6")
     }
 }
 

@@ -402,7 +402,14 @@ final class DictationService: NSObject, ObservableObject {
         try? await Task.sleep(nanoseconds: 600_000_000)
         guard !sessionCancelled else { return nil }
         guard let transcript = try? await TranscriptionService.transcribe(audioURL: url),
-              !transcript.isEmpty else { return nil }
+              !transcript.isEmpty else {
+            // A phrase dropped here is invisible to the user (chunked mode
+            // inserts nothing and stays silent) — leave a trace, otherwise
+            // "dictation lost a sentence" is only reconstructable from the
+            // duplicate spend records.
+            Diagnostics.log("dictation", "stt.empty after retry — phrase dropped")
+            return nil
+        }
         return transcript
     }
 
@@ -495,21 +502,13 @@ final class DictationService: NSObject, ObservableObject {
         let settings = AppSettings.shared
         await APIKeyStore.warmIfNeeded() // key lookups below are cache-only
 
-        let provider: LLMProvider
-        let model: String
-        let apiKey: String
-        if let mistralKey = APIKeyStore.key(for: .mistral) {
-            provider = OpenAICompatibleProvider.mistral
-            model = "mistral-small-latest"
-            apiKey = mistralKey
-        } else if let chatKey = APIKeyStore.key(for: settings.chatProvider),
-                  let chatModel = settings.selectedModel(for: settings.chatProvider) {
-            provider = ProviderRegistry.provider(for: settings.chatProvider)
-            model = chatModel
-            apiKey = chatKey
-        } else {
-            return transcript
-        }
+        // Settings → Voice → Dictation owns this choice; `resolvedDictationCleanup`
+        // is the same call the settings caption renders, so the model shown
+        // there is the model that runs. No usable provider = raw transcript.
+        guard let choice = settings.resolvedDictationCleanup() else { return transcript }
+        let provider = ProviderRegistry.provider(for: choice.provider)
+        let model = choice.model
+        let apiKey = (try? settings.resolvedAPIKey(for: choice.provider)) ?? ""
 
         let prompt: String
         switch mode {
@@ -528,16 +527,21 @@ Translate this dictated text into \(settings.dictationTargetLanguage). First men
         }
 
         var result = ""
+        let started = Date()
         let stream = provider.streamChat(
             messages: [LLMMessage(role: .user, text: prompt)],
             model: model,
             systemPrompt: nil,
-            options: ChatRequestOptions(maxTokens: 4096, reasoning: .fast),
+            options: ChatRequestOptions(maxTokens: 4096, reasoning: .fast, preferNoReasoning: true),
             apiKey: apiKey
         )
         for try await event in stream {
             if case .text(let chunk) = event { result += chunk }
         }
+        // Cleanup runs once per phrase and strictly in order, so a slow model
+        // here is what keeps the pill spinning after the stop — the timing is
+        // the only way to tell that apart from a slow transcription.
+        Diagnostics.log("dictation", "cleanup \(choice.provider.rawValue)/\(model) ms=\(Int(Date().timeIntervalSince(started) * 1000))")
         let trimmed = Self.stripEmDashes(from: result.trimmingCharacters(in: .whitespacesAndNewlines))
         return trimmed.isEmpty ? transcript : trimmed
     }

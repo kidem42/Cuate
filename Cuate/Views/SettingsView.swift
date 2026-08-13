@@ -961,6 +961,12 @@ struct SettingsView: View {
             if settings.dictationEnabled {
                 Toggle(L("dictation.cleanup"), isOn: $settings.dictationCleanup)
 
+                // The cleanup pass is a SECOND model, after transcription —
+                // it used to be a hidden hardcoded Mistral. Translate mode
+                // always runs it, so the picker stays visible even with the
+                // cleanup toggle off.
+                cleanupModelPicker
+
                 Toggle(L("dictation.chunked"), isOn: $settings.dictationChunked)
 
                 Picker(L("dictation.translateTo"), selection: $settings.dictationTargetLanguage) {
@@ -1004,6 +1010,73 @@ struct SettingsView: View {
             Text(L("dictation.footer"))
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+
+    /// Provider + model for the cleanup/translation pass, with a caption that
+    /// names what will ACTUALLY run: the choice can fall back (provider left
+    /// without a key), and the whole point of this control is that the second
+    /// model stops being invisible.
+    @ViewBuilder
+    private var cleanupModelPicker: some View {
+        // Only providers that can actually run right now — a keyless provider
+        // offered here would be a choice that silently falls back to another.
+        let providers = settings.cleanupProviders
+        let effective = settings.resolvedDictationCleanup()?.provider
+
+        VStack(alignment: .leading, spacing: 3) {
+            if !providers.isEmpty {
+            Picker(L("dictation.cleanup.provider"), selection: Binding(
+                get: { effective ?? providers[0] },
+                set: { settings.dictationCleanupProvider = $0 }
+            )) {
+                ForEach(providers) { provider in
+                    Label {
+                        Text(provider.displayName)
+                    } icon: {
+                        ProviderLogo(provider: provider, size: 14)
+                    }
+                    .tag(provider)
+                }
+            }
+
+            if let provider = effective {
+                let current = settings.dictationCleanupModel(for: provider)
+                let cached = settings.models(for: provider)
+                // Model lists are fetched per provider in the Chat tab and may
+                // not be loaded here yet — free typing beats an empty menu.
+                if cached.isEmpty || provider.usesManualModelEntry {
+                    TextField(L("dictation.cleanup.model"), text: Binding(
+                        get: { settings.dictationCleanupModel(for: provider) },
+                        set: { settings.setDictationCleanupModel($0, for: provider) }
+                    ), prompt: Text(settings.defaultCleanupModel(for: provider)))
+                    .textFieldStyle(.roundedBorder)
+                } else {
+                    // A model saved earlier (or fetched under a different
+                    // account) may be missing from the list — keep it selectable
+                    // instead of silently switching the user to another model.
+                    let options = current.isEmpty || cached.contains(current) ? cached : [current] + cached
+                    Picker(L("dictation.cleanup.model"), selection: Binding(
+                        get: { current },
+                        set: { settings.setDictationCleanupModel($0, for: provider) }
+                    )) {
+                        ForEach(options, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                }
+            }
+
+            Text(L("dictation.cleanup.caption"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(L("dictation.cleanup.unavailable"))
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

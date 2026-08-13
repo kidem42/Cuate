@@ -333,9 +333,15 @@ struct OpenAICompatibleProvider: LLMProvider {
                 ]
             }
         }
-        if options.reasoning != .auto,
-           ModelCapabilities.supportsReasoningControl(provider: .openai, model: model) {
-            body["reasoning"] = ["effort": options.reasoning == .fast ? "low" : "high"]
+        if ModelCapabilities.supportsReasoningControl(provider: .openai, model: model) {
+            if options.preferNoReasoning,
+               ModelCapabilities.supportsNoReasoning(provider: .openai, model: model) {
+                // The 5.6 models default to `medium` — a mechanical rewrite
+                // would otherwise think on every phrase.
+                body["reasoning"] = ["effort": "none"]
+            } else if options.reasoning != .auto {
+                body["reasoning"] = ["effort": options.reasoning == .fast ? "low" : "high"]
+            }
         }
 
         do {

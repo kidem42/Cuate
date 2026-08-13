@@ -300,6 +300,25 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(dictationCleanup, forKey: "dictationCleanup") }
     }
 
+    /// Provider running the dictation cleanup/translation pass. `nil` = not
+    /// chosen yet, which resolves to Mistral (small model — what this pass has
+    /// always used) or, without that key, whichever provider is available.
+    @Published var dictationCleanupProvider: ProviderID? {
+        didSet { defaults.set(dictationCleanupProvider?.rawValue ?? "", forKey: "dictationCleanupProvider") }
+    }
+
+    /// Cleanup model per provider, so switching provider back and forth keeps
+    /// each one's choice (same shape as `selectedModels`/`sttModels`).
+    @Published private(set) var dictationCleanupModels: [String: String] {
+        didSet { defaults.set(dictationCleanupModels, forKey: "dictationCleanupModels") }
+    }
+
+    /// Fallback markers for picking a cleanup model out of a fetched list when
+    /// none of the provider's `cleanupPreferredModels` is served: providers
+    /// name their small tier consistently enough that this keeps working
+    /// across releases (and catches whatever small model an Ollama user pulled).
+    static let cleanupCheapMarkers = ["mini", "nano", "lite", "haiku", "small", "flash", "turbo", ":1b", ":3b", ":4b"]
+
     @Published var dictationTargetLanguage: String {
         didSet { defaults.set(dictationTargetLanguage, forKey: "dictationTargetLanguage") }
     }
@@ -650,6 +669,9 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         dictationTranslateHotkey = Self.loadHotkey(defaults, forKey: "dictationTranslateHotkey", fallback: .defaultDictationTranslate)
         dictationEnabled = defaults.object(forKey: "dictationEnabled") as? Bool ?? true
         dictationCleanup = defaults.object(forKey: "dictationCleanup") as? Bool ?? true
+        // "" (and a missing value) means auto — see `dictationCleanupProvider`.
+        dictationCleanupProvider = ProviderID(rawValue: defaults.string(forKey: "dictationCleanupProvider") ?? "")
+        dictationCleanupModels = defaults.dictionary(forKey: "dictationCleanupModels") as? [String: String] ?? [:]
         dictationTargetLanguage = defaults.string(forKey: "dictationTargetLanguage") ?? "English"
         dictationChunked = defaults.object(forKey: "dictationChunked") as? Bool ?? true
         dictationWarmMinutes = defaults.object(forKey: "dictationWarmMinutes") as? Int ?? 0
@@ -849,6 +871,86 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         sttModels[provider.rawValue] = model
     }
 
+    // MARK: - Dictation cleanup model
+
+    func dictationCleanupModel(for provider: ProviderID) -> String {
+        let stored = dictationCleanupModels[provider.rawValue] ?? ""
+        if !stored.isEmpty { return stored }
+        return defaultCleanupModel(for: provider)
+    }
+
+    func setDictationCleanupModel(_ model: String, for provider: ProviderID) {
+        dictationCleanupModels[provider.rawValue] = model
+    }
+
+    /// The small/fast model this provider should clean dictation with, in
+    /// descending order of confidence: a preferred model the provider actually
+    /// serves → any model whose id reads as a small tier → the chat selection
+    /// (right answer when the list was never fetched — the user picked it, and
+    /// it is known to work) → the first preferred id as a literal guess.
+    func defaultCleanupModel(for provider: ProviderID) -> String {
+        let available = models(for: provider)
+        if !available.isEmpty {
+            if let match = Self.firstServed(of: provider.cleanupPreferredModels, in: available) {
+                return match
+            }
+            let lowercased = available.map { ($0, $0.lowercased()) }
+            if let cheap = lowercased.first(where: { _, name in
+                Self.cleanupCheapMarkers.contains(where: name.contains)
+            }) {
+                return cheap.0
+            }
+        }
+        return selectedModel(for: provider)
+            ?? available.first
+            ?? provider.cleanupPreferredModels.first
+            ?? ""
+    }
+
+    /// Resolves the cleanup/translation pass to a concrete provider+model, or
+    /// `nil` when nothing can run it (no keys) — the caller then inserts the
+    /// raw transcript. Both the dictation service and the Settings caption go
+    /// through here, so what the UI promises is what actually runs.
+    ///
+    /// Without an explicit choice this lands on Mistral's small model — what
+    /// this pass has always used — and falls through to any other usable
+    /// provider, so a setup without a Mistral key still gets its text cleaned.
+    func resolvedDictationCleanup() -> (provider: ProviderID, model: String)? {
+        if let chosen = dictationCleanupProvider, isCleanupProviderUsable(chosen) {
+            let model = dictationCleanupModel(for: chosen)
+            if !model.isEmpty { return (chosen, model) }
+        }
+        for provider in cleanupProviders {
+            let model = dictationCleanupModel(for: provider)
+            if !model.isEmpty { return (provider, model) }
+        }
+        return nil
+    }
+
+    /// Providers that can run the cleanup pass right now, Mistral first (the
+    /// historic default), then the chat provider, then the rest — the picker
+    /// lists exactly these, so a provider without a key never appears as a
+    /// choice that silently wouldn't run.
+    var cleanupProviders: [ProviderID] {
+        ProviderID.allCases
+            .filter { isCleanupProviderUsable($0) }
+            .sorted { lhs, rhs in cleanupRank(lhs) < cleanupRank(rhs) }
+    }
+
+    private func cleanupRank(_ provider: ProviderID) -> Int {
+        if provider == .mistral { return 0 }
+        if provider == chatProvider { return 1 }
+        return 2
+    }
+
+    /// Cloud providers need their key; local ones need the local class on.
+    /// Agent gateways never run this pass — they are chat roles, not models.
+    func isCleanupProviderUsable(_ provider: ProviderID) -> Bool {
+        if provider.isAgent { return false }
+        if provider.isLocal { return localModelsEnabled && !models(for: provider).isEmpty }
+        return APIKeyStore.hasKey(for: provider)
+    }
+
     // MARK: - Model list refresh
 
     /// Fetches the model list for a provider from its API and caches it.
@@ -870,15 +972,22 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     /// provider's `preferredDefaultModels` that appears — by exact match, or as
     /// the prefix of a dated snapshot id — falling back to the first model.
     static func preferredDefault(for provider: ProviderID, from models: [String]) -> String? {
-        for preferred in provider.preferredDefaultModels {
-            if let exact = models.first(where: { $0 == preferred }) {
+        firstServed(of: provider.preferredDefaultModels, in: models) ?? models.first
+    }
+
+    /// The same matching without the fall back to "whatever is first": the
+    /// cleanup picker needs to know that NONE of its preferred models is
+    /// served, so it can try its cheap-tier markers before settling.
+    static func firstServed(of preferred: [String], in models: [String]) -> String? {
+        for candidate in preferred {
+            if let exact = models.first(where: { $0 == candidate }) {
                 return exact
             }
-            if let prefixed = models.first(where: { $0.hasPrefix(preferred) }) {
+            if let prefixed = models.first(where: { $0.hasPrefix(candidate) }) {
                 return prefixed
             }
         }
-        return models.first
+        return nil
     }
 
     /// Refreshes the model list for the active provider in the background when
