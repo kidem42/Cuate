@@ -206,14 +206,17 @@ struct ChatWindow: View {
     /// most: send is disabled while its chat is loading, and a finished
     /// stream removes its own slot before the next send can start.
     @State private var streamSlots: [ChatStore.ConversationID: StreamSlot] = [:]
-    /// Tool steps of the ON-SCREEN conversation's in-flight agent turn (a
-    /// mirror of its slot's `liveSteps`, kept separate because the pill reads
-    /// it on every rebuild). Empty for native chats and between turns.
-    @State private var liveAgentSteps: [AgentStep] = []
-    /// Disclosure of the pill's live journal. Held here, not in the view: the
-    /// pill's hosting row is rebuilt on every step, and the state has to
-    /// outlive that. Collapsed per turn — reopens only if the user asks.
-    @State private var liveStepsExpanded = false
+    /// Live content of the "working…" pill (status line + step journal).
+    /// Deliberately `@State` and not `@StateObject`: this view must NOT
+    /// subscribe. The pill's own subtree observes it, so a step redraws the
+    /// pill alone instead of re-running this body — which would rebuild every
+    /// transcript item (hashing every message's text) and make the engine
+    /// re-lay out the whole document. Same arrangement as `StreamSlot.live`.
+    @State private var livePill = LiveTurnPillModel()
+    /// Whether the pill currently has steps. A plain flag rather than the
+    /// array: `showThinkingIndicator` needs to react to the pill appearing and
+    /// disappearing (rare), not to each step arriving (constant).
+    @State private var hasLiveSteps = false
     /// Whether the scroll position is near the newest message (reported by
     /// the transcript engine; mirrors its pin state).
     @State private var isNearBottom = true
@@ -463,61 +466,24 @@ struct ChatWindow: View {
             // before a relaunch) drives the same pill: our process has no
             // slot for it, so the status line and the steps come from the
             // transcript instead of the stream.
-            let external = externalTurn
+            // Revision deliberately carries NO per-step or per-status state:
+            // the pill's content arrives through `livePill`, which its own
+            // subtree observes. Rebuilding this row on every step is what put
+            // the main thread at 100% for the length of an agent turn — each
+            // rebuild made the engine re-solve layout for the entire
+            // transcript (spin-20260812-175422). Row reuse across turns is
+            // harmless now: the model, not a captured value, decides what is
+            // drawn.
             var hasher = Hasher()
             hasher.combine(baseRevision)
-            hasher.combine(chatStore.statusText)
-            hasher.combine(external != nil)
-            hasher.combine(liveStepsExpanded)
-            // Agent turns: every step (and every step's completion) must
-            // rebuild the pill — without this the list would freeze at
-            // whatever it held when the status line last changed.
-            let steps = external?.steps ?? liveAgentSteps
-            for step in steps {
-                hasher.combine(step.id)
-                hasher.combine(step.status.rawValue)
-                hasher.combine(step.finishedAt)
-            }
-            let statusText = external != nil ? AGL("agent.status.external") : chatStore.statusText
+            hasher.combine(externalTurn != nil)
+            let pill = livePill
+            let fallbackStatus = L("panel.thinking")
             items.append(TranscriptItem(id: "thinking-indicator", revision: hasher.finalize()) { [palette] in
                 AnyView(
-                    VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        ThinkingEqualizer()
-                        Text(statusText ?? L("panel.thinking"))
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        // ImageAddon: cancels a running image operation;
-                        // hidden otherwise. Agent turns are stopped from the
-                        // composer (send↔stop swap) — ONE affordance, not two.
-                        ImageOperationCancelButton()
-                    }
-                    // The journal as it fills. Lives here for the whole turn
-                    // (including after the agent's interim text has started a
-                    // bubble above), then attaches to the reply at delivery.
-                    // Collapsed by default; the disclosure lives in the
-                    // window so a per-step rebuild cannot snap it shut.
-                    if !steps.isEmpty {
-                        AgentLiveStepsView(steps: steps, expanded: liveStepsExpanded) {
-                            liveStepsExpanded.toggle()
-                        }
-                    }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    // Hairline stroke in the input field's color (theme mockup):
-                    // glass stays as it was, with no border.
-                    .overlay {
-                        if !palette.isGlass {
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(palette.inputStroke, lineWidth: 1)
-                        }
-                    }
-                    .environment(\.themePalette, palette)
-                    .fontDesign(palette.fontDesign)
-                    .frame(width: rowWidth, alignment: .leading)
+                    LiveTurnPill(model: pill, fallbackStatus: fallbackStatus, rowWidth: rowWidth)
+                        .environment(\.themePalette, palette)
+                        .fontDesign(palette.fontDesign)
                 )
             })
         }
@@ -759,6 +725,11 @@ struct ChatWindow: View {
                         onNeedOlder: { loadOlderMessages() },
                         onNeedNewer: { restoreNewerRows() }
                     )
+                    // A turn running on the GATEWAY has no local stream to
+                    // write into the pill, so its journal is mirrored in here.
+                    // Rides this inner view on purpose: the outer chain is at
+                    // the type-checker's limit (see RecordingStatusView).
+                    .onChange(of: externalTurn) { syncExternalTurnPill() }
 
                     // Floating "jump to latest" button (Telegram-style)
                     if !isNearBottom {
@@ -819,18 +790,21 @@ struct ChatWindow: View {
                     // then a reply "appeared out of nowhere". Restore from
                     // THIS conversation's slot (each in-flight chat keeps its
                     // own — the newest stream must not eat the others' pills).
-                    liveStepsExpanded = false
                     guard let slot = currentStreamSlot else {
                         // A chat with nothing in flight shows no pill — the
                         // previous chat's steps must not ride along.
-                        liveAgentSteps = []
+                        livePill.clear()
+                        hasLiveSteps = false
                         return
                     }
                     chatStore.setLoading(true)
-                    liveAgentSteps = slot.liveSteps
-                    if slot.awaitingText || !slot.liveSteps.isEmpty,
-                       let status = slot.lastStatus {
-                        chatStore.statusText = status
+                    let restoredStatus = (slot.awaitingText || !slot.liveSteps.isEmpty)
+                        ? slot.lastStatus : nil
+                    livePill.begin(turnID: slot.stub?.id.uuidString ?? chatStore.conversation.storageKey,
+                                   status: restoredStatus, steps: slot.liveSteps)
+                    hasLiveSteps = !slot.liveSteps.isEmpty
+                    if let restoredStatus {
+                        chatStore.statusText = restoredStatus
                     }
                 }
 
@@ -1832,7 +1806,8 @@ struct ChatWindow: View {
             // orphan bubble for that beat.
             streamSlots.removeValue(forKey: chatStore.conversation)
             chatStore.statusText = nil
-            liveAgentSteps = []
+            livePill.clear()
+            hasLiveSteps = false
             chatStore.setLoading(false)
         }
         // Agent conversation: "new chat" must also mean a NEW gateway
@@ -1870,7 +1845,8 @@ struct ChatWindow: View {
         streamSlots.removeValue(forKey: chatStore.conversation)
         pendingAgentApproval = nil
         chatStore.statusText = nil
-        liveAgentSteps = []
+        livePill.clear()
+        hasLiveSteps = false
         chatStore.setLoading(false)
         chatStore.addMessage(text: AGL("agent.stopped"), isUser: false, messageType: .system)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -2005,7 +1981,7 @@ struct ChatWindow: View {
     private var showThinkingIndicator: Bool {
         if externalTurn != nil { return true }
         return chatStore.isLoading
-            && (chatStore.statusText != nil || !liveAgentSteps.isEmpty
+            && (chatStore.statusText != nil || hasLiveSteps
                 || chatStore.messages.last?.isUser == true)
     }
 
@@ -2014,6 +1990,28 @@ struct ChatWindow: View {
     /// outlived a relaunch — the slot died with the process, the run did
     /// not). Our own stream always wins: while a slot exists the pill
     /// belongs to it, and the mirror is deliberately blind mid-turn anyway.
+    /// Mirrors a gateway-run turn's journal into the pill's model. Those
+    /// arrive on mirror polls (seconds apart), not per token, so copying is
+    /// cheap — and going through the model keeps the transcript row out of
+    /// the rebuild, exactly as the local stream does.
+    private func syncExternalTurnPill() {
+        guard let turn = externalTurn else { return }
+        // No id on the turn itself, and `lastRowAt` moves with every poll —
+        // keying on that would restart the turn (and snap the journal shut)
+        // on each one. The FIRST step's id is stable for the run and differs
+        // between runs; before any step lands there is nothing to keep open.
+        let turnID = "external|" + (turn.steps.first?.id
+            ?? String(turn.lastRowAt.timeIntervalSince1970))
+        if livePill.turnID != turnID {
+            livePill.begin(turnID: turnID,
+                           status: AGL("agent.status.external"),
+                           steps: turn.steps)
+        } else {
+            livePill.steps = turn.steps
+        }
+        hasLiveSteps = !turn.steps.isEmpty
+    }
+
     private var externalTurn: HermesLiveTurn? {
         guard chatStore.conversation.isAgent, currentStreamSlot == nil else { return nil }
         return hermesAddon.liveTurn(forConversationKey: chatStore.conversation.storageKey)
@@ -2379,9 +2377,10 @@ struct ChatWindow: View {
         if origin == chatStore.conversation {
             chatStore.setLoading(true)
             chatStore.statusText = nil
-            liveAgentSteps = []
             // Each turn starts collapsed; expanding is the user's call.
-            liveStepsExpanded = false
+            livePill.begin(turnID: origin.storageKey + "|" + String(Date().timeIntervalSince1970),
+                           status: nil, steps: [])
+            hasLiveSteps = false
             pendingRetry = nil
         }
         let history = historyOverride ?? chatStore.activeContextMessages
@@ -2550,7 +2549,7 @@ struct ChatWindow: View {
                         // exception: the pill carries the steps, and killing
                         // it on the agent's "let me check…" would hide every
                         // tool it runs afterwards.
-                        if isLive, chatStore.statusText != nil, liveAgentSteps.isEmpty,
+                        if isLive, chatStore.statusText != nil, !hasLiveSteps,
                            reply != nil || !pendingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             chatStore.statusText = nil
                         }
@@ -2574,11 +2573,17 @@ struct ChatWindow: View {
                     case .status(let status):
                         flush() // keep text/status ordering intact
                         if owns { streamSlots[origin]?.lastStatus = status }
-                        if isLive { chatStore.statusText = status }
+                        if isLive {
+                            livePill.status = status
+                            chatStore.statusText = status
+                        }
                     case .agentStepsLive(let steps):
                         flush() // same ordering rule as .status
                         if owns { streamSlots[origin]?.liveSteps = steps }
-                        if isLive { liveAgentSteps = steps }
+                        if isLive {
+                            livePill.steps = steps
+                            hasLiveSteps = !steps.isEmpty
+                        }
                     case .toolContext(let context):
                         // Arrives once per round, at its end. Stored on the
                         // reply (never rendered) so follow-up turns keep the
@@ -2737,7 +2742,8 @@ struct ChatWindow: View {
                 chatStore.statusText = nil
                 // The journal's live copy retires with the turn — the
                 // delivered reply carries its own (persisted) one.
-                liveAgentSteps = []
+                livePill.clear()
+            hasLiveSteps = false
                 chatStore.setLoading(false)
                 // Fold older turns into the rolling summary when the context
                 // grows. Skipped on cancellation (the chat is being deleted)

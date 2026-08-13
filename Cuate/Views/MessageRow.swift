@@ -529,6 +529,7 @@ struct MarkdownText: View {
     private static let renderCache: NSCache<NSString, RenderBox> = {
         let cache = NSCache<NSString, RenderBox>()
         cache.countLimit = 512
+        cache.totalCostLimit = 8 << 20 // 8 MB of source text
         return cache
     }()
 
@@ -537,12 +538,20 @@ struct MarkdownText: View {
             .fixedSize(horizontal: false, vertical: true) // preserve line breaks/height
     }
 
+    /// The key is a HASH of the text, not the text: interpolating a 14 000
+    /// character message into a fresh String on every body evaluation — and
+    /// keeping that copy alive as the NSCache key — cost more than the render
+    /// it was there to avoid (see `ProseRunText.runDigest`). The character
+    /// count rides along as the eviction cost and as a collision guard.
     private func cachedRender() -> AttributedString {
-        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(text)" as NSString
+        var hasher = Hasher()
+        hasher.combine(text)
+        let digest = UInt64(bitPattern: Int64(hasher.finalize()))
+        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(digest)|\(text.count)" as NSString
         if let boxed = Self.renderCache.object(forKey: key) { return boxed.value }
         let rendered = Self.inlineAttributed(text, linkColor: linkColor,
                                              palette: palette, agentFileLinks: agentFileLinks)
-        Self.renderCache.setObject(RenderBox(rendered), forKey: key)
+        Self.renderCache.setObject(RenderBox(rendered), forKey: key, cost: text.count)
         return rendered
     }
 

@@ -293,6 +293,23 @@ final class TranscriptEngineView: NSScrollView {
         let isReset = newToken != resetToken
         resetToken = newToken
 
+        // Nothing to reconcile: same rows, same revisions, no reset. The work
+        // below is NOT free in that case — `layoutSubtreeIfNeeded` re-solves
+        // Auto Layout across every hosted row and asks SwiftUI to re-size
+        // them, a pass whose cost scales with the WHOLE transcript rather than
+        // with what changed (a 6000 pt document measured in seconds, spin
+        // report 2026-08-12). ChatWindow rebuilds `items` on any of its own
+        // state changes, so most applies during a turn carry no news at all.
+        if !isReset, rows.count == items.count,
+           zip(rows, items).allSatisfy({ $0.id == $1.id && $0.revision == $1.revision }) {
+            // The pin is still re-asserted: rows can change HEIGHT without
+            // changing revision (a hosted view that lays out asynchronously),
+            // and dropping the bottom by a few points is exactly the class of
+            // bug this engine exists to prevent.
+            if isPinnedToBottom { scrollToBottomInstant() }
+            return
+        }
+
         // Visual anchor for offset compensation: the first on-screen row
         // that survives the update keeps its screen position when content
         // is prepended above it (the "reading history while a backfill

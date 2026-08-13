@@ -993,9 +993,13 @@ private struct ProseRunText: View {
         let value: AttributedString
         init(_ value: AttributedString) { self.value = value }
     }
+    /// Bounded by BYTES, not entry count: entries here range from a one-line
+    /// paragraph to a 14 000-character agent answer, so a flat count limit
+    /// either starves long conversations or lets a few giants own the memory.
     private static let cache: NSCache<NSString, Box> = {
         let cache = NSCache<NSString, Box>()
-        cache.countLimit = 256
+        cache.countLimit = 512
+        cache.totalCostLimit = 8 << 20 // 8 MB of source text
         return cache
     }()
 
@@ -1005,26 +1009,42 @@ private struct ProseRunText: View {
     }
 
     private func cached() -> AttributedString {
-        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(isDocument)|\(Self.runKey(run))" as NSString
+        let (digest, cost) = Self.runDigest(run)
+        let key = "\(palette.themeID)|\(colorScheme)|\(linkColor)|\(agentFileLinks)|\(isDocument)|\(digest)|\(cost)" as NSString
         if let boxed = Self.cache.object(forKey: key) { return boxed.value }
         let built = build()
-        Self.cache.setObject(Box(built), forKey: key)
+        Self.cache.setObject(Box(built), forKey: key, cost: cost)
         return built
     }
 
-    /// Stable cache identity of the run's content.
-    private static func runKey(_ run: [MarkdownBlocksView.Block]) -> String {
-        run.map { block -> String in
+    /// Stable cache identity of the run's content, as a HASH rather than the
+    /// text itself. The text-as-key version made every render of every row
+    /// concatenate the whole message into a fresh String just to look itself
+    /// up — O(message) per body evaluation, on a path AppKit re-enters for the
+    /// whole transcript on each layout pass — and then had NSCache retain that
+    /// copy, so the cache cost twice the text it saved (spin-20260812-175422).
+    ///
+    /// Returns the digest and the character count, which doubles as the
+    /// NSCache cost and as a second discriminator against hash collisions.
+    private static func runDigest(_ run: [MarkdownBlocksView.Block]) -> (UInt64, Int) {
+        var hasher = Hasher()
+        var characters = 0
+        func feed(_ tag: String, _ text: String) {
+            hasher.combine(tag)
+            hasher.combine(text)
+            characters += text.count
+        }
+        for block in run {
             switch block {
-            case .paragraph(let text): return "p:\(text)"
-            case .heading(let level, let text): return "h\(level):\(text)"
-            case .bullets(let items): return "b:\(items.joined(separator: "\u{1}"))"
-            case .numbered(let items): return "n:\(items.joined(separator: "\u{1}"))"
-            case .tasks(let items):
-                return "t:\(items.map { ($0.checked ? "1" : "0") + $0.text }.joined(separator: "\u{1}"))"
-            default: return ""
+            case .paragraph(let text): feed("p", text)
+            case .heading(let level, let text): feed("h\(level)", text)
+            case .bullets(let items): items.forEach { feed("b", $0) }
+            case .numbered(let items): items.forEach { feed("n", $0) }
+            case .tasks(let items): items.forEach { feed($0.checked ? "t1" : "t0", $0.text) }
+            default: break
             }
-        }.joined(separator: "\u{2}")
+        }
+        return (UInt64(bitPattern: Int64(hasher.finalize())), characters)
     }
 
     private func inline(_ text: String) -> AttributedString {
