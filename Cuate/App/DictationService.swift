@@ -461,6 +461,27 @@ final class DictationService: NSObject, ObservableObject {
             capture.endRecording(keepWarmSeconds: keepWarm) { continuation.resume() }
         }
 
+        // Dead-input guard: a session whose RAW peak never left digital
+        // silence would bill STT for real minutes and come back empty — the
+        // log's mystery `stt.empty after retry` drops (live 2026-08-14: a
+        // Bluetooth headset became the default input with its mic profile
+        // never engaging, streaming zeros). Real mics never flatline (room
+        // tone ≫ -80 dBFS), so this only fires on genuinely dead inputs;
+        // quiet speech goes to STT exactly as before. ≥2s so an accidental
+        // tap-toggle doesn't nag. Chunked sessions can only reach here
+        // flatlined in full: rotation requires detected speech.
+        let sessionPeak = capture.sessionPeakDB()
+        if sessionPeak <= -80, Date().timeIntervalSince(segmentStart) >= 2 {
+            Diagnostics.log("dictation", "silence.session peak=\(Int(sessionPeak))dB — stt skipped, input device likely dead")
+            NSSound.beep()
+            NotificationService.shared.postDictationSilentInput()
+            try? FileManager.default.removeItem(at: finishedURL)
+            processingChain = nil
+            phase = .idle
+            hideWidget()
+            return
+        }
+
         if chunkedMode {
             // Queue the final segment and wait for the ordered pipeline to drain.
             enqueueSegment(finishedURL)
@@ -950,9 +971,21 @@ nonisolated final class MicCapture {
         /// Broadband twin of `bandFloors` — the excess over it drives the
         /// level indicator AND the VAD (gain-independent thresholds).
         var levelFloor: Float?
+        /// RAW peak dB (RMS, absolute) since `beginRecording` — the dead-input
+        /// detector. A live mic never flatlines: room tone sits far above
+        /// -80 dBFS, while a Bluetooth mic whose HFP profile never engaged
+        /// streams exact zeros (clamped to -90/-160 below).
+        var rawPeakDB: Float = -160
     }
 
     // MARK: Control plane (serialized, off the main thread)
+
+    /// RAW peak dB of the current/last recording session (dead-input check).
+    func sessionPeakDB() -> Float {
+        state.lock.lock()
+        defer { state.lock.unlock() }
+        return state.rawPeakDB
+    }
 
     /// Starts (or reuses, when warm) the engine and begins writing to `url`.
     func beginRecording(to url: URL, deviceUID: String) {
@@ -965,6 +998,7 @@ nonisolated final class MicCapture {
                 state.lock.lock()
                 state.file = file
                 state.awaitingFirstBuffer = true
+                state.rawPeakDB = -160
                 state.lock.unlock()
             } catch {
                 Diagnostics.log("dictation", "capture.start.error \(String(error.localizedDescription.prefix(120)))")
@@ -1199,6 +1233,7 @@ nonisolated final class MicCapture {
         var bands = [Float](repeating: 0, count: bandCount)
         var dbExcess: Float = 0
         state.lock.lock()
+        state.rawPeakDB = max(state.rawPeakDB, db)
         let heardSomething = db > -85 || rawBands.contains { $0 > -85 }
         if state.bandFloors.count != bandCount, heardSomething {
             state.bandFloors = rawBands.map { $0 - 12 }

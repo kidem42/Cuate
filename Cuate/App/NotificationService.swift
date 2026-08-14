@@ -168,6 +168,19 @@ final class NotificationService: NSObject, ObservableObject, UNUserNotificationC
         center.removePendingNotificationRequests(withIdentifiers: ["approval-\(id)"])
     }
 
+    /// Dictation captured only digital silence — the input device is dead
+    /// (typically a Bluetooth headset that grabbed the default input without
+    /// engaging its mic profile). Without this the session just vanished:
+    /// nothing inserted, nothing shown, money billed for STT of nothing.
+    func postDictationSilentInput() {
+        let content = UNMutableNotificationContent()
+        content.title = L("dictation.silence.title")
+        content.body = L("dictation.silence.body")
+        // One stable id: repeated dead-mic attempts replace the banner
+        // instead of stacking a column of duplicates.
+        post(id: "dictation-silent-input", content: content)
+    }
+
     private func post(id: String, content: UNNotificationContent) {
         center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
             Diagnostics.log("notif", "posted id=\(id) error=\(error.map { String(describing: $0) } ?? "nil")")
