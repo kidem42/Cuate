@@ -19,6 +19,8 @@ final class PlaudAddon {
 
     /// Keeps the grant rotating while the app runs (see `startSessionUpkeep`).
     private var upkeepTimer: Timer?
+    /// Re-arms the connection flag once the Keychain warms up.
+    private var keychainObserver: NSObjectProtocol?
 
     private init() {}
 
@@ -68,7 +70,13 @@ final class PlaudAddon {
     /// Re-sync the published connection flag with the Keychain (launch,
     /// external key changes).
     func refreshConnectionState() {
-        settings.isConnected = PlaudClient.hasTokens
+        let connected = PlaudClient.hasTokens
+        // Logged on the EDGE only: this flag gates every Plaud tool, and when
+        // it sat false after an update nothing in the log said so.
+        if connected != settings.isConnected {
+            Diagnostics.log("plaud", "connected=\(connected)")
+        }
+        settings.isConnected = connected
         if settings.isConnected { settings.needsReauth = false }
     }
 
@@ -111,6 +119,18 @@ final class PlaudAddon {
     /// (2026-08-05: 8 days idle → refresh 401 → account silently dead).
     func startSessionUpkeep() {
         guard upkeepTimer == nil else { return }
+        // The connection flag is seeded at launch from a cache-only Keychain
+        // probe, and right after an app update the ACL re-authorizes for a few
+        // seconds — the probe says "no key" and the addon reads as
+        // disconnected until something asks again. The store republishes when
+        // the warm read lands, so re-arm on it: without this the Plaud tools
+        // (and the agent's recording chips) stayed off after every update
+        // until the user opened Settings (live, 2026-08-16).
+        keychainObserver = NotificationCenter.default.addObserver(
+            forName: .apiKeysDidChange, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in PlaudAddon.shared.refreshConnectionState() }
+        }
         let timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
             Task { @MainActor in await PlaudAddon.shared.maintainSession() }
         }

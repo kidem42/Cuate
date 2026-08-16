@@ -85,9 +85,45 @@ enum PlaudAddonStrings {
             .russian: "Дать доступ агенту"
         ],
         "plaud.grant.caption": [
-            .english: "Copies your Plaud sign-in to the agent's host, so it can search your recordings on every surface it has — chat, messengers, scheduled jobs — not only inside this app. Access stays read-only and is revocable at any time in the Plaud app. The agent needs the cuate-plaud plugin installed.",
-            .spanish: "Copia tu sesión de Plaud al host del agente, para que pueda buscar tus grabaciones en todas sus superficies — chat, mensajería, tareas programadas — y no solo dentro de esta app. El acceso sigue siendo de solo lectura y es revocable en cualquier momento en la app de Plaud. El agente necesita el plugin cuate-plaud instalado.",
-            .russian: "Копирует вашу авторизацию Plaud на машину агента, чтобы он искал записи на всех своих поверхностях — в чате, мессенджерах, задачах по расписанию, — а не только внутри этого приложения. Доступ остаётся только на чтение и отзывается в любой момент в приложении Plaud. Агенту нужен установленный плагин cuate-plaud."
+            .english: "Hands your Plaud sign-in to the agent's host, so it can search your recordings on every surface it has — chat, messengers, scheduled jobs — not only inside this app. Saves signing in twice; the agent can also connect on its own with `hermes plaud login`. Read-only, and revocable here or in the Plaud app. Requires the plaud plugin on the agent.",
+            .spanish: "Entrega tu sesión de Plaud al host del agente, para que pueda buscar tus grabaciones en todas sus superficies — chat, mensajería, tareas programadas — y no solo dentro de esta app. Evita iniciar sesión dos veces; el agente también puede conectarse por su cuenta con `hermes plaud login`. Solo lectura, revocable aquí o en la app de Plaud. Requiere el plugin plaud en el agente.",
+            .russian: "Передаёт вашу авторизацию Plaud на машину агента, чтобы он искал записи на всех своих поверхностях — в чате, мессенджерах, задачах по расписанию, — а не только внутри этого приложения. Избавляет от повторного входа; агент может подключиться и сам командой `hermes plaud login`. Только чтение, отзывается здесь или в приложении Plaud. Агенту нужен плагин plaud."
+        ],
+        "plaud.grant.recheck": [
+            .english: "Check", .spanish: "Comprobar", .russian: "Проверить"
+        ],
+        "plaud.grant.revoke": [
+            .english: "Revoke", .spanish: "Revocar", .russian: "Отозвать"
+        ],
+        "plaud.grant.status.absent": [
+            .english: "The agent has no access",
+            .spanish: "El agente no tiene acceso",
+            .russian: "У агента нет доступа"
+        ],
+        "plaud.grant.status.current": [
+            .english: "Access granted and current",
+            .spanish: "Acceso concedido y vigente",
+            .russian: "Доступ выдан и актуален"
+        ],
+        "plaud.grant.status.stale": [
+            .english: "Access granted, but from an earlier sign-in — grant it again",
+            .spanish: "Acceso concedido, pero de un inicio de sesión anterior: vuelve a concederlo",
+            .russian: "Доступ выдан, но от прежнего входа — выдайте заново"
+        ],
+        "plaud.grant.status.present": [
+            .english: "Access granted",
+            .spanish: "Acceso concedido",
+            .russian: "Доступ выдан"
+        ],
+        "plaud.grant.status.unknown": [
+            .english: "Could not check the agent:",
+            .spanish: "No se pudo comprobar el agente:",
+            .russian: "Не удалось проверить агента:"
+        ],
+        "plaud.grant.status.unreachable": [
+            .english: "the agent host did not answer",
+            .spanish: "el host del agente no respondió",
+            .russian: "машина агента не ответила"
         ],
         "plaud.grant.ok": [
             .english: "The agent has access", .spanish: "El agente tiene acceso",
