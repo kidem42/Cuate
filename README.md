@@ -103,7 +103,7 @@ The app's own image tools and OCR **stay out of agent chats by default** — the
 
 ## Plaud — your recorded meetings become answerable
 
-A [Plaud](https://www.plaud.ai) recorder captures meetings and calls; its app turns them into summaries and transcripts. Cuate connects your account so the assistant can **search that library and read from it inside any chat** — "what did we decide on Monday's call?" stops being a question you answer by scrolling.
+A [Plaud](https://www.plaud.ai) recorder captures meetings and calls; its app turns them into summaries and transcripts. Cuate connects your account so the assistant can **search that library and read from it in an ordinary chat** — "what did we decide on Monday's call?" stops being a question you answer by scrolling. It works with whichever provider that chat is on; conversations with a Hermes agent are the exception — there the tools belong to the agent, and Cuate adds none of its own.
 
 **Sign-in is OAuth in the browser** — the app never sees your password, tokens live in the Keychain, and access is revocable any time. Access is **read-only**: Cuate can find and read, never modify.
 
