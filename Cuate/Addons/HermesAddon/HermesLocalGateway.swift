@@ -95,105 +95,6 @@ enum HermesLocalGateway {
     static let contextWindowLine =
         "\"context_window\": max(0, getattr(getattr(agent, \"context_compressor\", None), \"context_length\", 0) or 0),"
 
-    // MARK: - Steer patch (POST /api/sessions/{id}/steer)
-    //
-    // Hermes 0.20 grew AIAgent.steer() — mid-turn follow-ups without an
-    // interrupt — but wired it only to its own messaging platforms and the
-    // TUI RPC, not the REST API this addon speaks. These anchored edits add
-    // the route: a per-session live-agent registry next to the shutdown
-    // registry (same lifecycle), the handler, and a `session_steer`
-    // capabilities flag the client gates its UI on. Anchors exist only in
-    // 0.20 (the shutdown registry itself is younger than 0.19), so on an
-    // outdated install the whole edit set simply reports non-applicable.
-    // Mirrors `HermesSettingsView.gatewayPatchRemoteCommands` — in sync!
-
-    private static let steerMarker = "_handle_session_steer"
-
-    /// Exact-string replacements; each `old` must occur exactly once.
-    private static let steerEdits: [(old: String, new: String)] = [
-        (
-            "        self._shutdown_interruptible_agents: Dict[int, Any] = {}\n",
-            "        self._shutdown_interruptible_agents: Dict[int, Any] = {}\n"
-            + "        # Cuate patch: live agent per session for mid-turn steering.\n"
-            + "        self._active_session_agents: Dict[str, Any] = {}\n"
-        ),
-        (
-            "            (\"POST\", \"/api/sessions/{session_id}/model\", self._handle_session_model_lock),\n",
-            "            (\"POST\", \"/api/sessions/{session_id}/model\", self._handle_session_model_lock),\n"
-            + "            (\"POST\", \"/api/sessions/{session_id}/steer\", self._handle_session_steer),\n"
-        ),
-        (
-            "                \"session_model_lock\": True,\n",
-            "                \"session_model_lock\": True,\n"
-            + "                \"session_steer\": True,\n"
-        ),
-        (
-            "                \"session_model_lock\": {\"method\": \"POST\", \"path\": \"/api/sessions/{session_id}/model\"},\n",
-            "                \"session_model_lock\": {\"method\": \"POST\", \"path\": \"/api/sessions/{session_id}/model\"},\n"
-            + "                \"session_steer\": {\"method\": \"POST\", \"path\": \"/api/sessions/{session_id}/steer\"},\n"
-        ),
-        (
-            "                    self._shutdown_interruptible_agents[id(agent)] = agent\n",
-            "                    self._shutdown_interruptible_agents[id(agent)] = agent\n"
-            + "                    if session_id:\n"
-            + "                        # Cuate patch: expose the live agent for /steer.\n"
-            + "                        self._active_session_agents[session_id] = agent\n"
-        ),
-        (
-            "                        self._shutdown_interruptible_agents.pop(id(agent), None)\n",
-            "                        self._shutdown_interruptible_agents.pop(id(agent), None)\n"
-            + "                        # Cuate patch: drop only this turn's registration.\n"
-            + "                        if session_id and self._active_session_agents.get(session_id) is agent:\n"
-            + "                            self._active_session_agents.pop(session_id, None)\n"
-        ),
-        (
-            "    @_admit_api_agent_request\n"
-            + "    async def _handle_session_chat(self, request: \"web.Request\") -> \"web.Response\":\n",
-            steerHandlerSource
-            + "    @_admit_api_agent_request\n"
-            + "    async def _handle_session_chat(self, request: \"web.Request\") -> \"web.Response\":\n"
-        ),
-    ]
-
-    /// The handler body inserted before `_handle_session_chat` (the
-    /// decorator above it must stay glued to session_chat, hence the anchor
-    /// includes it). Raw string: python's `"""` docstring lives inside.
-    private static let steerHandlerSource = #"""
-        async def _handle_session_steer(self, request: "web.Request") -> "web.Response":
-            """POST /api/sessions/{session_id}/steer - Cuate patch.
-
-            Nudges the running turn via AIAgent.steer(): the text rides on the
-            next completed tool batch, no interrupt (TUI session.steer semantics).
-            200 queued/rejected; 409 no_active_turn -> client sends normally.
-            """
-            auth_err = self._check_auth(request)
-            if auth_err:
-                return auth_err
-            session_id = request.match_info["session_id"]
-            _session, err = await self._get_existing_session_or_404(session_id)
-            if err:
-                return err
-            body, err = await self._read_json_body(request)
-            if err:
-                return err
-            text = str(body.get("text") or "").strip()
-            if not text:
-                return web.json_response(_openai_error("'text' is required", code="invalid_steer"), status=400)
-            agent = self._active_session_agents.get(session_id)
-            if agent is None or not hasattr(agent, "steer"):
-                return web.json_response(_openai_error("No active turn to steer for this session", code="no_active_turn"), status=409)
-            try:
-                accepted = bool(agent.steer(text))
-            except Exception as exc:
-                return web.json_response(_openai_error(f"steer failed: {exc}", code="steer_failed"), status=500)
-            return web.json_response({
-                "object": "hermes.session.steer",
-                "session_id": session_id,
-                "status": "queued" if accepted else "rejected",
-            })
-
-    """#
-
     /// The gateway source file, resolved like `cliPath`: the documented
     /// install root first, then the CLI's own `--version` answer ("Install
     /// directory: …") for relocated installs.
@@ -213,49 +114,25 @@ enum HermesLocalGateway {
         return FileManager.default.fileExists(atPath: resolved.path) ? resolved : nil
     }
 
-    /// Steer applies only when every anchor matches exactly once — 0.19
-    /// lacks the shutdown registry entirely, so there this is simply false
-    /// (not an error: the state row stays quiet until `hermes update`).
-    private static func steerApplicable(to src: String) -> Bool {
-        steerEdits.allSatisfy { src.components(separatedBy: $0.old).count == 2 }
-    }
-
-    /// Whether the steer edit is still worth making. Upstream grew its own
-    /// `POST /v1/runs/{id}/steer` after v2026.8.3 and advertises it as
-    /// `features.run_steer`; on such a gateway our route would only duplicate
-    /// it for our own turns, so we stop offering it. The flag is the ONLY
-    /// reliable discriminator — the version string does not move between
-    /// those builds (both report 0.20.0, probed live 2026-08-15).
-    @MainActor
-    private static var steerPatchWanted: Bool {
-        HermesAddon.shared.capabilities?.supports("run_steer") != true
-    }
-
     static func contextPatchState() async -> ContextPatchState {
         guard let file = await apiServerFile(),
               let src = try? String(contentsOf: file, encoding: .utf8) else { return .unavailable }
-        let steerWanted = await steerPatchWanted
         let contextDone = src.contains("\"context_tokens\"")
         let windowDone = src.contains("\"context_window\"")
-        let steerDone = src.contains(steerMarker)
-        // Settled = already ours, or not worth doing: the gateway serves
-        // `run_steer` itself, or its layout has no anchor for us.
-        let steerSettled = steerDone || !steerWanted || !steerApplicable(to: src)
         if (contextDone || !src.contains(contextPatchAnchor)),
-           (windowDone || !contextDone),  // window rides on the context line
-           steerSettled {
+           windowDone || !contextDone {  // window rides on the context line
             // Nothing more we can do here. "Ours is in place" reads as
             // patched; a fully foreign layout as unavailable.
-            return (contextDone || steerDone) ? .patched : .unavailable
+            return contextDone ? .patched : .unavailable
         }
         return .patchable
     }
 
     /// Edits api_server.py in place (backup lands next to it as .bak):
-    /// `usage.context_tokens` + the /steer route, each skipped when already
-    /// present or (steer on pre-0.20) not applicable. One write, after all
-    /// edits — a half-patched file can never hit disk. Returns whether
-    /// anything changed; the caller owns the restart.
+    /// `usage.context_tokens` + `context_window`, skipped when already
+    /// present. One write, after both edits — a half-patched file can never
+    /// hit disk. Returns whether anything changed; the caller owns the
+    /// restart.
     @discardableResult
     static func applyContextPatchFile() async throws -> Bool {
         guard let file = await apiServerFile(),
@@ -291,17 +168,10 @@ enum HermesLocalGateway {
             }
             if windowSites > 0 { work = out.joined(separator: "\n") }
         }
-        var steered = false
-        if await steerPatchWanted, !work.contains(steerMarker), steerApplicable(to: work) {
-            for edit in steerEdits {
-                work = work.replacingOccurrences(of: edit.old, with: edit.new)
-            }
-            steered = true
-        }
         guard work != src else {
             // Nothing applied. Distinguish "already done" (fine, no-op)
             // from "nothing matched at all" (foreign layout — surface it).
-            if src.contains("\"context_tokens\"") || src.contains(steerMarker) { return false }
+            if src.contains("\"context_tokens\"") { return false }
             throw SetupError.patchFailed("anchor not found")
         }
         try await syntaxCheck(work)
@@ -312,7 +182,7 @@ enum HermesLocalGateway {
         } catch {
             throw SetupError.patchFailed(error.localizedDescription)
         }
-        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) window=\(windowSites) steer=\(steered) file=\(file.path)")
+        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) window=\(windowSites) file=\(file.path)")
         return true
     }
 

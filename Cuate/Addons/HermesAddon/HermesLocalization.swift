@@ -401,9 +401,9 @@ enum HermesAddonStrings {
             .russian: "Включаю точную метрику контекста…"
         ],
         "hermes.patch.found": [
-            .english: "This gateway does not serve the real context fill (usage.context_tokens / context_window), so the gauge runs on an estimate. Cuate can patch the gateway's api_server.py — anchored edits, a backup saved next to the file. Mid-turn follow-ups (/steer) are added only when the gateway has no stock route of its own. A Hermes update rolls this back; the offer will then reappear here.",
-            .spanish: "Este gateway no expone el llenado real del contexto (usage.context_tokens / context_window), así que el indicador funciona con una estimación. Cuate puede parchear api_server.py del gateway: ediciones ancladas, con copia de seguridad junto al archivo. Los mensajes durante el turno (/steer) se añaden solo si el gateway no trae su propia ruta. Una actualización de Hermes lo revierte; la oferta reaparecerá aquí.",
-            .russian: "Этот гейтвей не отдаёт реальное заполнение контекста (usage.context_tokens / context_window) — индикатор живёт на оценке. Cuate может пропатчить api_server.py гейтвея: правки по якорям, бэкап останется рядом. Досылку сообщений в работающий ход (/steer) добавим только если у гейтвея нет своей штатной ручки. Обновление Hermes откатит правки — предложение снова появится здесь."
+            .english: "This gateway does not serve the real context fill (usage.context_tokens / context_window), so the gauge runs on an estimate. Cuate can patch the gateway's api_server.py — one anchored edit, a backup saved next to the file. A Hermes update rolls this back; the offer will then reappear here.",
+            .spanish: "Este gateway no expone el llenado real del contexto (usage.context_tokens / context_window), así que el indicador funciona con una estimación. Cuate puede parchear api_server.py del gateway: una edición anclada, con copia de seguridad junto al archivo. Una actualización de Hermes lo revierte; la oferta reaparecerá aquí.",
+            .russian: "Этот гейтвей не отдаёт реальное заполнение контекста (usage.context_tokens / context_window) — индикатор живёт на оценке. Cuate может пропатчить api_server.py гейтвея: одна правка по якорю, бэкап останется рядом. Обновление Hermes откатит правки — предложение снова появится здесь."
         ],
         "hermes.patch.run": [
             .english: "Enable accurate context gauge",
