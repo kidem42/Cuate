@@ -1,152 +1,100 @@
 # Cuate
 
-A Spotlight-style AI assistant for macOS. Press a hotkey anywhere, get a floating chat panel with your favorite LLM — plus voice dictation, screenshots-to-chat, OCR and web search.
+**A Spotlight-style AI assistant for macOS.** Press a hotkey anywhere, get a floating chat panel with the model of your choice — plus dictation, screenshots, OCR, web access and image tools. Your keys, your machine, no middleman server.
 
-## Features
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/macOS-14%2B-lightgrey.svg)](#install)
+[![Releases](https://img.shields.io/github/v/release/kidem42/Cuate)](https://github.com/kidem42/Cuate/releases)
+[![Android](https://img.shields.io/badge/Android-companion%20app-green.svg)](android/README.md)
 
-- **Spotlight-style floating panel** — summoned with a global hotkey from any app, appears instantly on the keypress, opens on the screen where your cursor is, remembers its position
-- **Multi-provider chat** — OpenAI, Anthropic (Claude), Google Gemini, Mistral, DeepSeek, Kimi (Moonshot) and OpenRouter (any model by slug, with a live capability catalog); model lists are fetched live from each provider's API
-- **Local models (Ollama)** — run models on your Mac, **free and offline, no API key**: enable in Settings → General, then pick the local provider in the chat like any other. Points at Ollama by default (editable endpoint, so LM Studio / llama.cpp / vLLM / LocalAI work too via the OpenAI-compatible API). For Ollama, a built-in console manages models without the terminal: browse installed models with their capabilities (vision/tools) and live memory footprint, **download** new ones with a progress bar, **delete**, and **start/stop** (load into / unload from memory) from Settings → Local models or a status-bar submenu. Local replies get their **own token cap** (default: no limit — local tokens are free, and thinking models never get truncated mid-thought). Sending to a model that is not in memory asks first — loading costs time and RAM — and explains that the model unloads again after ~5 minutes of inactivity (pin it in Settings → Local models to keep it resident). A master switch can disable cloud providers entirely for a fully offline setup
-- **Voice input**
-  - Speech-to-text via **Mistral (Voxtral)**, **OpenAI** or **Deepgram** — pick the provider in Settings → Voice
-  - Voice messages in chat with playback
-  - System-wide **dictation**: press a hotkey in any text field, speak, and the transcribed text is typed for you phrase by phrase as you talk (chunked mode, on by default); capture survives Bluetooth headsets switching audio profiles mid-warm-up — the mic silently retries until the device settles
-  - **Dictation with translation** into a target language on the fly — the pill under the notch shows the language's ISO badge; click it to switch the language mid-dictation
-  - Optional LLM cleanup of transcribed text (punctuation, filler words)
-- **Selection capture** — select text in any app (including WhatsApp/Telegram/Slack), press the panel hotkey, and it lands in the input field as an editable quote
-- **LayoutFix addon** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES): automatically as you type or by hotkey; off by default. Detection is statistical (letter trigrams + word frequencies + the system dictionary), so names, word forms and typos convert too — and a curated tech-terms list handles acronyms the statistics can't (`РЕЬД` → `HTML`, and css/json/png/…)
-- **Image tools addon** — process an attached image in one click. **Background removal** and **upscale** run **on-device for free** by default (Apple Vision / Core Image — no key), with higher-quality cloud models optional (one fal.ai key): upscale (Recraft Crisp / Topaz / SeedVR2 / Real-ESRGAN), background removal (Bria RMBG-2.0 / BiRefNet v2). **Object removal** uses fal.ai (Bria Eraser / Object Removal) via an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`; one-click Save to Downloads or a custom folder; per-session/month spend counter; on by default. Transparency is handled end-to-end: transparent inputs are flattened for alpha-blind cloud models (no original background "resurrecting" from under the mask), background-removal results get leftover RGB under transparency scrubbed (nothing of the source leaks in the file), and upscaling a cutout restores its transparency locally from the original alpha mask
-- **Calendar & Reminders addon** — the assistant reads your schedule and creates events and reminders through the macOS Calendar (EventKit): iCloud, Google, Exchange — whatever is already synced into the system, no OAuth and no extra keys. Per-calendar checkboxes decide what the assistant can see (unchecked calendars are invisible to it entirely); data leaves the device only as part of a schedule-related question to your chosen provider. Off by default (Settings → General)
-- **Plaud addon (works with Plaud)** — connect your [Plaud](https://www.plaud.ai) voice-recorder account and the assistant can search your recorded meetings and read their AI summaries and transcripts in any chat: "what did we decide on Monday's call?" now has an answer. Sign-in is OAuth in the browser (the app never sees the password; tokens live in the Keychain, access revocable any time). Recordings the model finds or reads attach to the reply as **cards**: click one for a preview with every summary tab (Summary, Highlights, …), the **full transcript with clickable timecodes**, and **inline audio** streamed straight from Plaud (seek anywhere, Now Playing / media keys supported — clicking a transcript timestamp plays from that moment). Unprocessed recordings are flagged and deep-link into Plaud's web app where processing starts (the API is read-only). `/plaud <question>` pins a turn to the notes; a privacy mode makes recordings visible **only** via that command. Off by default (Settings → General)
-- **Chat files** — a folder button in the chat header (ordinary chats, mirroring the agent's one) lists everything exchanged with the model in the conversation: documents it produced (HTML/Markdown artifacts), Plaud recordings it touched, files you attached — each opens its preview, with reveal-in-Finder at hand
-- **Hermes Agent addon** — connect a self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) (Nous Research) as a role in the chat switcher, right next to your prompt presets. The agent is a black box with its own memory, tools and model keys; Cuate becomes one more surface of the same agent — what you started in Telegram or the CLI continues here and vice versa. Each gateway **session opens as its own conversation** (own history, own streaming isolation), with a management sidebar on the left: sessions (create / rename / pin / color / delete, unread badges), the agent's skills and toolsets, and its runtime passport (model + the host where its commands actually execute). Slash-typing `/` autocompletes the agent's **skills**; a composer control switches the session's **model and reasoning effort**; tool runs show live in the status pill and persist as a collapsible step journal. Files travel **both ways**: attachments (and pasted images) are couriered onto the agent's host through the dashboard files API, so what you attach on one device is real on every surface — and files the agent creates come back the same way: HTML/Markdown silently auto-download into **artifact cards with in-app preview** (refreshed when a newer reply mentions the same path — the agent's edits show up), other files download on click (to ~/Downloads only on explicit action), file paths are clickable right in the reply text, and a header folder lists every file of the chat. On a local gateway the same chips simply open Finder. System **notifications** cover finished turns — including runs that completed while the app was closed or the task came from another surface (background gateway watch). Mirror history keeps the gateway as the source of truth with catch-up sync and deduplication. Setup is two copy-paste commands (local or over SSH, instructions built into Settings); the token lives in the Keychain and the endpoint works over loopback, LAN or Tailscale. The app's own image tools and OCR **stay out of agent chats by default** — the agent owns its sessions end-to-end; an opt-in toggle (Settings → Hermes Agent → App features) brings the Upscale / Remove Background / Remove Objects / Extract Text actions into agent sessions too, running on the app's own models and keys, with results kept local to Cuate (invisible to the agent's other surfaces). Off by default (Settings → General)
-- **World Time addon** — a timezone comparison grid in a floating glass panel, summoned from the menu bar or with ⌥⇧T: cities as rows, the home city's 24 hours as aligned columns (one vertical slice = one moment everywhere), night/working-hours coloring (**the working-hours band can be switched off** entirely — the grid then reads as plain day and night), a date strip with calendar picker (DST-aware), drag to reorder rows, right-click or double-click to change the home city; every IANA zone **plus ~240 major cities that are not zone names** (San Francisco, Munich, Osaka, Boston…), searchable in **English, Russian and Spanish at once whatever the interface language** — type ↓/↑ and Enter to pick without the mouse. Cities that share a zone stay separate rows under their own names, free and fully on-device. With the Calendar addon enabled the panel also shows a **busy lane** — your day's events as exact colored intervals above the grid — and clicking a half-hour slot in the selected column creates a **30-minute event right there**: the microphone starts immediately (say the title) or type it, and the event lands in your default calendar with an alert
-- **Attach images** — up to **5 images per message**, arriving by any mix of paths: paperclip button (multi-select), ⌘V paste (files, screenshots, browser images), drag & drop, screenshot hotkeys; HEIC/TIFF converted automatically. Staged images sit in a compact card above the input: a **single image keeps the full toolbar** (image tools + Extract Text), **several collapse to thumbnails** with per-image remove — the whole batch goes to the model in one message. Models without vision (e.g. DeepSeek) get each image OCR'd into text automatically. An image can be sent with no text at all — the active preset's prompt drives the handling
-- **Screenshots to chat** — capture the full screen or a selected area straight into the conversation
-- **OCR** — extract text from images **on-device for free** by default (Apple Vision; many languages incl. Cyrillic), or via **Mistral OCR** for layout-aware Markdown (tables/columns)
-- **Web access** — live search results (Brave Search API) plus a keyless **web_fetch** tool: the model reads a full page client-side (a promising search hit, or a URL you paste) — free, works with every provider, no key required, with private/local addresses blocked; externally sourced facts arrive with inline citations. The **tool budget per reply is configurable** (Settings → Web access, 1–12 rounds), and when it runs out the model must finalize its answer from what it gathered instead of ending empty. For staged work the model can request **extra working rounds** on its own — the reply keeps growing in the same bubble, each round with a fresh tool budget
-- **Cost tracking** — token usage is captured from every provider (including cache hits/misses and reasoning tokens) and priced via a bundled per-token catalog with weekly refresh; Settings → Costs shows session/today/month totals, daily stacked charts by provider or model, per-provider breakdowns and a soft monthly budget with 80%/100% warnings (informative, never blocks)
-- **Run terminal commands** — shell commands in answers get a ▶ button next to Copy: by default it opens Terminal with the command already typed in and you press Enter yourself; an opt-in mode runs it immediately (macOS asks for the Automation permission once). Consecutive commands land in the same Terminal window, so multi-step flows read like one session
-- **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its **own isolated chat** (separate history, context and rolling summary) via the "Own chat" toggle in Settings → Prompts — switching presets swaps the conversation, and a reply that is still generating keeps streaming into its home chat in the background
-- **Artifacts** — ask for an interactive demo, visualization or a document, and the model returns a complete HTML page or Markdown document shown as a compact card in the chat (streaming progress included). Click the card for a preview window (⅔ of the screen): live interactive WKWebView for HTML, Notion-style rendered view for Markdown, a Code tab, copy, save to file and open-in-browser. Ask for changes and the revised document arrives as a new card — earlier versions stay openable in the history
-- **Diagrams** — ask for an architecture scheme, flow, sequence, state machine or pie breakdown and the model answers with a mermaid diagram rendered **natively inline in the chat**: offline (bundled mermaid, no CDN), retina-crisp snapshots, themed to the app (accent color, light/dark, colorblind-validated series palette). Click for a live preview with pinch-zoom and export to SVG (always light, document-ready) or PNG @3x. Invalid diagram source degrades gracefully to a code block with an error badge — never an error graphic in the chat
-- **Markdown rendering** with code blocks, tables, task lists (`- [ ]`), numbered lists and dividers in responses; tables carry their own hover copy button, and copying a message or table also puts a spreadsheet flavor on the clipboard, so a paste into Google Sheets / Excel / Numbers lands in real cells
-- **Native chat transcript engine** — the message list is an AppKit scroll engine with row-level updates and an owned scroll offset: streamed replies grow smoothly at 30 Hz without re-rendering the list, auto-follow sticks to the bottom as an invariant (scroll up any time to read — streaming never yanks the view; a jump-to-latest button brings you back), history backfills without the viewport moving, and the panel always opens on the newest message
-- **Launch at login**, light/dark/system theme, UI in English, Spanish and Russian
-- **Android companion app** — the same multi-provider chat as a native Android app (Kotlin/Compose): providers, web search, voice messages, OCR, image tools, artifacts, themes and cost tracking; lives in [`android/`](android/README.md)
+---
 
-## Default hotkeys
+## Why
+
+Chat apps live in a browser tab you have to find, and they hold your conversations on someone else's server. Cuate is the opposite: a panel that appears over whatever you are doing, talks straight to the provider you picked with the key you own, and disappears with Esc. Everything that can run on-device — OCR, background removal, upscaling — does, for free.
+
+## Install
+
+Requires **macOS 14 (Sonoma) or newer**; the binary is universal (Apple Silicon + Intel). On macOS 26+ the panel renders with Liquid Glass, older systems fall back to the standard translucent material.
+
+1. Download `Cuate-<version>.dmg` from [Releases](https://github.com/kidem42/Cuate/releases)
+2. Drag **Cuate** into **Applications**
+3. Builds are signed with a self-signed certificate (not notarized), so clear the quarantine flag once:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Cuate.app
+   ```
+
+   Not needed when the DMG arrived without a browser download (AirDrop, USB, `curl`).
+
+Then add a key for at least one provider in **Settings → API Keys** and press **⌘⇧Space**. Keys are stored in the macOS Keychain, never in plain files. Permissions (Microphone, Screen Recording, Accessibility) are requested the first time you use the feature that needs them.
+
+## Hotkeys
 
 | Action | Hotkey |
 | --- | --- |
 | Toggle panel | ⌘⇧Space |
 | Full-screen screenshot to chat | ⌘⇧S |
 | Area screenshot to chat | ⌘⇧D |
-| Dictation (type where the cursor is) | ⌥Space |
+| Dictation (types where the cursor is) | ⌥Space |
 | Dictation with translation | ⌥⇧Space |
-| World Time panel (when the addon is on) | ⌥⇧T |
-| Close the panel (chat or World Time) | Esc |
+| World Time panel | ⌥⇧T |
+| Close the panel | Esc |
 
-All hotkeys are configurable in Settings → General.
+All of them are configurable in Settings → General.
 
-## Installation
+## What it does
 
-Requires **macOS 14 (Sonoma) or newer**; the binary is universal (Apple Silicon + Intel). On macOS 26+ the panel renders with Liquid Glass; on older systems it falls back to the standard translucent material.
+**Chat with any model.** OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, Kimi and OpenRouter (any model by slug); model lists come live from each provider's API. Or run models locally through **Ollama** — free, offline, no key — with a built-in console to download, delete, load and unload them without the terminal. A master switch can disable cloud providers entirely.
 
-1. Download `Cuate-<version>.dmg` from [Releases](https://github.com/kidem42/Cuate/releases)
-2. Drag **Cuate** to the **Applications** folder
-3. The build is signed with a self-signed certificate (not notarized), so before the first launch remove the quarantine flag:
+**Talk instead of typing.** Speech-to-text via Mistral (Voxtral), OpenAI or Deepgram. System-wide dictation types your words into any text field as you speak, and can translate on the fly.
 
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/Cuate.app
-   ```
+**Feed it your screen.** Screenshots (full or area) go straight into the conversation, selected text arrives as an editable quote, and OCR extracts text from any image — on-device and free by default (Apple Vision), or through Mistral OCR for layout-aware Markdown.
 
-   This is needed once. If the DMG arrived without a browser download (AirDrop, USB drive, `curl`), there is no quarantine flag and the app opens right away.
+**Get real documents back.** Interactive HTML pages and Markdown documents render as cards with an in-app preview; mermaid diagrams render natively inline, offline, themed to the app; tables copy into spreadsheets as real cells.
 
-## Setup
+**Reach the live web.** Brave Search plus a keyless page reader, with inline citations and a configurable tool budget per reply.
 
-On first run the onboarding walks you through the essentials:
+**Know what it costs.** Token usage is captured from every provider and priced from a bundled catalog: session/today/month totals, charts by provider or model, and a soft monthly budget.
 
-- **API keys** — add a key for at least one provider in Settings → API Keys. Keys are stored in the **macOS Keychain**, never in plain files
-- **Permissions** — macOS will ask for Microphone (voice input), Screen Recording (screenshots) and Accessibility (dictation typing, inserting commands into Terminal) when the corresponding feature is first used; the "Run immediately" mode for terminal commands additionally asks for Automation (controlling Terminal) once
-- Optional: a [Brave Search API](https://brave.com/search/api/) key for web search
+<details>
+<summary><b>Addons</b> — image tools, calendar, world time, self-hosted agents, voice-recorder library</summary>
 
-## Hermes Agent on a VPS (battle-tested recipe)
+- **Image tools** — background removal and upscaling run **on-device for free** (Apple Vision / Core Image), with higher-quality cloud models optional through a single fal.ai key. Object removal uses an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`. Transparency is handled end to end.
+- **Calendar & Reminders** — the assistant reads your schedule and creates events through macOS EventKit (iCloud, Google, Exchange — whatever is already synced). Per-calendar checkboxes decide what it can see. Off by default.
+- **World Time** — a timezone grid in a floating glass panel: cities as rows, the home city's 24 hours as columns, DST-aware, every IANA zone plus ~240 major cities, searchable in English, Russian and Spanish at once. With the Calendar addon on, it also shows your busy lane and creates 30-minute events by clicking a slot.
+- **LayoutFix** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES), statistically rather than by dictionary lookup, so names and typos convert too.
+- **Hermes Agent** — connect a self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) as a role in the chat switcher; see below.
+- **Plaud** — connect a [Plaud](https://www.plaud.ai) voice recorder account and ask about your recorded meetings; summaries, transcripts with clickable timecodes and inline audio, all through OAuth with read-only access.
 
-A self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) on a
-VPS makes the same agent reachable from the desktop and the Android app from any
-network — no VPN. This recipe was debugged end-to-end on a real server (Ubuntu
-24.04 with a dockerized `jwilder/nginx-proxy` + letsencrypt-companion already
-serving other apps); every trap below cost real time. It is written to be
-self-sufficient: **paste it into any capable LLM and it will walk you through**.
+</details>
 
-```bash
-# 1) Install + configure (interactive wizard: Quick Setup / Nous Portal;
-#    terminal backend: Docker; egress firewall: N — see traps)
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-source ~/.bashrc && hermes
+<details>
+<summary><b>The details</b> — attachments, presets, artifacts, the transcript engine</summary>
 
-# 2) API server (chat) — loopback-invisible from the internet, proxied later
-cat >> ~/.hermes/.env <<EOF
-API_SERVER_ENABLED=true
-API_SERVER_PORT=8642
-API_SERVER_HOST=0.0.0.0
-API_SERVER_KEY=$(openssl rand -hex 24)
-EOF
-hermes gateway install          # systemd service, survives reboots
-ufw allow from 172.16.0.0/12 to any port 8642 proto tcp   # docker nets only
+- **Attachments** — up to 5 images per message by any route: paperclip, ⌘V, drag & drop, screenshot hotkeys; HEIC/TIFF converted automatically. Models without vision get each image OCR'd into text.
+- **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its own isolated chat with separate history and context.
+- **Artifacts** — a complete HTML page or Markdown document arrives as a compact card; the preview window gives a live WKWebView, a Code tab, copy, save and open-in-browser. Ask for changes and the revision arrives as a new card while earlier versions stay openable.
+- **Terminal commands** — shell commands in answers get a ▶ button: by default it opens Terminal with the command typed in and you press Enter; an opt-in mode runs it immediately.
+- **Transcript engine** — the message list is an AppKit scroll engine with row-level updates: streamed replies grow smoothly without re-rendering the list, auto-follow sticks to the bottom, and scrolling up to read never gets yanked back.
+- **Interface** — light/dark/system themes, English, Spanish and Russian, launch at login.
 
-# 3) Dashboard (file uploads) — systemd unit by hand (no `install` subcommand);
-#    ONE token everywhere: nginx gate + dashboard + the apps
-DASHTOKEN=$(openssl rand -hex 24)
-echo "HERMES_DASHBOARD_SESSION_TOKEN=$DASHTOKEN" >> ~/.hermes/.env
-# unit: ExecStart=$(which hermes) dashboard --no-open  → enable --now
-# socat relay 0.0.0.0:9120 → 127.0.0.1:9119 (ufw: docker nets only)
+</details>
 
-# 4) Expose through the existing proxy: per host `agent.` and `dash.` —
-#    an alpine/socat bridge container with VIRTUAL_HOST/LETSENCRYPT_HOST,
-#    plus a vhost.d/<host>_location file (see traps)
+## Connect a self-hosted agent
 
-# 5) Sandbox must see uploads (config.yaml):
-#    terminal:
-#      docker_volumes:
-#        - "/root/cuate-uploads:/root/cuate-uploads"
-```
+Cuate can act as a desktop surface for a [Hermes agent](https://github.com/NousResearch/hermes-agent) you run yourself. The agent keeps its own memory, tools and model keys; Cuate becomes one more surface of it — what you started in Telegram or the CLI continues here, and vice versa.
 
-**The traps** (each one produced a live failure):
+Each gateway session opens as its own conversation, with a sidebar for sessions, skills and the agent's runtime passport. Files travel both ways, tool runs show live and persist as a step journal, and system notifications cover turns that finish while the app is closed.
 
-- `HERMES_DASHBOARD_SESSION_TOKEN` is the ONLY way external Bearer clients can
-  call the dashboard files API — without it a random token is generated per
-  restart and every upload gets `401` even on loopback (`web_server.py`,
-  `auth_middleware` guards all `/api/*`).
-- The **egress firewall** wizard option breaks the sandbox terminal entirely
-  when the agent authenticates via Nous Portal OAuth (no provider keys in env →
-  nothing to mint proxy tokens from). Answer `N`, or fix later with
-  `proxy.enabled: false` in `~/.hermes/config.yaml` + gateway restart.
-- The dashboard rejects foreign `Host` headers (DNS-rebinding guard, `400`) —
-  the proxy must send `proxy_set_header Host "127.0.0.1:9119";`.
-- Auth-gate `if (...) return 401;` goes into `vhost.d/<host>_location`, NOT the
-  server-level file — otherwise it also blocks the ACME challenge and the
-  certificate is never issued.
-- SSE needs `proxy_buffering off;` and `proxy_read_timeout 3600s;` on the
-  `agent.` host; `client_max_body_size 64m;` is needed on **BOTH** hosts —
-  `dash.` for file uploads AND `agent.` for inline (pasted) images, which
-  travel base64 in the chat request body and blow through nginx's default
-  1 MB limit (surfaces as an opaque `AgentDiagnostic` turn error).
-- With the Docker terminal backend the agent CANNOT see host files — mount
-  `~/cuate-uploads` into the sandbox via `terminal.docker_volumes` (same path
-  on both sides so courier notes stay valid).
-- Check the server's IPv4 with `curl -4 ifconfig.me` — plain `ifconfig.me` may
-  return IPv6 and DNS A-records will point at the wrong thing.
+- **Local agent** — Settings → Hermes Agent walks you through it; a card sets up and starts the gateway service in one click.
+- **Agent on a VPS**, reachable from anywhere without a VPN — see [docs/hermes-vps-setup.md](docs/hermes-vps-setup.md). The guide is self-sufficient: follow it yourself, or paste it into any capable LLM and it will walk you through with your values.
 
-Then in the apps (Settings → Hermes Agent): gateway `https://agent.<domain>` +
-`API_SERVER_KEY`; dashboard `https://dash.<domain>` + `DASHTOKEN`.
+## Android
 
-The same dashboard token also powers the **reverse courier**
-(`/api/files/download`): files the agent creates on the VPS flow back into the
-apps — preview cards, downloads, inline images — with no extra server setup.
+A native Kotlin/Compose companion app shares the same multi-provider chat, voice, OCR, image tools, artifacts and cost tracking, and connects to the same Hermes agent — see [`android/`](android/README.md).
 
-## Building from source
+## Build from source
 
 Requirements: Xcode 26+ (for the macOS 26 SDK); the app itself runs on macOS 14+.
 
@@ -156,66 +104,53 @@ cd Cuate
 open Cuate.xcodeproj   # build & run the Cuate scheme
 ```
 
-### Packaging a DMG
+Packaging a DMG:
 
 ```bash
 ./scripts/make-dmg.sh              # full Release build + DMG
 SKIP_BUILD=1 ./scripts/make-dmg.sh # repackage without rebuilding
 ```
 
-The script builds a universal Release (arm64 + x86_64), signs the app with the "Cuate Signing" self-signed certificate (falls back to ad-hoc if absent; the stable identity keeps TCC permissions across updates), generates a Retina drag-to-Applications window and produces `build/Cuate-<version>.dmg`. No external tools required.
+The script builds a universal Release (arm64 + x86_64), signs with the "Cuate Signing" self-signed certificate (ad-hoc if absent — the stable identity keeps TCC permissions across updates), and produces `build/Cuate-<version>.dmg`. No external tools required.
 
-## Project structure
+<details>
+<summary>Project layout</summary>
 
 ```text
 Cuate/
 ├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots, terminal runner
-├── Addons/       # self-contained addons (LayoutFix layout fixer, ImageAddon image tools, CalendarAddon events/reminders, WorldTimeAddon timezone grid, HermesAddon self-hosted agent, PlaudAddon voice-recorder library, AgentGateway core)
+├── Addons/       # self-contained addons (LayoutFix, ImageAddon, CalendarAddon, WorldTimeAddon, HermesAddon, PlaudAddon, AgentGateway core)
 ├── Diagnostics/  # in-app logging and hang watchdog
 ├── Providers/    # LLM/STT/OCR/search clients, settings, Keychain key store
 ├── Models/       # chat data models
 └── Views/        # SwiftUI: chat window, settings, onboarding, voice UI
-    └── Transcript/  # AppKit transcript engine: row-level updates, pin-to-bottom, streaming buffer
+    └── Transcript/  # AppKit transcript engine
 android/          # Android companion app (Kotlin/Compose) — own README and build script
-docs/             # architecture reviews, research notes, tech debt
-scripts/
-└── make-dmg.sh   # Release + DMG packaging (universal binary)
+docs/             # architecture reviews, setup guides, tech debt
+scripts/          # make-dmg.sh and helpers
 ```
+
+</details>
 
 ## Privacy
 
-- API keys live in the macOS Keychain (Plaud OAuth tokens too)
-- Conversations go directly from your Mac to the provider you selected — there is no intermediate server
-- Plaud note content leaves the Mac only as part of your chat request to the provider you chose, and only when the assistant actually reads a recording
-- Audio recordings are used only for transcription and are not persisted
+- API keys and OAuth tokens live in the macOS Keychain
+- Conversations go from your Mac straight to the provider you selected — there is no intermediate server
+- Audio is used for transcription and is not persisted
+- On-device features (OCR, background removal, upscaling) send nothing anywhere
+
+## Contributing
+
+Issues and pull requests are welcome — start with [CONTRIBUTING.md](CONTRIBUTING.md). Contributions are accepted under the [Contributor License Agreement](CLA.md), which lets the project keep its dual-license model. Bundled third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## License
 
-Cuate is free and open source, licensed under the **[GNU AGPL-3.0](LICENSE)**
-© 2026 Pavel Kravets.
-
-What this means in practice:
+Cuate is free and open source under the **[GNU AGPL-3.0](LICENSE)** © 2026 Pavel Kravets.
 
 - **Use, study, modify, fork** — freely, for any purpose.
-- **Distribute or deploy your version** (including as a network service) — only
-  if it is also released as open source under the AGPL-3.0, with full
-  corresponding source. This keeps the app and every improvement to it open.
-- **Closed-source / commercial license** — to ship Cuate or a derivative
-  without the AGPL's source-disclosure obligations, a separate commercial
-  license is available from the author:
-  **[kravec42@gmail.com](mailto:kravec42@gmail.com)**.
+- **Distribute or deploy your version** (including as a network service) — only if it is also released as open source under the AGPL-3.0, with full corresponding source.
+- **Closed-source / commercial license** — available separately from the author: [kravec42@gmail.com](mailto:kravec42@gmail.com).
 
-The project follows the standard **dual-licensing** model: one codebase, AGPL
-for the community, commercial terms for everything else. Official builds
-(GitHub Releases, and app stores in the future) are distributed by the author
-under the author's own terms and may include commercial features on top of this
-source.
+Official builds (GitHub Releases, and app stores in the future) are distributed by the author under the author's own terms and may include commercial features on top of this source.
 
-**Trademark.** The name **"Cuate"** and the app icon are trademarks of Pavel
-Kravets and are **not** covered by the AGPL. Forks and modified versions must
-use a different name and icon; unmodified builds of this repository that
-clearly link back here may keep the name.
-
-**Contributions** are welcome under the [Contributor License Agreement](CLA.md) —
-see [CONTRIBUTING](CONTRIBUTING.md) for how to get started. Bundled third-party
-components are listed in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES.md).
+**Trademark.** The name "Cuate" and the app icon are trademarks of Pavel Kravets and are **not** covered by the AGPL. Forks and modified versions must use a different name and icon; unmodified builds of this repository that clearly link back here may keep the name.
