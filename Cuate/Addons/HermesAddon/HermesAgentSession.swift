@@ -158,6 +158,9 @@ final class HermesAgentSession: AgentSession {
                         switch event {
                         case .runStarted(let runID):
                             self.currentRunID = runID
+                            // Published for the composer's steer path — see
+                            // HermesAddon.noteRun.
+                            self.addon.noteRun(runID, conversationKey: self.conversationKey)
                             // The gateway accepted the message — the briefing
                             // is in the session's history for good. Marking
                             // here (not before the send) lets a failed send
@@ -256,9 +259,23 @@ final class HermesAgentSession: AgentSession {
                         }
                     }
                     self.currentRunID = nil
+                    self.addon.clearRun(conversationKey: self.conversationKey)
                     continuation.finish()
                 } catch {
+                    let orphaned = self.currentRunID
                     self.currentRunID = nil
+                    self.addon.clearRun(conversationKey: self.conversationKey)
+                    // The stream broke mid-run (gateway restart, crash, lost
+                    // link). Ask the gateway whether the run outlived our
+                    // connection: when it did not, its transcript tail stays
+                    // unfinished forever and would read as "still working"
+                    // for the whole staleness window — retire it now instead.
+                    if let orphaned, let sessionID = self.boundSessionID {
+                        Task { @MainActor [addon = self.addon] in
+                            guard !(await addon.transport().runIsRunning(runID: orphaned)) else { return }
+                            addon.markTailDead(sessionID: sessionID)
+                        }
+                    }
                     let diagnostic = AgentDiagnostic(
                         message: error.localizedDescription,
                         probeStatus: (error as? HermesTransportError)?.probeStatus

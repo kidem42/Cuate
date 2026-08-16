@@ -1609,11 +1609,13 @@ private fun HermesSection(settings: AppSettings) {
         SettingsFootnote(stringResource(R.string.hermes_setup_hint))
     }
 
-    // Gateway patch block (assets/hermes_gateway_patch.sh — the same two
-    // anchored edits the desktop's one-click patcher makes): the real
-    // context fill in the API (usage.context_tokens) + POST /steer for
-    // mid-turn follow-ups. Paste-into-the-server-terminal, idempotent,
-    // backup next to the file, refuses on unknown layouts.
+    // Gateway patch block (assets/hermes_gateway_patch.sh — the same anchored
+    // edit the desktop's one-click patcher makes): the real context fill in
+    // the API (usage.context_tokens + context_window). Mid-turn follow-ups are
+    // no longer patched in — upstream ships POST /v1/runs/{id}/steer, which the
+    // client takes whenever the gateway advertises `run_steer`.
+    // Paste-into-the-server-terminal, idempotent, backup next to the file,
+    // refuses on unknown layouts.
     Column {
         SettingsGroup(stringResource(R.string.hermes_patch_title)) {
             item {

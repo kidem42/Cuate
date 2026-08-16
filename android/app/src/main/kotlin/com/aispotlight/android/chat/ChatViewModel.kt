@@ -1552,8 +1552,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Follow-ups typed while a turn streams, awaiting delivery per
      * conversation. Steer-first: the text rides into the RUNNING turn via
-     * `/steer` (Hermes 0.20 + the Cuate gateway patch). When the gateway
-     * cannot steer (no patch, 409 race, transport error) the message waits
+     * `POST /v1/runs/{id}/steer` (upstream Hermes v2026.8.13+), or the
+     * patched `/api/sessions/{id}/steer` on older gateways. When neither
+     * can steer (no route, 409 race, transport error) the message waits
      * here and goes out as an ordinary turn the moment the stream ends —
      * before the patch such a send was silently DROPPED by the streaming
      * guard (composer cleared, message gone).
@@ -1568,9 +1569,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         userMessage: ChatMessage, conversationId: String, sessionId: String
     ) {
         viewModelScope.launch {
+            val runId = hermesRunIds[conversationId]
             val queued = try {
                 withContext(Dispatchers.IO) {
-                    HermesChatService.transport(settings).steer(sessionId, userMessage.text)
+                    val transport = HermesChatService.transport(settings)
+                    // Upstream route first — it needs no gateway patch
+                    // (v2026.8.13+). A gateway that predates it 404s the
+                    // path, so retry the patched session route before
+                    // giving up; that one also covers turns started
+                    // elsewhere, where no run id ever reached us.
+                    if (runId != null) {
+                        try {
+                            transport.steerRun(runId, userMessage.text)
+                        } catch (_: Exception) {
+                            transport.steer(sessionId, userMessage.text)
+                        }
+                    } else {
+                        transport.steer(sessionId, userMessage.text)
+                    }
                 }
             } catch (e: Exception) {
                 com.aispotlight.android.core.Diagnostics.log(

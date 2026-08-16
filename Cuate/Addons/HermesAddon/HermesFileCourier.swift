@@ -211,6 +211,7 @@ enum HermesFileCourier {
         var request = URLRequest(url: url)
         request.timeoutInterval = 120
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(HermesTransport.userAgent, forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -265,6 +266,7 @@ enum HermesFileCourier {
         request.httpMethod = "POST"
         request.timeoutInterval = 120
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(HermesTransport.userAgent, forHTTPHeaderField: "User-Agent")
         let boundary = "cuate-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 

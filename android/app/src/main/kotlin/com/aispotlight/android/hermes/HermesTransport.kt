@@ -1,5 +1,7 @@
 package com.aispotlight.android.hermes
 
+import android.os.Build
+import com.aispotlight.android.BuildConfig
 import com.aispotlight.android.core.HttpClient
 import com.aispotlight.android.core.TokenUsage
 import kotlinx.coroutines.channels.awaitClose
@@ -178,6 +180,7 @@ class HermesTransport(
     private fun request(method: String, path: String, body: JSONObject? = null,
                         query: Map<String, String> = emptyMap()): Request {
         val builder = Request.Builder().url(url(path, query))
+        builder.header("User-Agent", USER_AGENT)
         if (apiKey.isNotEmpty()) builder.header("Authorization", "Bearer $apiKey")
         when (method) {
             "GET" -> builder.get()
@@ -328,6 +331,20 @@ class HermesTransport(
     }
 
     /**
+     * `POST /v1/runs/{id}/steer` — UPSTREAM Hermes (v2026.8.13+, advertised
+     * as `features.run_steer`): the same primitive addressed by run id, with
+     * no gateway patch required. Preferred over [steer]; session-chat runs
+     * qualify because the stream handler registers them under their run id.
+     * Throws [HermesTransportException] with 404 (`run_not_found`) or 409
+     * (`run_not_accepting_steer`) once the turn is over — callers fall back
+     * to an ordinary send.
+     */
+    suspend fun steerRun(runID: String, text: String): Boolean {
+        val obj = json("POST", "v1/runs/$runID/steer", JSONObject().put("text", text))
+        return obj.optBoolean("accepted", false)
+    }
+
+    /**
      * ⚠️ Required after [createSession]: a fresh session inherits the literal
      * model "hermes-agent" and every turn 404s until locked (fixtures).
      * Provider+model pairs come from [modelOptions].
@@ -460,6 +477,7 @@ class HermesTransport(
         val request = Request.Builder()
             .url(dash.newBuilder().addPathSegments("api/files/upload-stream").build())
             .header("Authorization", "Bearer $token")
+            .header("User-Agent", USER_AGENT)
             .post(body)
             .build()
         val response = HttpClient.json(request)
@@ -483,6 +501,7 @@ class HermesTransport(
                 .addQueryParameter("path", path)
                 .build())
             .header("Authorization", "Bearer $token")
+            .header("User-Agent", USER_AGENT)
             .get()
             .build()
         return HttpClient.bytes(request)
@@ -528,6 +547,7 @@ class HermesTransport(
         val request = Request.Builder()
             .url(url("api/sessions/$sessionID/chat/stream"))
             .header("Authorization", "Bearer $apiKey")
+            .header("User-Agent", USER_AGENT)
             .post(body.toString().toRequestBody(jsonMedia))
             .build()
         val call = sseClient.newCall(request)
@@ -573,6 +593,18 @@ class HermesTransport(
     }
 
     companion object {
+        /**
+         * How Cuate introduces itself to a gateway. The API server records the
+         * `User-Agent` in its request audit context and stamps it into the
+         * `origin` of jobs created over HTTP (`api_server.py`,
+         * `_request_audit_context` / `_cron_origin_from_request`) — so a named
+         * client shows up in the operator's log instead of an anonymous
+         * request. Every request we make to a Hermes host carries it.
+         */
+        val USER_AGENT: String =
+            "Cuate/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.RELEASE}; " +
+                "+https://github.com/kidem42/Cuate)"
+
         /** Maps one SSE frame onto a stream event (names/fields from fixtures). */
         fun parseEvent(name: String, data: String): HermesStreamEvent? {
             val payload = try { JSONObject(data) } catch (_: Exception) { JSONObject() }

@@ -220,15 +220,30 @@ enum HermesLocalGateway {
         steerEdits.allSatisfy { src.components(separatedBy: $0.old).count == 2 }
     }
 
+    /// Whether the steer edit is still worth making. Upstream grew its own
+    /// `POST /v1/runs/{id}/steer` after v2026.8.3 and advertises it as
+    /// `features.run_steer`; on such a gateway our route would only duplicate
+    /// it for our own turns, so we stop offering it. The flag is the ONLY
+    /// reliable discriminator — the version string does not move between
+    /// those builds (both report 0.20.0, probed live 2026-08-15).
+    @MainActor
+    private static var steerPatchWanted: Bool {
+        HermesAddon.shared.capabilities?.supports("run_steer") != true
+    }
+
     static func contextPatchState() async -> ContextPatchState {
         guard let file = await apiServerFile(),
               let src = try? String(contentsOf: file, encoding: .utf8) else { return .unavailable }
+        let steerWanted = await steerPatchWanted
         let contextDone = src.contains("\"context_tokens\"")
         let windowDone = src.contains("\"context_window\"")
         let steerDone = src.contains(steerMarker)
+        // Settled = already ours, or not worth doing: the gateway serves
+        // `run_steer` itself, or its layout has no anchor for us.
+        let steerSettled = steerDone || !steerWanted || !steerApplicable(to: src)
         if (contextDone || !src.contains(contextPatchAnchor)),
            (windowDone || !contextDone),  // window rides on the context line
-           (steerDone || !steerApplicable(to: src)) {
+           steerSettled {
             // Nothing more we can do here. "Ours is in place" reads as
             // patched; a fully foreign layout as unavailable.
             return (contextDone || steerDone) ? .patched : .unavailable
@@ -277,7 +292,7 @@ enum HermesLocalGateway {
             if windowSites > 0 { work = out.joined(separator: "\n") }
         }
         var steered = false
-        if !work.contains(steerMarker), steerApplicable(to: work) {
+        if await steerPatchWanted, !work.contains(steerMarker), steerApplicable(to: work) {
             for edit in steerEdits {
                 work = work.replacingOccurrences(of: edit.old, with: edit.new)
             }
@@ -615,6 +630,7 @@ enum HermesLocalGateway {
         for _ in 0..<(seconds * 2) {
             var request = URLRequest(url: url)
             request.timeoutInterval = 1.5
+            request.setValue(HermesTransport.userAgent, forHTTPHeaderField: "User-Agent")
             if let (_, response) = try? await URLSession.shared.data(for: request),
                (response as? HTTPURLResponse)?.statusCode == 200 {
                 return true

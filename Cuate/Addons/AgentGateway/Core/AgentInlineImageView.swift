@@ -107,6 +107,7 @@ struct AgentInlineImageView: View {
            url.host == gatewayHost,
            let key = APIKeyStore.key(aux: .hermes) {
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            request.setValue(HermesTransport.userAgent, forHTTPHeaderField: "User-Agent")
         }
         // The DASHBOARD host serves the files the courier uploaded — that is
         // how an image sent from another device renders here (the gateway
@@ -115,6 +116,7 @@ struct AgentInlineImageView: View {
            url.host == dashHost,
            let token = APIKeyStore.key(aux: .hermesDashboard) {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(HermesTransport.userAgent, forHTTPHeaderField: "User-Agent")
         }
         do {
             let (data, response) = try await URLSession.shared.data(for: request)

@@ -156,10 +156,23 @@ nonisolated struct HermesTransport {
     /// probe fast, not spin a minute (§ plan: ~1.5s probe timeout).
     var requestTimeout: TimeInterval = 15
 
+    /// How Cuate introduces itself to a gateway. The API server records the
+    /// `User-Agent` in its request audit context and stamps it into the
+    /// `origin` of jobs created over HTTP (`api_server.py`,
+    /// `_request_audit_context` / `_cron_origin_from_request`) — so a named
+    /// client shows up in the operator's log instead of an anonymous request.
+    /// Every request we make to a Hermes host carries it.
+    static let userAgent: String = {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return "Cuate/\(short) (macOS \(os.majorVersion).\(os.minorVersion); +https://github.com/kidem42/Cuate)"
+    }()
+
     private func request(_ method: String, _ path: String, body: [String: Any]? = nil) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
         request.timeoutInterval = requestTimeout
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         if !apiKey.isEmpty {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
@@ -329,6 +342,22 @@ nonisolated struct HermesTransport {
         return (object["status"] as? String) == "queued"
     }
 
+    /// `POST /v1/runs/{id}/steer` — UPSTREAM Hermes (v2026.8.13+, advertised
+    /// as `features.run_steer`): the same primitive, addressed by run id
+    /// instead of session id. Preferred over `steer(sessionID:)` — it needs
+    /// no gateway patch. Session-chat runs qualify: the stream handler
+    /// registers its run in `_active_run_agents` (`active_run_id=run_id`),
+    /// which is what the handler looks the agent up in.
+    ///
+    /// Returns true when the agent took the text. Throws `.http(404,
+    /// run_not_found)` for an unknown/finished run and `.http(409, …)` when
+    /// the run is no longer accepting steer input — both mean "send it as an
+    /// ordinary turn instead".
+    func steerRun(runID: String, text: String) async throws -> Bool {
+        let object = try await json("POST", "v1/runs/\(runID)/steer", body: ["text": text])
+        return (object["accepted"] as? Bool) == true
+    }
+
     /// ⚠️ Required after `createSession`: a fresh session inherits the
     /// literal model "hermes-agent" and every turn 404s until locked
     /// (fixtures). Provider+model pairs come from `modelOptions()`.
@@ -474,6 +503,23 @@ nonisolated struct HermesTransport {
 
     func stopRun(runID: String) async throws {
         _ = try await json("POST", "v1/runs/\(runID)/stop")
+    }
+
+    /// `GET /v1/runs/{id}` → `{"object":"hermes.run","status":…}`, or 404
+    /// `run_not_found` once the gateway has forgotten it. Answers the one
+    /// question the session API cannot: is THIS turn still going? Without it
+    /// a run killed mid-tool (a gateway restart, a crash) leaves an
+    /// unfinished transcript tail that our detector must read as "working"
+    /// for its full staleness window.
+    ///
+    /// False on 404, on an unknown status, and on any transport failure — a
+    /// run we cannot see is not one to keep waiting on. The route is newer
+    /// than some deployments, so a 404 from an older gateway lands on the
+    /// same answer and merely restores the old timeout behaviour.
+    func runIsRunning(runID: String) async -> Bool {
+        guard let object = try? await json("GET", "v1/runs/\(runID)"),
+              let status = object["status"] as? String else { return false }
+        return status == "running" || status == "queued" || status == "stopping"
     }
 
     /// Body shape to be pinned against the live gateway in stage 6 (the

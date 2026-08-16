@@ -63,6 +63,23 @@ final class HermesAddon: ObservableObject {
             activeTurnKeys[conversationKey] = count - 1
         }
     }
+
+    /// Run id of the turn OUR pipeline is streaming into a conversation.
+    /// `HermesAgentSession` is created per turn (the factory hands out a
+    /// fresh instance), so its own `currentRunID` is invisible to the
+    /// window — the composer needs it here to address the upstream
+    /// `POST /v1/runs/{id}/steer`. Not `@Published`: it changes inside a
+    /// turn whose start/end already invalidate through `activeTurnKeys`.
+    private var runIDsByConversation: [String: String] = [:]
+    func noteRun(_ runID: String, conversationKey: String) {
+        runIDsByConversation[conversationKey] = runID
+    }
+    func clearRun(conversationKey: String) {
+        runIDsByConversation.removeValue(forKey: conversationKey)
+    }
+    func activeRunID(conversationKey: String) -> String? {
+        runIDsByConversation[conversationKey]
+    }
     func isTurnActive(forConversationKey key: String) -> Bool {
         activeTurnKeys[key] != nil
     }
@@ -100,7 +117,7 @@ final class HermesAddon: ObservableObject {
         // - the segment contains a REAL user message → an exchange — a
         //   question got its answer, the turn is over;
         // - pure assistant/tool rows → a monologue — Hermes narrates interim
-        //   results mid-run ("подготовлено 14 из 36…") and keeps working.
+        //   progress mid-run ("prepared 14 of 36…") and keeps working.
         //   That interim reply is indistinguishable from a final one by
         //   shape, but nobody asked for it — which is the tell.
         if let previous, rows.count > previous {
@@ -130,7 +147,33 @@ final class HermesAddon: ObservableObject {
         apply(nil, sessionID: sessionID)
     }
 
-    private func apply(_ turn: HermesLiveTurn?, sessionID: String) {
+    /// Sessions whose unfinished tail the GATEWAY has disowned: we streamed a
+    /// run, it died mid-tool (a restart, a crash, an agent that killed the
+    /// gateway it was running in), and `GET /v1/runs/{id}` confirmed it is
+    /// gone. Without this the tail — a tool call with no result row — reads
+    /// as "still working" for the full 20-minute staleness window, and the
+    /// chat looks frozen with nothing to press.
+    ///
+    /// The mark covers rows no newer than itself, so the next real turn
+    /// lifts it by simply being newer — no cleanup pass needed.
+    private var deadTailMarks: [String: Date] = [:]
+
+    /// Confirmed dead: retire the pill now instead of waiting out staleness.
+    func markTailDead(sessionID: String) {
+        deadTailMarks[sessionID] = Date()
+        apply(nil, sessionID: sessionID)
+        Diagnostics.log("hermes", "liveTurn session=\(sessionID) retired=run-gone")
+    }
+
+    private func apply(_ turnIn: HermesLiveTurn?, sessionID: String) {
+        var turn = turnIn
+        if let mark = deadTailMarks[sessionID] {
+            if let candidate = turn, candidate.lastRowAt <= mark {
+                turn = nil                       // the tail we already buried
+            } else if turn != nil {
+                deadTailMarks.removeValue(forKey: sessionID)  // a newer turn — mark spent
+            }
+        }
         // Logged on every EDGE (idle↔running), never per poll: "the pill did
         // not come back" is otherwise indistinguishable from "the gateway
         // was idle by then" — both look like silence.
@@ -158,7 +201,8 @@ final class HermesAddon: ObservableObject {
 
     func liveTurn(sessionID: String) -> HermesLiveTurn? {
         guard let turn = liveTurns[sessionID],
-              Date().timeIntervalSince(turn.lastRowAt) < HermesLiveTurnDetector.staleAfter
+              Date().timeIntervalSince(turn.lastRowAt) < HermesLiveTurnDetector.staleAfter,
+              deadTailMarks[sessionID].map({ turn.lastRowAt > $0 }) ?? true
         else { return nil }
         return turn
     }

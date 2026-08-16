@@ -46,14 +46,17 @@ struct HermesSettingsView: View {
     ssh USER@HOST "grep '^API_SERVER_KEY=' ~/.hermes/.env"
     """
 
-    /// Gateway patch for a REMOTE host — the same two edits
-    /// HermesLocalGateway performs on this Mac, as a paste-into-the-VPS
-    /// block (we have no file access over there): `usage.context_tokens`
-    /// (real context fill) + `POST /api/sessions/{id}/steer` (mid-turn
-    /// steering, needs Hermes 0.20 — refuses cleanly on older layouts).
-    /// Anchored by code with a backup next to the file; idempotent; the
-    /// file is only written when every edit landed AND `ast.parse`
-    /// accepted the result. Verified against pristine 0.20.0 (2026-08-13).
+    /// Gateway patch for a REMOTE host, as a paste-into-the-VPS block (we
+    /// have no file access over there): `usage.context_tokens` +
+    /// `context_window`, the real context fill the API otherwise omits.
+    ///
+    /// Mid-turn steering is NOT patched in anymore — upstream ships its own
+    /// `POST /v1/runs/{id}/steer` (`features.run_steer`), and the client
+    /// takes that route whenever the gateway advertises it. A gateway old
+    /// enough to lack it simply queues follow-ups until the turn ends.
+    ///
+    /// Anchored by code with a backup next to the file; idempotent; written
+    /// only when every edit landed AND `ast.parse` accepted the result.
     /// Mirrors `HermesLocalGateway` — keep the two in sync.
     private static let gatewayPatchRemoteCommands = #"""
     HP=$(hermes --version 2>/dev/null | sed -n 's/^Install directory: //p'); \
@@ -87,78 +90,6 @@ struct HermesSettingsView: View {
         src, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + window, src)
         assert n >= 1, "context_window anchor not found - different Hermes version, patch by hand"
         print(f"context_window: ok, {n} site(s)")
-
-    # --- edit 2: POST /api/sessions/{id}/steer (mid-turn steering) ------------
-    def put(old, new):
-        global src
-        assert src.count(old) == 1, "steer anchor not found - need Hermes 0.20 (run 'hermes update' first)"
-        src = src.replace(old, new, 1)
-
-    if '_handle_session_steer' in src:
-        print("session_steer: already patched")
-    else:
-        put('        self._shutdown_interruptible_agents: Dict[int, Any] = {}\n',
-            '        self._shutdown_interruptible_agents: Dict[int, Any] = {}\n'
-            '        # Cuate patch: live agent per session for mid-turn steering.\n'
-            '        self._active_session_agents: Dict[str, Any] = {}\n')
-        put('            ("POST", "/api/sessions/{session_id}/model", self._handle_session_model_lock),\n',
-            '            ("POST", "/api/sessions/{session_id}/model", self._handle_session_model_lock),\n'
-            '            ("POST", "/api/sessions/{session_id}/steer", self._handle_session_steer),\n')
-        put('                "session_model_lock": True,\n',
-            '                "session_model_lock": True,\n'
-            '                "session_steer": True,\n')
-        put('                "session_model_lock": {"method": "POST", "path": "/api/sessions/{session_id}/model"},\n',
-            '                "session_model_lock": {"method": "POST", "path": "/api/sessions/{session_id}/model"},\n'
-            '                "session_steer": {"method": "POST", "path": "/api/sessions/{session_id}/steer"},\n')
-        put('                    self._shutdown_interruptible_agents[id(agent)] = agent\n',
-            '                    self._shutdown_interruptible_agents[id(agent)] = agent\n'
-            '                    if session_id:\n'
-            '                        # Cuate patch: expose the live agent for /steer.\n'
-            '                        self._active_session_agents[session_id] = agent\n')
-        put('                        self._shutdown_interruptible_agents.pop(id(agent), None)\n',
-            '                        self._shutdown_interruptible_agents.pop(id(agent), None)\n'
-            '                        # Cuate patch: drop only this turn\'s registration.\n'
-            '                        if session_id and self._active_session_agents.get(session_id) is agent:\n'
-            '                            self._active_session_agents.pop(session_id, None)\n')
-        put('    @_admit_api_agent_request\n'
-            '    async def _handle_session_chat(self, request: "web.Request") -> "web.Response":\n',
-            '''    async def _handle_session_steer(self, request: "web.Request") -> "web.Response":
-            """POST /api/sessions/{session_id}/steer - Cuate patch.
-
-            Nudges the running turn via AIAgent.steer(): the text rides on the
-            next completed tool batch, no interrupt (TUI session.steer semantics).
-            200 queued/rejected; 409 no_active_turn -> client sends normally.
-            """
-            auth_err = self._check_auth(request)
-            if auth_err:
-                return auth_err
-            session_id = request.match_info["session_id"]
-            _session, err = await self._get_existing_session_or_404(session_id)
-            if err:
-                return err
-            body, err = await self._read_json_body(request)
-            if err:
-                return err
-            text = str(body.get("text") or "").strip()
-            if not text:
-                return web.json_response(_openai_error("'text' is required", code="invalid_steer"), status=400)
-            agent = self._active_session_agents.get(session_id)
-            if agent is None or not hasattr(agent, "steer"):
-                return web.json_response(_openai_error("No active turn to steer for this session", code="no_active_turn"), status=409)
-            try:
-                accepted = bool(agent.steer(text))
-            except Exception as exc:
-                return web.json_response(_openai_error(f"steer failed: {exc}", code="steer_failed"), status=500)
-            return web.json_response({
-                "object": "hermes.session.steer",
-                "session_id": session_id,
-                "status": "queued" if accepted else "rejected",
-            })
-
-        @_admit_api_agent_request
-        async def _handle_session_chat(self, request: "web.Request") -> "web.Response":
-    ''')
-        print("session_steer: ok")
 
     if src != orig:
         pathlib.Path(str(p) + ".bak").write_text(orig)  # backup next to the file
@@ -306,6 +237,7 @@ struct HermesSettingsView: View {
             }
             autoSetupRow
             contextPatchRow
+            gatewayCapabilitiesRow
         } header: {
             Text(HL("hermes.conn.header"))
         } footer: {
@@ -367,6 +299,50 @@ struct HermesSettingsView: View {
             }
             .padding(.top, 2)
         }
+    }
+
+    /// What the connected gateway ACTUALLY offers, read from the last
+    /// probe's `/v1/capabilities`. Worth showing because the version string
+    /// cannot answer it: two gateways both reporting `0.20.0` differ on
+    /// whether the steer route exists at all (probed live 2026-08-15), so a
+    /// missing feature otherwise looks like a bug in the app.
+    @ViewBuilder
+    private var gatewayCapabilitiesRow: some View {
+        if let caps = addon.capabilities {
+            VStack(alignment: .leading, spacing: 3) {
+                capabilityLine(HL("hermes.caps.streaming"),
+                               detail: caps.supports("session_chat_streaming")
+                                   ? HL("hermes.caps.yes") : HL("hermes.caps.no"),
+                               ok: caps.supports("session_chat_streaming"))
+                capabilityLine(HL("hermes.caps.steer"),
+                               detail: steerCapabilityDetail(caps),
+                               ok: caps.supports("run_steer") || caps.supports("session_steer"))
+                capabilityLine(HL("hermes.caps.files"),
+                               detail: settings.dashboardBaseURL != nil
+                                   ? HL("hermes.caps.yes") : HL("hermes.caps.files.unset"),
+                               ok: settings.dashboardBaseURL != nil)
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    /// Steering has three honest states: the gateway's own route, our patch,
+    /// or nothing — and the difference decides whether the patch offer above
+    /// is worth taking.
+    private func steerCapabilityDetail(_ caps: HermesCapabilities) -> String {
+        if caps.supports("run_steer") { return HL("hermes.caps.steer.builtin") }
+        if caps.supports("session_steer") { return HL("hermes.caps.steer.patched") }
+        return HL("hermes.caps.no")
+    }
+
+    private func capabilityLine(_ title: String, detail: String, ok: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "minus.circle")
+                .foregroundColor(ok ? .green : .secondary)
+            Text(title).foregroundColor(.secondary)
+            Text(detail).foregroundColor(ok ? .primary : .secondary)
+        }
+        .font(.caption)
     }
 
     /// Offer to patch the LOCAL gateway's context metric when it doesn't

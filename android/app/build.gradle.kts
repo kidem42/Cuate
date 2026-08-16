@@ -60,6 +60,10 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.VERSION_NAME — the Hermes client identifies itself by
+        // version in its User-Agent, and the transport has no Context to ask
+        // PackageManager with.
+        buildConfig = true
     }
     sourceSets["main"].kotlin.srcDir("src/main/kotlin")
     sourceSets["test"].kotlin.srcDir("src/test/kotlin")

@@ -3,6 +3,49 @@
 Captured with curl against a real instance. The transport (`HermesTransport`) is written against
 THIS file, not against the prose in the docs. When Hermes is upgraded on the rig — re-check and update.
 
+## Steer, context and client identity (2026-08-15) — sources + a LIVE probe
+
+Read from the released `gateway/platforms/api_server.py` of tag `v2026.8.13`, then
+probed against the live VPS gateway. ⚠️ **The two disagree — the deployed gateway is
+OLDER than that tag even though `/v1/health` also reports `0.20.0`.** The version
+string is not a reliable discriminator; the capability flags are.
+
+**Live probe (VPS, 2026-08-15, one throwaway session, one real turn):**
+
+```
+/v1/health                        → {"status":"ok","version":"0.20.0"}
+/v1/capabilities features         → session_chat, session_chat_streaming, session_steer   (NO run_steer)
+POST /v1/runs/{live_run_id}/steer → 404 "404: Not Found"   ← the route does not exist here
+POST /api/sessions/{id}/steer     → 200 {"status":"queued"}  ← our patch, mid-turn, works
+run.completed usage               → input 39591 / total 39738, context_tokens 19859,
+                                    context_window 1050000   ← our patch, both fields land
+```
+
+So the client must keep BOTH routes: it prefers the upstream one when
+`features.run_steer` is advertised and falls back to the patched session route
+otherwise — which is what every gateway of this vintage will take.
+
+The facts below come from the tag's sources, and each is what the client targets:
+
+- **We identify ourselves.** Every request carries `User-Agent: Cuate/<version> (<os>)`.
+  The server keeps it in its request audit context and stamps it into the `origin` of
+  jobs created over HTTP (`_request_audit_context` / `_cron_origin_from_request`).
+- **`POST /v1/runs/{run_id}/steer` is UPSTREAM** (`features.run_steer`), and it covers
+  session-chat turns: `_handle_session_chat_stream` passes `active_run_id=run_id` into
+  `_run_agent`, which registers the live agent in `_active_run_agents` — exactly where
+  the steer handler looks it up. Body takes `input` / `message` / `text`; 200 →
+  `{"object":"hermes.run.steer","accepted":true}`; 404 `run_not_found`; 409
+  `run_not_accepting_steer` / `steer_not_accepted`; 400 `invalid_steer_input`.
+  **Our `session_steer` patch remains load-bearing**: the deployed gateway has no
+  `run_steer` route at all (probe above), and even on a gateway that does, the patched
+  route is the only way to steer a turn started ELSEWHERE (phone/CLI), where no run id
+  ever reaches us.
+- **There is no run listing** (`POST /v1/runs`, then `GET /v1/runs/{id}`) — a run id
+  can only be learned from a stream we opened ourselves.
+- **`usage.context_tokens` is still ours** — absent from the release; the upstream PR
+  (`feat(api-server): expose context fill and window in turn usage`) adds it together
+  with `context_window`.
+
 ## Enabling the API server (onboarding instructions)
 
 In `~/.hermes/.env`:
@@ -215,7 +258,7 @@ but the image never reaches the model — don't use it.
 
 ⚠️ The route is newer than some deployments: it exists in the 0.19.0 checkout (2026.7.20)
 (`hermes_cli/web_server.py`), but the VPS gateway is older — **404** (verified
-2026-07-29 on agent.<domain>; `/api/model/options` is alive there → 401 without
+2026-07-29 on the remote VPS gateway; `/api/model/options` is alive there → 401 without
 a key). The client must survive a 404 as "no data". The response shape comes from the
 sources (there was nothing to capture a live 200 dump from):
 

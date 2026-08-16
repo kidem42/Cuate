@@ -2335,11 +2335,29 @@ struct ChatWindow: View {
         guard chatStore.conversation.isAgent,
               attachments.isEmpty,
               agentTurnInFlight || externalTurn != nil,
-              HermesAddon.shared.capabilities?.supports("session_steer") == true,
               HermesSettings.shared.sessionID(
                   forConversationKey: chatStore.conversation.storageKey) != nil
         else { return false }
-        return true
+        return steerRoute() != nil
+    }
+
+    /// Which steer channel this turn can take, if any.
+    /// - `.run` — upstream `POST /v1/runs/{id}/steer` (`features.run_steer`,
+    ///   Hermes v2026.8.13+). Needs a run id, so it covers OUR streaming
+    ///   turn only.
+    /// - `.session` — the legacy Cuate gateway patch (`features.session_steer`),
+    ///   addressed by session id. Kept as the fallback: it is what steers a
+    ///   turn started ELSEWHERE (phone/CLI), where no run id ever reaches us.
+    private enum SteerRoute { case run(String), session }
+    private func steerRoute() -> SteerRoute? {
+        let caps = HermesAddon.shared.capabilities
+        if caps?.supports("run_steer") == true,
+           let runID = HermesAddon.shared.activeRunID(
+               conversationKey: chatStore.conversation.storageKey) {
+            return .run(runID)
+        }
+        if caps?.supports("session_steer") == true { return .session }
+        return nil
     }
 
     /// Mid-turn follow-up: the bubble lands in the chat as usual, the text
@@ -2350,16 +2368,24 @@ struct ChatWindow: View {
     /// the fallback only starts the stream.
     private func performSteer(text: String) {
         let conversationKey = chatStore.conversation.storageKey
-        guard let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationKey) else { return }
+        guard let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationKey),
+              let route = steerRoute() else { return }
         chatStore.appendNow(ChatMessage(text: text, isUser: true))
         messageText = ""
         quotedText = nil
         clearPendingAttachments()
         Task { @MainActor in
             do {
-                let queued = try await HermesAddon.shared.transport()
-                    .steer(sessionID: sessionID, text: text)
-                Diagnostics.log("hermes", "steer session=\(sessionID) queued=\(queued)")
+                let transport = HermesAddon.shared.transport()
+                let queued: Bool
+                switch route {
+                case .run(let runID):
+                    queued = try await transport.steerRun(runID: runID, text: text)
+                    Diagnostics.log("hermes", "steer run=\(runID) accepted=\(queued)")
+                case .session:
+                    queued = try await transport.steer(sessionID: sessionID, text: text)
+                    Diagnostics.log("hermes", "steer session=\(sessionID) queued=\(queued)")
+                }
                 guard queued else {
                     streamAssistantReply() // agent refused — ordinary turn
                     return
@@ -2367,9 +2393,11 @@ struct ChatWindow: View {
                 // Queued into the running turn. The pill keeps streaming;
                 // the reply to this follow-up arrives within the same turn.
             } catch {
-                // 409 no_active_turn (the race window), or any transport
-                // failure: deliver as a normal turn so the message is never
-                // lost. The user bubble is already on screen.
+                // The turn ended under us (404 run_not_found / 409
+                // run_not_accepting_steer upstream, 409 no_active_turn on the
+                // patched route), or any transport failure: deliver as a
+                // normal turn so the message is never lost. The user bubble
+                // is already on screen.
                 Diagnostics.log("hermes", "steer fallback: \(String(error.localizedDescription.prefix(120)))")
                 streamAssistantReply()
             }

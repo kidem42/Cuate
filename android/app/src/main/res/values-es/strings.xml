@@ -223,8 +223,8 @@
     <string name="hermes_dashboard_hint">Los archivos adjuntos (salvo imágenes) llegan al host del agente por la API de archivos del panel de Hermes (su propia URL y token). Las imágenes siempre viajan inline, sin panel.</string>
     <string name="hermes_setup">Configurar gateway remoto (SSH)</string>
     <string name="hermes_lock_rerouted">⚠️ El gateway redirigió el bloqueo: pediste %1$s, pero su configuración fija este modelo a otro proveedor — la sesión ahora usa %2$s vía %3$s.</string>
-    <string name="hermes_patch_title">Parche del gateway: medidor de contexto + mensajes durante el turno</string>
-    <string name="hermes_patch_hint">Pega esto en la terminal del host del agente DESPUÉS de actualizar Hermes a 0.20 (hermes update). Añade usage.context_tokens (el llenado real del contexto) y POST /steer (los mensajes llegan al agente durante el turno). Copia de seguridad junto al archivo; se niega ante estructuras desconocidas. Se puede repetir; repítelo tras cada actualización de Hermes.</string>
+    <string name="hermes_patch_title">Parche del gateway: medidor de contexto honesto</string>
+    <string name="hermes_patch_hint">Pega esto en la terminal del host del agente tras actualizar Hermes. Añade usage.context_tokens y context_window — el llenado real del contexto que la API omite, para que el medidor deje de estimar. Los mensajes durante el turno no necesitan parche: Hermes reciente trae su propia ruta y la app la usa sola. Copia de seguridad junto al archivo; se niega ante estructuras desconocidas. Se puede repetir; repítelo tras cada actualización de Hermes.</string>
     <string name="hermes_setup_hint">Ejecuta en la máquina del agente (VPS, nube, un Mac en casa) y pega arriba la API_SERVER_KEY impresa. API_SERVER_HOST=0.0.0.0 es obligatorio: por defecto el servidor escucha solo en loopback.</string>
 
     <!-- Costs (spend analytics) -->
