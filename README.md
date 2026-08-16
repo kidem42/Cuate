@@ -58,14 +58,14 @@ All of them are configurable in Settings → General.
 **Know what it costs.** Token usage is captured from every provider and priced from a bundled catalog: session/today/month totals, charts by provider or model, and a soft monthly budget.
 
 <details>
-<summary><b>Addons</b> — image tools, calendar, world time, self-hosted agents, voice-recorder library</summary>
+<summary><b>Addons</b> — image tools, calendar, world time, layout fixer</summary>
 
 - **Image tools** — background removal and upscaling run **on-device for free** (Apple Vision / Core Image), with higher-quality cloud models optional through a single fal.ai key. Object removal uses an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`. Transparency is handled end to end.
 - **Calendar & Reminders** — the assistant reads your schedule and creates events through macOS EventKit (iCloud, Google, Exchange — whatever is already synced). Per-calendar checkboxes decide what it can see. Off by default.
 - **World Time** — a timezone grid in a floating glass panel: cities as rows, the home city's 24 hours as columns, DST-aware, every IANA zone plus ~240 major cities, searchable in English, Russian and Spanish at once. With the Calendar addon on, it also shows your busy lane and creates 30-minute events by clicking a slot.
 - **LayoutFix** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES), statistically rather than by dictionary lookup, so names and typos convert too.
-- **Hermes Agent** — connect a self-hosted [Hermes agent](https://github.com/NousResearch/hermes-agent) as a role in the chat switcher; see below.
-- **Plaud** — connect a [Plaud](https://www.plaud.ai) voice recorder account and ask about your recorded meetings; summaries, transcripts with clickable timecodes and inline audio, all through OAuth with read-only access.
+
+Two addons are large enough to have their own sections: [Hermes Agent](#hermes-agent--your-own-agent-gets-a-desktop) and [Plaud](#plaud--your-recorded-meetings-become-answerable).
 
 </details>
 
@@ -81,14 +81,37 @@ All of them are configurable in Settings → General.
 
 </details>
 
-## Connect a self-hosted agent
+## Hermes Agent — your own agent gets a desktop
 
-Cuate can act as a desktop surface for a [Hermes agent](https://github.com/NousResearch/hermes-agent) you run yourself. The agent keeps its own memory, tools and model keys; Cuate becomes one more surface of it — what you started in Telegram or the CLI continues here, and vice versa.
+A [Hermes agent](https://github.com/NousResearch/hermes-agent) (Nous Research) is a self-hosted assistant with its own long-term memory, skills, cron jobs and terminal — running on your Mac, a home server or a VPS. It normally answers through Telegram or a CLI. Cuate becomes another surface of that same agent: a conversation you started on your phone continues here, and what you do here shows up there.
 
-Each gateway session opens as its own conversation, with a sidebar for sessions, skills and the agent's runtime passport. Files travel both ways, tool runs show live and persist as a step journal, and system notifications cover turns that finish while the app is closed.
+The agent stays a black box with its own configuration — Cuate never injects prompts, tools or model settings into it.
 
-- **Local agent** — Settings → Hermes Agent walks you through it; a card sets up and starts the gateway service in one click.
-- **Agent on a VPS**, reachable from anywhere without a VPN — see [docs/hermes-vps-setup.md](docs/hermes-vps-setup.md). The guide is self-sufficient: follow it yourself, or paste it into any capable LLM and it will walk you through with your values.
+**In the chat.** The agent appears as a role in the prompt switcher, next to your presets. Every gateway session opens as **its own conversation** with its own history and streaming, so a long task in one session keeps running while you talk in another. Typing `/` autocompletes the agent's **skills**; a composer control switches the session's **model and reasoning effort**; a message typed mid-turn reaches the working agent instead of waiting for it to finish.
+
+**While it works.** Tool runs appear live in the status pill and stay as a collapsible step journal — expand a step for the command, its output, exit code and touched paths. A context gauge shows how full the model's window actually is, and clicking it compacts the conversation on the agent's side.
+
+**The sidebar.** Sessions (create, rename, pin, color, delete, unread badges), the agent's skills and toolsets, and its runtime passport: which model it is on and which host actually executes its commands.
+
+**Files both ways.** Anything you attach is couriered onto the agent's host, so a file you added on the phone is real for the agent too. Files it creates come back the same way: HTML and Markdown arrive as artifact cards with in-app preview, other files download on click, and paths in its replies are clickable. A folder button lists everything exchanged in the conversation.
+
+**When you are away.** A background watch notifies you about finished turns — including runs that completed while the app was closed, or work started from another surface entirely.
+
+**Setup.** For an agent on this Mac, Settings → Hermes Agent sets up and starts the gateway service in one click. For an agent on a VPS reachable from anywhere without a VPN, follow [docs/hermes-vps-setup.md](docs/hermes-vps-setup.md) — it is self-sufficient: do it yourself, or paste it into any capable LLM and it will walk you through with your values. The token lives in the Keychain; the endpoint works over loopback, LAN or Tailscale.
+
+The app's own image tools and OCR **stay out of agent chats by default** — the agent owns its sessions end to end. An opt-in toggle brings them in, running on the app's own keys, with results kept local to Cuate.
+
+## Plaud — your recorded meetings become answerable
+
+A [Plaud](https://www.plaud.ai) recorder captures meetings and calls; its app turns them into summaries and transcripts. Cuate connects your account so the assistant can **search that library and read from it inside any chat** — "what did we decide on Monday's call?" stops being a question you answer by scrolling.
+
+**Sign-in is OAuth in the browser** — the app never sees your password, tokens live in the Keychain, and access is revocable any time. Access is **read-only**: Cuate can find and read, never modify.
+
+**Recordings arrive as cards.** When the assistant finds or reads one, it attaches to the reply. Open a card for a preview with every summary tab (Summary, Highlights, …), the **full transcript with clickable timecodes**, and **inline audio streamed straight from Plaud** — seek anywhere, control it from Now Playing and the media keys, or click a timestamp to play from that moment.
+
+**Unprocessed recordings are flagged** rather than silently skipped, and deep-link into Plaud's web app where processing starts (their API cannot start it — hence no surprise charges).
+
+`/plaud <question>` pins a turn to your notes, and a privacy mode makes recordings reachable **only** through that command. Note content leaves your Mac only as part of a chat request to the provider you chose, and only when the assistant actually reads a recording. Off by default.
 
 ## Android
 
