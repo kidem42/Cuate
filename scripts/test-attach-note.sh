@@ -8,13 +8,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "== Swift contract =="
+echo "== Swift contract: attach note =="
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 xcrun swiftc -o "$tmp/attach-note-test" \
     Cuate/Addons/AgentGateway/Core/AgentAttachNote.swift \
     scripts/AttachNoteContractTest.swift
 "$tmp/attach-note-test" shared/fixtures/attach-note.json
+
+echo "== Swift contract: plaud note =="
+# How an agent refers to a Plaud recording (plaud://<id>) and what the bubble
+# shows instead — the app resolves the id into its own card.
+xcrun swiftc -o "$tmp/plaud-note-test" \
+    Cuate/Addons/AgentGateway/Core/AgentPlaudNote.swift \
+    scripts/PlaudNoteContractTest.swift
+"$tmp/plaud-note-test" shared/fixtures/plaud-note.json
 
 echo "== Kotlin contract =="
 # Same JDK default as android/scripts/make-apk.sh.

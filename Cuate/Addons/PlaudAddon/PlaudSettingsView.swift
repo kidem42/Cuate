@@ -14,12 +14,22 @@ struct PlaudSettingsView: View {
 
     @State private var connectState = ConnectState.idle
 
+    /// Outcome of handing the agent its own grant (see `agentGrantSection`).
+    private enum GrantState: Equatable {
+        case idle
+        case working
+        case done
+        case failed(String)
+    }
+    @State private var grantState = GrantState.idle
+
     var body: some View {
         Form {
             introSection
             connectionSection
             if settings.isConnected {
                 exposureSection
+                agentGrantSection
             }
         }
         .formStyle(.grouped)
@@ -185,6 +195,55 @@ struct PlaudSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+        }
+    }
+
+    /// Hands the connected Hermes agent its own copy of the grant, so it can
+    /// read the library on every surface it has — not just inside this app.
+    /// Only shown once both accounts are connected: without an agent there is
+    /// nowhere to send it, and without Plaud there is nothing to send.
+    @ViewBuilder
+    private var agentGrantSection: some View {
+        if PlaudAddon.shared.isAvailable, HermesSettings.shared.enabled {
+            Section {
+                HStack(spacing: 10) {
+                    Button(PLL("plaud.grant.action")) {
+                        Task { await grantAgentAccess() }
+                    }
+                    .disabled(grantState == .working)
+                    switch grantState {
+                    case .idle:
+                        EmptyView()
+                    case .working:
+                        ProgressView().controlSize(.small)
+                    case .done:
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text(PLL("plaud.grant.ok")).font(.callout).foregroundColor(.secondary)
+                    case .failed(let message):
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                        Text(message)
+                            .font(.callout).foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } header: {
+                Text(PLL("plaud.grant.header"))
+            } footer: {
+                Text(PLL("plaud.grant.caption"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func grantAgentAccess() async {
+        grantState = .working
+        do {
+            try await PlaudAgentGrant.grant()
+            grantState = .done
+        } catch {
+            grantState = .failed(error.localizedDescription)
         }
     }
 

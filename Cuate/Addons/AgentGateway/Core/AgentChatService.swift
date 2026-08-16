@@ -129,6 +129,25 @@ enum AgentChatService {
                         }
                     }
 
+                    // Recordings the agent named by id (its host carries the
+                    // Plaud plugin): resolved here with OUR grant into the
+                    // usual chips, so the reply keeps the words and the card
+                    // keeps every tab, the timecoded transcript and the audio.
+                    // The markers leave the text — they are addressing, not
+                    // prose (AgentPlaudNote).
+                    let (plaudDisplay, plaudRefs) = AgentPlaudNote.split(completedText)
+                    if !plaudRefs.isEmpty {
+                        if plaudDisplay != completedText {
+                            completedText = plaudDisplay
+                            continuation.yield(.replaceText(plaudDisplay))
+                        }
+                        let chips = await PlaudAgentChips.attachments(for: plaudRefs)
+                        if !chips.isEmpty {
+                            Diagnostics.log("plaud", "agent.chips n=\(chips.count) refs=\(plaudRefs.count)")
+                            continuation.yield(.attachments(chips))
+                        }
+                    }
+
                     if let summary = journal.summary() {
                         continuation.yield(.agentSteps(summary))
                     }

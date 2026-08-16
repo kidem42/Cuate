@@ -74,6 +74,40 @@ enum PlaudAddonStrings {
 
         // Exposure section
         "plaud.exposure.header": [.english: "Availability", .spanish: "Disponibilidad", .russian: "Доступность"],
+
+        // Handing the Hermes agent its own read-only grant.
+        "plaud.grant.header": [
+            .english: "Hermes agent", .spanish: "Agente Hermes", .russian: "Агент Hermes"
+        ],
+        "plaud.grant.action": [
+            .english: "Give the agent access",
+            .spanish: "Dar acceso al agente",
+            .russian: "Дать доступ агенту"
+        ],
+        "plaud.grant.caption": [
+            .english: "Copies your Plaud sign-in to the agent's host, so it can search your recordings on every surface it has — chat, messengers, scheduled jobs — not only inside this app. Access stays read-only and is revocable at any time in the Plaud app. The agent needs the cuate-plaud plugin installed.",
+            .spanish: "Copia tu sesión de Plaud al host del agente, para que pueda buscar tus grabaciones en todas sus superficies — chat, mensajería, tareas programadas — y no solo dentro de esta app. El acceso sigue siendo de solo lectura y es revocable en cualquier momento en la app de Plaud. El agente necesita el plugin cuate-plaud instalado.",
+            .russian: "Копирует вашу авторизацию Plaud на машину агента, чтобы он искал записи на всех своих поверхностях — в чате, мессенджерах, задачах по расписанию, — а не только внутри этого приложения. Доступ остаётся только на чтение и отзывается в любой момент в приложении Plaud. Агенту нужен установленный плагин cuate-plaud."
+        ],
+        "plaud.grant.ok": [
+            .english: "The agent has access", .spanish: "El agente tiene acceso",
+            .russian: "У агента есть доступ"
+        ],
+        "plaud.grant.err.notconnected": [
+            .english: "Connect the Plaud account first.",
+            .spanish: "Conecta primero la cuenta de Plaud.",
+            .russian: "Сначала подключите аккаунт Plaud."
+        ],
+        "plaud.grant.err.nodashboard": [
+            .english: "A remote agent needs its dashboard configured (Settings → Hermes Agent) — that is how the file reaches its host.",
+            .spanish: "Un agente remoto necesita su panel configurado (Ajustes → Agente Hermes): así llega el archivo a su host.",
+            .russian: "Для удалённого агента нужен настроенный дашборд (Настройки → Агент Hermes) — через него файл попадает на его машину."
+        ],
+        "plaud.grant.err.write": [
+            .english: "Could not deliver the access file:",
+            .spanish: "No se pudo entregar el archivo de acceso:",
+            .russian: "Не удалось доставить файл доступа:"
+        ],
         "plaud.exposure.always": [
             .english: "Assistant may use Plaud in any chat",
             .spanish: "El asistente puede usar Plaud en cualquier chat",

@@ -1,0 +1,79 @@
+{
+  "_comment": "Executable contract for the agent Plaud note — how an agent that carries the Plaud plugin refers to a recording, and what the app renders instead. The agent returns an IDENTIFIER (plaud://<file_id>); the app resolves it with its own Plaud grant into the usual chip and preview. Consumed by BOTH platforms' tests (Swift: scripts/PlaudNoteContractTest.swift via scripts/test-attach-note.sh; Kotlin: android app unit test AgentPlaudNoteTest). The reader is deliberately forgiving — the writer is a language model.",
+  "compose": [
+    {
+      "name": "single-with-title",
+      "references": [{ "fileID": "6812f0abc", "title": "GFT sync" }],
+      "note": "Plaud recordings:\n- plaud://6812f0abc — GFT sync"
+    },
+    {
+      "name": "multiple-mixed-titles",
+      "references": [
+        { "fileID": "aaa111", "title": "Standup" },
+        { "fileID": "bbb222", "title": "" }
+      ],
+      "note": "Plaud recordings:\n- plaud://aaa111 — Standup\n- plaud://bbb222"
+    },
+    {
+      "name": "empty",
+      "references": [],
+      "note": ""
+    }
+  ],
+  "split": [
+    {
+      "name": "canonical-block-after-text",
+      "text": "На созвоне решили переносить релиз на пятницу.\n\nPlaud recordings:\n- plaud://6812f0abc — GFT sync",
+      "display": "На созвоне решили переносить релиз на пятницу.",
+      "references": [{ "fileID": "6812f0abc", "title": "GFT sync" }]
+    },
+    {
+      "name": "block-only",
+      "text": "Plaud recordings:\n- plaud://aaa111 — Standup\n- plaud://bbb222 — Retro",
+      "display": "",
+      "references": [
+        { "fileID": "aaa111", "title": "Standup" },
+        { "fileID": "bbb222", "title": "Retro" }
+      ]
+    },
+    {
+      "name": "markdown-link-keeps-label",
+      "text": "Подробности в записи [Планёрка 12 авг](plaud://xyz789), там же сроки.",
+      "display": "Подробности в записи Планёрка 12 авг, там же сроки.",
+      "references": [{ "fileID": "xyz789", "title": "Планёрка 12 авг" }]
+    },
+    {
+      "name": "inline-marker-mid-sentence",
+      "text": "Смотри запись plaud://q1w2e3 — там про бюджет.",
+      "display": "Смотри запись — там про бюджет.",
+      "references": [{ "fileID": "q1w2e3", "title": "" }]
+    },
+    {
+      "name": "duplicate-ids-collapse-and-keep-best-title",
+      "text": "Есть plaud://dup1 и ещё раз [Ретро](plaud://dup1).",
+      "display": "Есть и ещё раз Ретро.",
+      "references": [{ "fileID": "dup1", "title": "Ретро" }]
+    },
+    {
+      "name": "bullet-without-header",
+      "text": "Нашёл две записи:\n* plaud://one11 (Созвон с юристом)\n* plaud://two22",
+      "display": "Нашёл две записи:",
+      "references": [
+        { "fileID": "one11", "title": "Созвон с юристом" },
+        { "fileID": "two22", "title": "" }
+      ]
+    },
+    {
+      "name": "no-markers-is-untouched",
+      "text": "Никаких записей не нашлось — в Plaud за эту неделю пусто.",
+      "display": "Никаких записей не нашлось — в Plaud за эту неделю пусто.",
+      "references": []
+    },
+    {
+      "name": "crlf-and-trailing-blank-lines",
+      "text": "Итог ниже.\r\n\r\nPlaud recordings:\r\n- plaud://crlf01 — Weekly\r\n\r\n",
+      "display": "Итог ниже.",
+      "references": [{ "fileID": "crlf01", "title": "Weekly" }]
+    }
+  ]
+}

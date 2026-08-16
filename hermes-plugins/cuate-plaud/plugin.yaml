@@ -1,0 +1,18 @@
+name: cuate-plaud
+version: 1.0.0
+description: "Search and read a personal Plaud voice-recorder library (meetings, calls, memos) — recordings, AI summaries and transcripts. Read-only."
+author: "Cuate (github.com/kidem42/Cuate)"
+license: MIT
+kind: standalone
+platforms: [linux, macos]
+provides_tools:
+  - plaud_find
+  - plaud_get_note
+  - plaud_get_transcript
+optional_env:
+  - name: PLAUD_ACCESS_TOKEN
+    description: "Plaud OAuth access token. Read from ~/.hermes/plaud.json when unset — that file is what the Cuate desktop app writes when you grant the agent access."
+    password: true
+  - name: PLAUD_REFRESH_TOKEN
+    description: "Plaud OAuth refresh token; lets the plugin renew the access token by itself."
+    password: true

@@ -105,6 +105,25 @@ actor PlaudClient {
         return tokens
     }
 
+    /// The grant, in the shape the Hermes plugin reads (`~/.hermes/plaud.json`).
+    /// Handing an agent host a COPY of the tokens is the whole point — it can
+    /// then read the library on its own — so this is deliberately the only way
+    /// out of the Keychain, and only the two token fields leave: the plugin
+    /// refreshes on its own and keeps its own expiry.
+    ///
+    /// nil when nothing is connected, or when there is no refresh token to
+    /// renew with — a grant that dies at the next expiry would look like a
+    /// broken agent days later.
+    func exportableGrant() -> Data? {
+        guard let tokens = loadTokens(),
+              let refresh = tokens.refreshToken, !refresh.isEmpty else { return nil }
+        let payload: [String: String] = [
+            "access_token": tokens.accessToken,
+            "refresh_token": refresh,
+        ]
+        return try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+    }
+
     private func saveTokens(_ tokens: TokenSet) {
         cachedTokens = tokens
         loadedFromKeychain = true
