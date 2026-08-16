@@ -69,7 +69,7 @@ final class StreamingReplyModel: ObservableObject {
         var searchRange = tail.startIndex..<limit
         while let boundary = tail.range(of: "\n\n", options: .backwards, range: searchRange) {
             let candidate = String(tail[..<boundary.upperBound])
-            if hasNoOpenFence(candidate) {
+            if hasNoOpenFence(candidate), !endsInsideList(candidate) {
                 segments.append(Segment(id: nextSegmentID, text: candidate))
                 nextSegmentID += 1
                 tail = String(tail[boundary.upperBound...])
@@ -102,6 +102,29 @@ final class StreamingReplyModel: ObservableObject {
             lineStart = lineEnd < tail.endIndex ? tail.index(after: lineEnd) : tail.endIndex
         }
         return openTicks > 0 ? openStart : nil
+    }
+
+    /// True when the candidate's last real line is a list item.
+    ///
+    /// A blank line does NOT end a list (CommonMark's "loose" list, and models
+    /// leave blank lines between numbered points all the time), so freezing
+    /// there would hand the parser two lists instead of one — and the second
+    /// would start counting from scratch. Waiting for a boundary that is not
+    /// inside a list keeps segment-by-segment rendering identical to parsing
+    /// the whole answer at once, which is the invariant this type is built on.
+    private func endsInsideList(_ text: String) -> Bool {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        // Walk up from the end: blanks are transparent, an indented line is a
+        // continuation and keeps looking, the first line that decides wins.
+        for line in lines.reversed() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if MarkdownBlocksView.isListLine(String(line)) { return true }
+            let indent = line.prefix { $0 == " " || $0 == "\t" }.count
+            if indent >= 2 { continue }
+            return false
+        }
+        return false
     }
 
     /// True when every ``` fence opened in `text` is closed again — the

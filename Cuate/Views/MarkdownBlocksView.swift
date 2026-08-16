@@ -22,12 +22,41 @@ struct MarkdownBlocksView: View {
         case document
     }
 
-    enum Block {
+    /// One entry of a list, with whatever is nested under it: sub-lists and
+    /// continuation lines. Lists are a TREE — a flat model renumbered every
+    /// sub-list's parent from 1 and lost indentation entirely (an answer with
+    /// seven numbered points, each with sub-bullets, rendered as seven "1."s).
+    struct ListItem {
+        let text: String
+        let children: [Block]
+
+        init(_ text: String, children: [Block] = []) {
+            self.text = text
+            self.children = children
+        }
+    }
+
+    struct TaskItem {
+        let checked: Bool
+        let text: String
+        let children: [Block]
+
+        init(checked: Bool, text: String, children: [Block] = []) {
+            self.checked = checked
+            self.text = text
+            self.children = children
+        }
+    }
+
+    indirect enum Block {
         case paragraph(String)
         case heading(level: Int, text: String)
-        case bullets([String])
-        case numbered([String])
-        case tasks([(checked: Bool, text: String)])
+        case bullets([ListItem])
+        /// `start` is the first item's own number: CommonMark renumbers the
+        /// rest from it, so "1. 1. 1." counts up and a list that opens at "3."
+        /// keeps starting at three.
+        case numbered(start: Int, items: [ListItem])
+        case tasks([TaskItem])
         case quote(String)
         case code(content: String, language: String)
         case divider
@@ -43,6 +72,112 @@ struct MarkdownBlocksView: View {
         /// Loading goes through `AgentInlineImageView` (adds the gateway's
         /// Bearer token for its own host).
         case image(alt: String, url: String)
+    }
+
+    /// A list line as parsed, before nesting is worked out.
+    struct RawListLine {
+        enum Kind: Equatable {
+            case bullet
+            case numbered(Int)
+            case task(Bool)
+            /// A non-list line indented under an item — it keeps its place in
+            /// the stream, so a sentence written after a sub-list renders
+            /// after it and one written before renders before.
+            case text
+
+            /// Two lines belong to the same list only when they are the same
+            /// KIND of list — a bullet run after a numbered run is a new list,
+            /// not a continuation of it.
+            var family: Int {
+                switch self {
+                case .bullet: return 0
+                case .numbered: return 1
+                case .task: return 2
+                case .text: return 3
+                }
+            }
+        }
+
+        let indent: Int
+        /// Column where the item's TEXT starts (indent + marker width). A
+        /// continuation line belongs to the deepest item whose text column is
+        /// at or left of it — indenting under "- option A" is not the same as
+        /// indenting under the numbered point that owns it.
+        let contentIndent: Int
+        let kind: Kind
+        let text: String
+    }
+
+    /// Whether a line opens or continues a list. Shared with the streaming
+    /// buffer: a blank line no longer ends a list, so cutting the text there
+    /// would split one list into two and restart its numbering.
+    static func isListLine(_ rawLine: String) -> Bool {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ")
+            || trimmed.hasPrefix("+ ") { return true }
+        let digits = trimmed.prefix(while: { $0.isNumber })
+        guard !digits.isEmpty, digits.count <= 3 else { return false }
+        let rest = trimmed.dropFirst(digits.count)
+        return rest.hasPrefix(". ") || rest.hasPrefix(") ")
+    }
+
+    /// Turns a flat run of list lines into blocks, nesting by indentation.
+    ///
+    /// Rules, in the order they matter:
+    /// - the shallowest indentation in the run is the top level; anything
+    ///   deeper belongs to the item above it (models indent by 2, 3 or 4
+    ///   spaces, so levels are compared, never divided);
+    /// - a change of list kind at the same level starts a new list — bullets
+    ///   under a numbered point are a sub-list, not a renumbering;
+    /// - an ordered list keeps its FIRST number as the start and counts from
+    ///   there, which is what CommonMark does and what makes "1. 1. 1." come
+    ///   out as 1, 2, 3.
+    static func buildListBlocks(_ lines: [RawListLine]) -> [Block] {
+        guard !lines.isEmpty else { return [] }
+        let base = lines.map(\.indent).min() ?? 0
+
+        var blocks: [Block] = []
+        var index = 0
+        while index < lines.count {
+            let family = lines[index].kind.family
+            var bullets: [ListItem] = []
+            var tasks: [TaskItem] = []
+            var prose: [String] = []
+            var start: Int?
+
+            // One run of same-kind items at this level, each with its subtree.
+            while index < lines.count, lines[index].indent <= base,
+                  lines[index].kind.family == family {
+                let line = lines[index]
+                index += 1
+                var childLines: [RawListLine] = []
+                while index < lines.count, lines[index].indent > base {
+                    childLines.append(lines[index])
+                    index += 1
+                }
+                let children = buildListBlocks(childLines)
+                switch line.kind {
+                case .bullet:
+                    bullets.append(ListItem(line.text, children: children))
+                case .numbered(let number):
+                    if start == nil { start = number }
+                    bullets.append(ListItem(line.text, children: children))
+                case .task(let checked):
+                    tasks.append(TaskItem(checked: checked, text: line.text, children: children))
+                case .text:
+                    prose.append(line.text)
+                }
+            }
+
+            switch family {
+            case 0 where !bullets.isEmpty: blocks.append(.bullets(bullets))
+            case 1 where !bullets.isEmpty: blocks.append(.numbered(start: start ?? 1, items: bullets))
+            case 2 where !tasks.isEmpty: blocks.append(.tasks(tasks))
+            case 3 where !prose.isEmpty: blocks.append(.paragraph(prose.joined(separator: "\n")))
+            default: break
+            }
+        }
+        return blocks
     }
 
     private var isDocument: Bool { style == .document }
@@ -97,6 +232,22 @@ struct MarkdownBlocksView: View {
 
     // MARK: - Block rendering
 
+    /// Blocks nested under a list item. Indentation comes from the parent's
+    /// glyph column, so nothing extra is added here — a second level of
+    /// padding stacked up fast and pushed deep items off the bubble.
+    /// `AnyView` on purpose: `render` → `nested` → `render` is genuine
+    /// recursion, and a ViewBuilder's static type cannot close that loop.
+    private func nested(_ children: [Block]) -> AnyView {
+        guard !children.isEmpty else { return AnyView(EmptyView()) }
+        return AnyView(
+            VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
+                ForEach(Array(children.enumerated()), id: \.offset) { _, child in
+                    render(child)
+                }
+            }
+        )
+    }
+
     @ViewBuilder
     private func render(_ block: Block) -> some View {
         switch block {
@@ -115,20 +266,26 @@ struct MarkdownBlocksView: View {
                         Text(palette.isGlass ? "•" : palette.bulletGlyph)
                             .font(.system(size: 13))
                             .foregroundColor(palette.isGlass ? .primary : (palette.bulletColor ?? palette.ink))
-                        MarkdownText(item, linkColor: linkColor)
+                        VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
+                            MarkdownText(item.text, linkColor: linkColor)
+                            nested(item.children)
+                        }
                     }
                 }
             }
 
-        case .numbered(let items):
+        case .numbered(let start, let items):
             VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 6) {
-                        Text("\(index + 1).")
+                        Text("\(start + index).")
                             .font(.system(size: isDocument ? 13.5 : 12.5))
                             .foregroundColor(palette.isGlass ? .secondary : palette.secondaryText)
                             .frame(minWidth: 18, alignment: .trailing)
-                        MarkdownText(item, linkColor: linkColor)
+                        VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
+                            MarkdownText(item.text, linkColor: linkColor)
+                            nested(item.children)
+                        }
                     }
                 }
             }
@@ -143,10 +300,13 @@ struct MarkdownBlocksView: View {
                                 ? (palette.isGlass ? .accentColor : palette.accent)
                                 : (palette.isGlass ? .secondary : palette.secondaryText))
                             .padding(.top, 1.5)
-                        MarkdownText(item.text, linkColor: linkColor)
-                            .foregroundColor(item.checked
-                                ? (palette.isGlass ? .secondary : palette.secondaryText)
-                                : nil)
+                        VStack(alignment: .leading, spacing: isDocument ? 5 : 3) {
+                            MarkdownText(item.text, linkColor: linkColor)
+                                .foregroundColor(item.checked
+                                    ? (palette.isGlass ? .secondary : palette.secondaryText)
+                                    : nil)
+                            nested(item.children)
+                        }
                     }
                 }
             }
@@ -605,9 +765,10 @@ struct MarkdownBlocksView: View {
         if let cached = parseCache.object(forKey: cacheKey) { return cached.blocks }
         var blocks: [Block] = []
         var paragraphLines: [String] = []
-        var bulletItems: [String] = []
-        var numberedItems: [String] = []
-        var taskItems: [(checked: Bool, text: String)] = []
+        var listLines: [RawListLine] = []
+        // A single blank line inside a list is legal (a "loose" list); it ends
+        // the list only when what follows is not a list line.
+        var pendingListBlank = false
         var quoteLines: [String] = []
         var tableLines: [String] = []
         var codeLines: [String] = []
@@ -639,24 +800,6 @@ struct MarkdownBlocksView: View {
                 paragraphLines = []
             }
         }
-        func flushBullets() {
-            if !bulletItems.isEmpty {
-                blocks.append(.bullets(bulletItems))
-                bulletItems = []
-            }
-        }
-        func flushNumbered() {
-            if !numberedItems.isEmpty {
-                blocks.append(.numbered(numberedItems))
-                numberedItems = []
-            }
-        }
-        func flushTasks() {
-            if !taskItems.isEmpty {
-                blocks.append(.tasks(taskItems))
-                taskItems = []
-            }
-        }
         func flushQuote() {
             if !quoteLines.isEmpty {
                 blocks.append(.quote(quoteLines.joined(separator: "\n")))
@@ -683,9 +826,7 @@ struct MarkdownBlocksView: View {
         }
         func flushAllText() {
             flushParagraph()
-            flushBullets()
-            flushNumbered()
-            flushTasks()
+            flushList()
             flushQuote()
             flushTable()
         }
@@ -702,13 +843,46 @@ struct MarkdownBlocksView: View {
             }
         }
 
-        // "1. item" / "12) item" → ordered-list item.
-        func numberedItem(_ line: String) -> String? {
+        // "1. item" / "12) item" → ordered-list item, number kept: it decides
+        // where the list starts.
+        func numberedItem(_ line: String) -> (number: Int, text: String)? {
             let digits = line.prefix(while: { $0.isNumber })
-            guard !digits.isEmpty, digits.count <= 3 else { return nil }
+            guard !digits.isEmpty, digits.count <= 3, let number = Int(digits) else { return nil }
             let rest = line.dropFirst(digits.count)
             guard rest.hasPrefix(". ") || rest.hasPrefix(") ") else { return nil }
-            return String(rest.dropFirst(2))
+            return (number, String(rest.dropFirst(2)))
+        }
+
+        /// Any list line, before nesting is worked out. Indentation is kept in
+        /// SPACES (a tab counts as four) because models mix 2, 3 and 4-space
+        /// steps freely; the level is derived by comparing to siblings, never
+        /// by dividing.
+        func listLine(_ rawLine: String) -> RawListLine? {
+            let indent = rawLine.prefix { $0 == " " || $0 == "\t" }
+                .reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if let task = taskItem(trimmed) {
+                let marker = trimmed.count - task.text.count
+                return RawListLine(indent: indent, contentIndent: indent + marker,
+                                   kind: .task(task.checked), text: task.text)
+            }
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ")
+                || trimmed.hasPrefix("+ ") {
+                return RawListLine(indent: indent, contentIndent: indent + 2,
+                                   kind: .bullet, text: String(trimmed.dropFirst(2)))
+            }
+            if let numbered = numberedItem(trimmed) {
+                let marker = trimmed.count - numbered.text.count
+                return RawListLine(indent: indent, contentIndent: indent + marker,
+                                   kind: .numbered(numbered.number), text: numbered.text)
+            }
+            return nil
+        }
+
+        func flushList() {
+            guard !listLines.isEmpty else { return }
+            blocks.append(contentsOf: buildListBlocks(listLines))
+            listLines = []
         }
 
         for rawLine in text.components(separatedBy: "\n") {
@@ -740,7 +914,7 @@ struct MarkdownBlocksView: View {
 
             // Table row
             if trimmed.hasPrefix("|"), trimmed.hasSuffix("|"), trimmed.count > 1 {
-                flushParagraph(); flushBullets(); flushQuote()
+                flushParagraph(); flushList(); flushQuote()
                 tableLines.append(trimmed)
                 continue
             } else {
@@ -780,38 +954,47 @@ struct MarkdownBlocksView: View {
 
             // Block quote
             if trimmed.hasPrefix(">") {
-                flushParagraph(); flushBullets()
+                flushParagraph(); flushList()
                 quoteLines.append(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces))
                 continue
             } else {
                 flushQuote()
             }
 
-            // Task list — checked before bullets ("- [ ]" also matches "- ")
-            if let task = taskItem(trimmed) {
-                flushParagraph(); flushBullets(); flushNumbered()
-                taskItems.append(task)
-                continue
-            } else {
-                flushTasks()
-            }
-
-            // Bullet list
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
-                flushParagraph(); flushNumbered()
-                bulletItems.append(String(trimmed.dropFirst(2)))
-                continue
-            } else {
-                flushBullets()
-            }
-
-            // Ordered list
-            if let item = numberedItem(trimmed) {
+            // Lists (bullet, ordered, task) — one collector for all three, so
+            // a sub-list can never split its parent into a fresh block.
+            if let line = listLine(rawLine) {
                 flushParagraph()
-                numberedItems.append(item)
+                listLines.append(line)
+                pendingListBlank = false
                 continue
-            } else {
-                flushNumbered()
+            }
+
+            // Inside a list: an indented non-list line continues the item
+            // above it (the "compare cost, cooling, noise" sentence under a
+            // numbered point), and a single blank line does not end the list —
+            // only a blank followed by something else does.
+            if !listLines.isEmpty {
+                if trimmed.isEmpty {
+                    pendingListBlank = true
+                    continue
+                }
+                let indent = rawLine.prefix { $0 == " " || $0 == "\t" }
+                    .reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+                // Indented under some item: keep it in the stream at that
+                // item's depth, so its position relative to sub-lists holds.
+                if indent >= 2,
+                   let owner = listLines.lastIndex(where: { $0.contentIndent <= indent }) {
+                    listLines.append(RawListLine(
+                        indent: listLines[owner].contentIndent,
+                        contentIndent: listLines[owner].contentIndent,
+                        kind: .text, text: trimmed
+                    ))
+                    pendingListBlank = false
+                    continue
+                }
+                flushList()
+                pendingListBlank = false
             }
 
             // Blank line separates paragraphs
@@ -921,12 +1104,8 @@ struct MarkdownBlocksView: View {
             case .heading(let level, let content):
                 let tag = "h\(min(max(level, 1), 6))"
                 html += "<\(tag)>\(inlineHTML(content))</\(tag)>"
-            case .bullets(let items):
-                html += "<ul>" + items.map { "<li>\(inlineHTML($0))</li>" }.joined() + "</ul>"
-            case .numbered(let items):
-                html += "<ol>" + items.map { "<li>\(inlineHTML($0))</li>" }.joined() + "</ol>"
-            case .tasks(let items):
-                html += "<ul>" + items.map { "<li>\($0.checked ? "☑" : "☐") \(inlineHTML($0.text))</li>" }.joined() + "</ul>"
+            case .bullets, .numbered, .tasks:
+                html += listHTML(block)
             case .quote(let content):
                 html += "<blockquote>\(inlineHTML(content))</blockquote>"
             case .code(let content, _), .artifact(_, let content, _), .mermaid(let content, _):
@@ -945,6 +1124,33 @@ struct MarkdownBlocksView: View {
             }
         }
         return html
+    }
+
+    /// A list (with its sub-lists) as nested `<ul>`/`<ol>` — a spreadsheet
+    /// paste keeps the hierarchy instead of flattening it.
+    private static func listHTML(_ block: Block) -> String {
+        func itemHTML(_ text: String, _ children: [Block]) -> String {
+            "<li>" + inlineHTML(text) + children.map { child -> String in
+                switch child {
+                case .bullets, .numbered, .tasks: return listHTML(child)
+                case .paragraph(let content): return "<p>" + inlineHTML(content) + "</p>"
+                default: return ""
+                }
+            }.joined() + "</li>"
+        }
+        switch block {
+        case .bullets(let items):
+            return "<ul>" + items.map { itemHTML($0.text, $0.children) }.joined() + "</ul>"
+        case .numbered(let start, let items):
+            let open = start == 1 ? "<ol>" : "<ol start=\"\(start)\">"
+            return open + items.map { itemHTML($0.text, $0.children) }.joined() + "</ol>"
+        case .tasks(let items):
+            return "<ul>" + items.map {
+                itemHTML(($0.checked ? "☑ " : "☐ ") + $0.text, $0.children)
+            }.joined() + "</ul>"
+        default:
+            return ""
+        }
     }
 
     private static func escapeHTML(_ text: String) -> String {
@@ -1034,13 +1240,40 @@ private struct ProseRunText: View {
             hasher.combine(text)
             characters += text.count
         }
+        // Nested blocks feed the digest too: two runs differing only in a
+        // sub-list would otherwise share a cache entry and render each other.
+        func feedChild(_ block: MarkdownBlocksView.Block) {
+            switch block {
+            case .paragraph(let text): feed("cp", text)
+            case .bullets(let items): items.forEach { feedItem("cb", $0) }
+            case .numbered(let start, let items):
+                feed("cn", "\(start)")
+                items.forEach { feedItem("cn", $0) }
+            case .tasks(let items):
+                items.forEach { item in
+                    feed(item.checked ? "ct1" : "ct0", item.text)
+                    item.children.forEach { feedChild($0) }
+                }
+            default: break
+            }
+        }
+        func feedItem(_ tag: String, _ item: MarkdownBlocksView.ListItem) {
+            feed(tag, item.text)
+            item.children.forEach { feedChild($0) }
+        }
         for block in run {
             switch block {
             case .paragraph(let text): feed("p", text)
             case .heading(let level, let text): feed("h\(level)", text)
-            case .bullets(let items): items.forEach { feed("b", $0) }
-            case .numbered(let items): items.forEach { feed("n", $0) }
-            case .tasks(let items): items.forEach { feed($0.checked ? "t1" : "t0", $0.text) }
+            case .bullets(let items): items.forEach { feedItem("b", $0) }
+            case .numbered(let start, let items):
+                feed("n", "\(start)")
+                items.forEach { feedItem("n", $0) }
+            case .tasks(let items):
+                items.forEach { item in
+                    feed(item.checked ? "t1" : "t0", item.text)
+                    item.children.forEach { feedChild($0) }
+                }
             default: break
             }
         }
@@ -1068,44 +1301,75 @@ private struct ProseRunText: View {
                 }
                 result += heading
 
-            case .bullets(let items):
-                for (i, item) in items.enumerated() {
-                    if i > 0 { result += AttributedString("\n") }
-                    var glyph = AttributedString(palette.isGlass ? "•" : palette.bulletGlyph)
-                    glyph.font = .system(size: 13)
-                    if !palette.isGlass {
-                        glyph.foregroundColor = palette.bulletColor ?? palette.ink
-                    }
-                    result += glyph + AttributedString(" ") + inline(item)
-                }
-
-            case .numbered(let items):
-                for (i, item) in items.enumerated() {
-                    if i > 0 { result += AttributedString("\n") }
-                    var number = AttributedString("\(i + 1).")
-                    number.font = .system(size: isDocument ? 13.5 : 12.5)
-                    number.foregroundColor = palette.isGlass ? Color.secondary : palette.secondaryText
-                    result += number + AttributedString(" ") + inline(item)
-                }
-
-            case .tasks(let items):
-                for (i, item) in items.enumerated() {
-                    if i > 0 { result += AttributedString("\n") }
-                    var box = AttributedString(item.checked ? "☑" : "☐")
-                    box.foregroundColor = item.checked
-                        ? (palette.isGlass ? Color.accentColor : palette.accent)
-                        : (palette.isGlass ? Color.secondary : palette.secondaryText)
-                    result += box + AttributedString(" ")
-                    var text = inline(item.text)
-                    if item.checked {
-                        text.foregroundColor = palette.isGlass ? Color.secondary : palette.secondaryText
-                    }
-                    result += text
-                }
+            case .bullets, .numbered, .tasks:
+                result += list(block, depth: 0)
 
             default:
                 break
             }
+        }
+        return result
+    }
+
+    /// Lists inside a prose run, rendered recursively into the SAME
+    /// AttributedString — selection cannot cross view boundaries, so a nested
+    /// list must not become its own view. Depth shows as leading spaces: an
+    /// attributed run has no padding, and two spaces per level line up with
+    /// the glyph column closely enough to read as nesting.
+    private func list(_ block: MarkdownBlocksView.Block, depth: Int) -> AttributedString {
+        var result = AttributedString()
+        let pad = AttributedString(String(repeating: "  ", count: depth))
+
+        func appendItem(_ marker: AttributedString, _ text: AttributedString,
+                        children: [MarkdownBlocksView.Block], first: Bool) {
+            if !first || depth > 0 { result += AttributedString("\n") }
+            result += pad + marker + AttributedString(" ") + text
+            for child in children {
+                switch child {
+                case .bullets, .numbered, .tasks:
+                    result += list(child, depth: depth + 1)
+                case .paragraph(let content):
+                    result += AttributedString("\n") + pad + AttributedString("  ") + inline(content)
+                default:
+                    break
+                }
+            }
+        }
+
+        switch block {
+        case .bullets(let items):
+            for (i, item) in items.enumerated() {
+                var glyph = AttributedString(palette.isGlass ? "•" : palette.bulletGlyph)
+                glyph.font = .system(size: 13)
+                if !palette.isGlass {
+                    glyph.foregroundColor = palette.bulletColor ?? palette.ink
+                }
+                appendItem(glyph, inline(item.text), children: item.children, first: i == 0)
+            }
+
+        case .numbered(let start, let items):
+            for (i, item) in items.enumerated() {
+                var number = AttributedString("\(start + i).")
+                number.font = .system(size: isDocument ? 13.5 : 12.5)
+                number.foregroundColor = palette.isGlass ? Color.secondary : palette.secondaryText
+                appendItem(number, inline(item.text), children: item.children, first: i == 0)
+            }
+
+        case .tasks(let items):
+            for (i, item) in items.enumerated() {
+                var box = AttributedString(item.checked ? "☑" : "☐")
+                box.foregroundColor = item.checked
+                    ? (palette.isGlass ? Color.accentColor : palette.accent)
+                    : (palette.isGlass ? Color.secondary : palette.secondaryText)
+                var text = inline(item.text)
+                if item.checked {
+                    text.foregroundColor = palette.isGlass ? Color.secondary : palette.secondaryText
+                }
+                appendItem(box, text, children: item.children, first: i == 0)
+            }
+
+        default:
+            break
         }
         return result
     }

@@ -104,6 +104,8 @@ private fun parseBlocks(markdown: String): List<MdBlock> {
     val lines = markdown.lines()
     var i = 0
     val paragraph = StringBuilder()
+    // depth → the number the next ordered item at that depth gets.
+    val orderedCounters = mutableMapOf<Int, Int>()
 
     fun flushParagraph() {
         if (paragraph.isNotEmpty()) {
@@ -173,14 +175,27 @@ private fun parseBlocks(markdown: String): List<MdBlock> {
                 flushParagraph()
                 val match = Regex("""^(\s*)([-*+]|\d+[.)])\s+(.*)""").find(line)!!
                 val (indentStr, marker, text) = match.destructured
+                val depth = indentStr.length / 2
                 // Task list: "- [ ] item" / "- [x] item" → checkbox glyph.
                 val task = Regex("""^\[([ xX])]\s+(.*)""").find(text)
                 if (task != null) {
                     val (state, taskText) = task.destructured
                     val box = if (state.equals("x", ignoreCase = true)) "☑" else "☐"
-                    blocks.add(MdBlock.ListItem(box, taskText, indentStr.length / 2))
+                    orderedCounters.keys.filter { it >= depth }.forEach { orderedCounters.remove(it) }
+                    blocks.add(MdBlock.ListItem(box, taskText, depth))
+                } else if (marker.first().isDigit()) {
+                    // The list COUNTS, it does not echo: models write "1." for
+                    // every item and rely on markdown to number them, and a
+                    // list that opens at "3." keeps counting from three
+                    // (CommonMark). Deeper levels reset when we come back up.
+                    orderedCounters.keys.filter { it > depth }.forEach { orderedCounters.remove(it) }
+                    val next = orderedCounters[depth]
+                        ?: (marker.dropLast(1).toIntOrNull() ?: 1)
+                    orderedCounters[depth] = next + 1
+                    blocks.add(MdBlock.ListItem("$next.", text, depth))
                 } else {
-                    blocks.add(MdBlock.ListItem(marker, text, indentStr.length / 2))
+                    orderedCounters.keys.filter { it >= depth }.forEach { orderedCounters.remove(it) }
+                    blocks.add(MdBlock.ListItem(marker, text, depth))
                 }
             }
             trimmed.isEmpty() -> flushParagraph()
