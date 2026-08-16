@@ -20,13 +20,53 @@ enum PlaudAgentChips {
     /// chip — the agent's words stay in the bubble either way, and a failed
     /// fetch must never cost the user the reply.
     static func attachments(for references: [AgentPlaudNote.Reference]) async -> [ChatAttachment] {
-        guard PlaudAddon.shared.isAvailable, !references.isEmpty else { return [] }
+        guard !references.isEmpty else { return [] }
+        // NOT `PlaudAddon.isAvailable`: that reads `settings.isConnected`, a
+        // flag seeded from a CACHE-ONLY Keychain probe at launch. Right after
+        // an app update the Keychain ACL re-authorizes for a few seconds, the
+        // probe answers "no key", and the flag stays false until something
+        // refreshes it — the agent's recordings then silently produced no
+        // chips (live, 2026-08-16). The grant itself is the truth here, so
+        // wait for the Keychain and ask it.
+        guard PlaudSettings.shared.enabled else {
+            Diagnostics.log("plaud", "agent.chips skipped=addon-off refs=\(references.count)")
+            return []
+        }
+        await APIKeyStore.warmIfNeeded()
+        guard PlaudClient.hasTokens else {
+            Diagnostics.log("plaud", "agent.chips skipped=not-connected refs=\(references.count)")
+            return []
+        }
         var chips: [ChatAttachment] = []
         for reference in references {
             guard let chip = await attachment(for: reference) else { continue }
             chips.append(chip)
         }
         return chips
+    }
+
+    /// The same contract applied to messages that did NOT come through a live
+    /// turn: an agent session run from the phone, a messenger or cron reaches
+    /// us through mirror sync, which inserts the gateway's text verbatim —
+    /// markers and all (live, 2026-08-16: a phone-side turn showed a bare
+    /// `plaud://…` where the desktop chat drew a card). Rewrites only the rows
+    /// that carry a marker, so re-running over a synced window is a no-op.
+    static func decorating(_ messages: [ChatMessage]) async -> [ChatMessage] {
+        var out = messages
+        for index in out.indices where !out[index].isUser && out[index].text.contains("plaud://") {
+            let (display, references) = AgentPlaudNote.split(out[index].text)
+            guard !references.isEmpty else { continue }
+            let chips = await attachments(for: references)
+            guard !chips.isEmpty else { continue }
+            let existing = Set(out[index].attachments.compactMap(\.fileURLString))
+            out[index].attachments += chips.filter {
+                $0.fileURLString.map { !existing.contains($0) } ?? true
+            }
+            // Only a fully resolved reply loses its markers: dropping an id we
+            // could NOT turn into a card would leave the user with neither.
+            if chips.count == references.count { out[index].text = display }
+        }
+        return out
     }
 
     private static func attachment(for reference: AgentPlaudNote.Reference) async -> ChatAttachment? {

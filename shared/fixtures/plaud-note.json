@@ -64,6 +64,18 @@
       ]
     },
     {
+      "name": "backticked-marker-on-its-own-line",
+      "text": "1. 07.08 — “Genset Proposal Update” — 32 мин\n   `plaud://e6d9f87185c4aa7280049c9a5255a78d`",
+      "display": "1. 07.08 — “Genset Proposal Update” — 32 мин",
+      "references": [{ "fileID": "e6d9f87185c4aa7280049c9a5255a78d", "title": "" }]
+    },
+    {
+      "name": "backticked-marker-inline-leaves-no-empty-code",
+      "text": "Смотри `plaud://q1w2e3` — там про бюджет.",
+      "display": "Смотри — там про бюджет.",
+      "references": [{ "fileID": "q1w2e3", "title": "" }]
+    },
+    {
       "name": "no-markers-is-untouched",
       "text": "Никаких записей не нашлось — в Plaud за эту неделю пусто.",
       "display": "Никаких записей не нашлось — в Plaud за эту неделю пусто.",

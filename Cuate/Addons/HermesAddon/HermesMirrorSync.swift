@@ -124,6 +124,14 @@ enum HermesMirrorSync {
                 Diagnostics.log("hermes", "mirror.thin session=\(sessionID) rows=\(rows.count) merged=\(merged.count) roles=\(roleTally) empty=\(empty) synthetic=\(synthetic)")
             }
             if changed {
+                // Rows the gateway just handed us hold the agent's RAW text,
+                // Plaud markers included — the live path strips them and grows
+                // chips instead, and a turn that ran elsewhere deserves the
+                // same card. Runs before the store write so the window lands
+                // in one update. No-op unless something new arrived carrying a
+                // marker (the guard above), and unless Plaud is connected.
+                let merged = await PlaudAgentChips.decorating(merged)
+                guard store.conversation == conversationID, store.isHistoryLoaded else { return true }
                 store.applyAgentMerge(merged)
                 Diagnostics.log("hermes", "mirror.catchUp session=\(sessionID) rows=\(rows.count) merged=\(merged.count) fetch=\(fetchMs)ms merge=\(mergeMs)ms")
             } else if fetchMs + mergeMs > 50 {
@@ -343,8 +351,15 @@ enum HermesMirrorSync {
             // Our briefed first send holds preamble + text on the gateway,
             // while the local bubble holds the text alone — strip the tagged
             // block before comparing (and below, before inserting).
-            let gwText = HermesBriefing.stripped(gwRow.content)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Plaud markers are addressing, not prose: the live bubble already
+            // dropped them and grew chips instead, so the transcript's copy is
+            // normalized the same way here. Comparing the raw form made every
+            // such turn look like a NEW message and inserted a duplicate
+            // carrying the raw `plaud://…` ids (e2e 2026-08-16).
+            let gwText = AgentPlaudNote.split(
+                HermesBriefing.stripped(gwRow.content)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            ).display
             var scan = textScanStart
             while scan < localRows.count {
                 let candidate = localRows[scan]
@@ -358,6 +373,12 @@ enum HermesMirrorSync {
                 let candidateMatches: (ChatMessage) -> Bool = { candidate in
                     let localText = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if localText == gwText { return true }
+                    // A reply whose recordings could not be resolved KEEPS its
+                    // markers (better a visible id than an empty bubble), so
+                    // the same turn exists in two shapes. Normalize ours too
+                    // before deciding it is a different message.
+                    if localText.contains("plaud://"),
+                       AgentPlaudNote.split(localText).display == gwText { return true }
                     // Assistant turns: the live bubble glues a run's interim
                     // segments as they arrive, the transcript stores them as
                     // separate rows — a partial overlap is the SAME turn, not
@@ -384,9 +405,13 @@ enum HermesMirrorSync {
                     localRows[scan].seq = gwRow.id
                     // Claimed by containment → the gateway holds the whole
                     // turn, our bubble only part of it: adopt its text so the
-                    // chat shows the full answer instead of half of it.
-                    if !isUser, !gwText.isEmpty,
-                       localRows[scan].text.trimmingCharacters(in: .whitespacesAndNewlines) != gwText {
+                    // chat shows the full answer instead of half of it. NOT
+                    // when the only difference is unresolved Plaud markers —
+                    // adopting there would drop the ids and leave a bubble
+                    // with nothing in it.
+                    let localText = localRows[scan].text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !isUser, !gwText.isEmpty, localText != gwText,
+                       !(localText.contains("plaud://") && AgentPlaudNote.split(localText).display == gwText) {
                         localRows[scan].text = gwText
                     }
                     if localRows[scan].agentSteps == nil, let steps = stepsByRowID[gwRow.id] {

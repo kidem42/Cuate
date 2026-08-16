@@ -137,14 +137,19 @@ enum AgentChatService {
                     // prose (AgentPlaudNote).
                     let (plaudDisplay, plaudRefs) = AgentPlaudNote.split(completedText)
                     if !plaudRefs.isEmpty {
-                        if plaudDisplay != completedText {
-                            completedText = plaudDisplay
-                            continuation.yield(.replaceText(plaudDisplay))
-                        }
+                        // Chips FIRST, text after: a marker is only noise once
+                        // it became a card. Stripping it up front — as this did
+                        // — left an empty bubble whenever the lookup failed
+                        // (Plaud disconnected, addon off), and a reply that is
+                        // nothing but a marker then vanished entirely.
                         let chips = await PlaudAgentChips.attachments(for: plaudRefs)
                         if !chips.isEmpty {
                             Diagnostics.log("plaud", "agent.chips n=\(chips.count) refs=\(plaudRefs.count)")
                             continuation.yield(.attachments(chips))
+                        }
+                        if chips.count == plaudRefs.count, plaudDisplay != completedText {
+                            completedText = plaudDisplay
+                            continuation.yield(.replaceText(plaudDisplay))
                         }
                     }
 

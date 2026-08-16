@@ -72,10 +72,16 @@ enum AgentPlaudNote {
     /// - a bare inline marker is dropped, and the leftover punctuation
     ///   ("see plaud://x — great call") is tidied.
     static func split(_ text: String) -> (display: String, references: [Reference]) {
-        let normalized = text
+        var normalized = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         guard normalized.contains("plaud://") else { return (text, []) }
+        // Models love to dress an identifier as inline code. Unwrap the
+        // backticks BEFORE anything else, or removing the marker leaves an
+        // empty `` behind — which is exactly what the first live run showed.
+        normalized = normalized.replacingOccurrences(
+            of: "`+\\s*(plaud://[A-Za-z0-9_-]+)\\s*`+", with: "$1", options: .regularExpression
+        )
 
         var references: [Reference] = []
         var seen = Set<String>()
@@ -115,7 +121,7 @@ enum AgentPlaudNote {
 
         // 3. Whatever markers are left sit inside prose. Only a line we
         // actually cut gets tidied — an untouched line's own punctuation
-        // ("Нашёл две записи:") is the author's, not our leftover.
+        // ("Found two recordings:") is the author's, not our leftover.
         for index in lines.indices {
             let stripped = replacingMatches(in: lines[index], pattern: #"plaud://([A-Za-z0-9_-]+)"#) { groups in
                 note(groups[0], "")
