@@ -9,6 +9,7 @@ through the agent. Clients that do not simply see a harmless token.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List
 
 from . import client
@@ -102,7 +103,21 @@ def _day(file_obj: Dict[str, Any]) -> str:
     return str(file_obj.get("created_at") or "")[:10]
 
 
-def _marker(file_id: str) -> str:
+def _reference(file_id: str) -> str:
+    """How a recording is referred to in the model's answer.
+
+    The IDENTIFIER is the contract — it is always present, so a client can act
+    on it. Only its shape is configurable, because a bare token reads as noise
+    on surfaces that cannot render anything from it:
+      marker (default) — plaud://<id>, what card-rendering clients look for;
+      link             — a deep link into Plaud's web app;
+      id               — the raw id.
+    """
+    style = (os.environ.get("PLAUD_REFERENCE_STYLE") or "marker").strip().lower()
+    if style == "link":
+        return client.deep_link(file_id)
+    if style == "id":
+        return file_id
     return f"plaud://{file_id}"
 
 
@@ -113,7 +128,7 @@ def _headline(file_obj: Dict[str, Any]) -> str:
     file_id = str(file_obj.get("id") or "")
     parts = [f'"{name}"', _day(file_obj), _duration(file_obj.get("duration"))]
     line = " | ".join(part for part in parts if part)
-    return f"{line} | {_marker(file_id)}"
+    return f"{line} | {_reference(file_id)}"
 
 
 def _clock(ms: Any) -> str:
@@ -130,17 +145,19 @@ def _clock(ms: Any) -> str:
 # --------------------------------------------------------------------------
 
 
-def _check_plaud_available() -> tuple[bool, str]:
+def _check_plaud_available() -> bool:
     """Registered either way so the tools show up in `hermes tools`; dispatch
-    is blocked until the grant exists."""
+    is blocked until a grant exists. Returns a plain bool — the shape the
+    registry expects (plugins/spotify/tools.py does the same)."""
     try:
         client._load_tokens()
-        return True, ""
-    except client.PlaudError as exc:
-        return False, str(exc)
+        return True
+    except client.PlaudError:
+        return False
 
 
-def _handle_plaud_find(**kwargs: Any) -> str:
+def _handle_plaud_find(args: Dict[str, Any] | None = None, **kwargs: Any) -> str:
+    kwargs = {**(args or {}), **kwargs}
     query = (kwargs.get("query") or "").strip().lower()
     date_from = (kwargs.get("date_from") or "").strip()
     date_to = (kwargs.get("date_to") or "").strip()
@@ -154,7 +171,7 @@ def _handle_plaud_find(**kwargs: Any) -> str:
         # here — over at most five pages, as in the desktop client.
         found: List[Dict[str, Any]] = []
         for page in range(1, 6):
-            batch = client.list_files(page=page, page_size=100)
+            batch = client.list_files(page=page, page_size=client.PAGE_SIZE)
             if not batch:
                 break
             for item in batch:
@@ -169,7 +186,7 @@ def _handle_plaud_find(**kwargs: Any) -> str:
                 found.append(item)
                 if len(found) >= limit:
                     break
-            if len(found) >= limit or len(batch) < 100:
+            if len(found) >= limit or len(batch) < client.PAGE_SIZE:
                 break
     except client.PlaudError as exc:
         return str(exc)
@@ -191,13 +208,14 @@ def _handle_plaud_find(**kwargs: Any) -> str:
             "at the Plaud app."
         )
     lines.append(
-        "\nWhen you mention a recording in your answer, keep its plaud://<id> marker — the app renders it "
-        "as a card with the summary, transcript and audio."
+        "\nKeep each recording's reference exactly as returned when you mention it — clients that "
+        "understand it render the recording with its summary, transcript and audio."
     )
     return "\n".join(lines)
 
 
-def _handle_plaud_get_note(**kwargs: Any) -> str:
+def _handle_plaud_get_note(args: Dict[str, Any] | None = None, **kwargs: Any) -> str:
+    kwargs = {**(args or {}), **kwargs}
     file_id = str(kwargs.get("file_id") or "").strip()
     wanted_tab = (kwargs.get("tab") or "").strip().lower()
     try:
@@ -228,7 +246,8 @@ def _handle_plaud_get_note(**kwargs: Any) -> str:
     return "\n".join(chunks)
 
 
-def _handle_plaud_get_transcript(**kwargs: Any) -> str:
+def _handle_plaud_get_transcript(args: Dict[str, Any] | None = None, **kwargs: Any) -> str:
+    kwargs = {**(args or {}), **kwargs}
     file_id = str(kwargs.get("file_id") or "").strip()
     try:
         from_min = float(kwargs["from_min"]) if kwargs.get("from_min") is not None else None
