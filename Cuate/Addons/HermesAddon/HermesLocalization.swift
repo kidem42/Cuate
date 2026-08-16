@@ -426,14 +426,14 @@ enum HermesAddonStrings {
             .russian: "Не удалось пропатчить гейтвей:"
         ],
         "hermes.setup.patch.title": [
-            .english: "Gateway patch: context gauge + mid-turn follow-ups",
-            .spanish: "Parche del gateway: medidor de contexto + mensajes durante el turno",
-            .russian: "Патч гейтвея: гейдж контекста + досылка сообщений"
+            .english: "Gateway patch: honest context gauge",
+            .spanish: "Parche del gateway: medidor de contexto honesto",
+            .russian: "Патч гейтвея: честный гейдж контекста"
         ],
         "hermes.setup.patch.caption": [
-            .english: "Paste into the remote machine's terminal after a Hermes update. Anchored edits to api_server.py: usage.context_tokens / context_window (the real context fill the API otherwise omits) and, on gateways without a stock route of their own, POST /steer (follow-ups reach the agent mid-turn instead of waiting). Backup next to the file; refuses on unknown layouts without touching anything. Safe to re-run; repeat after every Hermes update.",
-            .spanish: "Pega esto en la terminal de la máquina remota tras actualizar Hermes. Ediciones ancladas en api_server.py: usage.context_tokens / context_window (el llenado real del contexto que la API omite) y, en gateways sin ruta propia, POST /steer (los mensajes llegan al agente durante el turno en vez de esperar). Copia de seguridad junto al archivo; se niega ante estructuras desconocidas sin tocar nada. Se puede repetir; repítelo tras cada actualización de Hermes.",
-            .russian: "Вставьте в терминал удалённой машины после обновления Hermes. Правки по якорям в api_server.py: usage.context_tokens / context_window (реальное заполнение контекста, которого нет в API) и — на гейтвеях без собственной штатной ручки — POST /steer (сообщения доходят до агента прямо в работающий ход, а не ждут его конца). Бэкап рядом с файлом; на незнакомой структуре откажется, ничего не тронув. Повторный запуск безопасен; после каждого обновления Hermes — повторить."
+            .english: "Paste into the remote machine's terminal after a Hermes update. One anchored edit to api_server.py: usage.context_tokens / context_window — the real context fill, which the API otherwise omits, so the gauge stops estimating. Mid-turn follow-ups need no patch: recent Hermes ships its own route and Cuate uses it automatically. Backup next to the file; refuses on unknown layouts without touching anything. Safe to re-run; repeat after every Hermes update.",
+            .spanish: "Pega esto en la terminal de la máquina remota tras actualizar Hermes. Una edición anclada en api_server.py: usage.context_tokens / context_window — el llenado real del contexto que la API omite, para que el medidor deje de estimar. Los mensajes durante el turno no necesitan parche: Hermes reciente trae su propia ruta y Cuate la usa sola. Copia de seguridad junto al archivo; se niega ante estructuras desconocidas sin tocar nada. Se puede repetir; repítelo tras cada actualización de Hermes.",
+            .russian: "Вставьте в терминал удалённой машины после обновления Hermes. Одна правка по якорю в api_server.py: usage.context_tokens / context_window — реальное заполнение контекста, которого нет в API, чтобы индикатор не гадал. Досылка сообщений патча не требует: в свежем Hermes есть своя ручка, и Cuate использует её сама. Бэкап рядом с файлом; на незнакомой структуре откажется, ничего не тронув. Повторный запуск безопасен; после каждого обновления Hermes — повторить."
         ],
         "hermes.auto.step.reload": [
             .english: "Starting the gateway…",
