@@ -109,3 +109,15 @@ Cuate_Debug.zip
 
 # Internal docs — never published
 private/
+
+# Signing material — never commit. android/.gitignore covers the Android
+# keystore by name; these patterns are the repo-wide safety net.
+*.p12
+*.pfx
+*.keystore
+*.jks
+*.mobileprovision
+*.provisionprofile
+*.certSigningRequest
+*.p8
+keystore.properties
