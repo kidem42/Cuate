@@ -166,6 +166,7 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private var state: EngineState = .idle
     private var readyWaiters: [CheckedContinuation<Void, Never>] = []
     private var chain: Task<Void, Never>?
+    private var idleTeardown: Task<Void, Never>?
     private let cache: NSCache<NSString, CacheEntry> = {
         let cache = NSCache<NSString, CacheEntry>()
         cache.countLimit = 64
@@ -181,6 +182,8 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
     func render(code: String, theme: MermaidTheme, scale: CGFloat = 2) async -> Result<Rendered, RenderError> {
         let key = "\(theme.key)|\(scale)|\(code)" as NSString
         if let hit = cache.object(forKey: key) { return hit.result }
+        // A render is coming — the engine must not vanish mid-queue.
+        idleTeardown?.cancel()
         // Serialize: the engine has a single DOM shared by all renders.
         let previous = chain
         let work = Task { [weak self] () -> Result<Rendered, RenderError> in
@@ -191,8 +194,33 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
             self.cache.setObject(CacheEntry(result), forKey: key)
             return result
         }
-        chain = Task { _ = await work.value }
+        chain = Task { [weak self] in
+            _ = await work.value
+            self?.scheduleIdleTeardown()
+        }
         return await work.value
+    }
+
+    /// The engine exists to SNAPSHOT — once the queue drains, a whole
+    /// WKWebView (a web content process) plus its host window would sit idle
+    /// until the next diagram, which in a background app can be days away;
+    /// the window itself outlived its last render by a week (live,
+    /// 2026-08-19). One quiet minute and both are gone — the image cache
+    /// keeps already-rendered diagrams instant, and the next new render just
+    /// re-boots the engine (~0.5 s, serialized as usual).
+    private func scheduleIdleTeardown() {
+        idleTeardown?.cancel()
+        idleTeardown = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard !Task.isCancelled, let self, self.state == .ready else { return }
+            Diagnostics.log("mermaid", "engine.teardown idle")
+            self.webView?.navigationDelegate = nil
+            self.hostWindow?.orderOut(nil)
+            self.hostWindow?.contentView = nil
+            self.webView = nil
+            self.hostWindow = nil
+            self.state = .idle
+        }
     }
 
     // MARK: Engine lifecycle
@@ -236,6 +264,17 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
             window.isReleasedWhenClosed = false
             window.isExcludedFromWindowsMenu = true
             window.collectionBehavior = [.transient, .ignoresCycle, .stationary]
+            // The far-offscreen origin is NOT enough to keep this window out
+            // of sight: macOS relocates fully-offscreen windows onto a screen
+            // when the display arrangement changes (monitor plug/unplug,
+            // wake), and the borderless white band then parked over the
+            // desktop with no way to close it, re-appearing every launch that
+            // re-rendered a diagram (live, 2026-08-19). Fully transparent and
+            // click-through keeps it harmless wherever AppKit drops it —
+            // WKWebView snapshots are painted by the web process, not read
+            // off the screen, so zero alpha costs the renderer nothing.
+            window.alphaValue = 0
+            window.ignoresMouseEvents = true
             window.contentView = view
             window.orderBack(nil)
             webView = view
@@ -311,6 +350,9 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
             )
             webView.pageZoom = effectiveScale
             hostWindow?.setContentSize(pixelSize)
+            // Re-pin after every resize: if the system moved the window onto
+            // a screen (see ensureEngine), the next render sends it back out.
+            hostWindow?.setFrameOrigin(NSPoint(x: -20000, y: -20000))
             webView.frame = NSRect(origin: .zero, size: pixelSize)
             try? await Task.sleep(nanoseconds: 60_000_000) // let layout settle
 
