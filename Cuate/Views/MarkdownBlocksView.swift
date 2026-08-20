@@ -474,6 +474,29 @@ struct MarkdownBlocksView: View {
             settings.activeAgentRole
         }
 
+        /// Whether the block carries PROSE rather than code — models fence
+        /// "copy and send this" letters, and those must wrap at the card
+        /// edge (GitHub-style horizontal scrolling is for code, where a
+        /// broken line is a broken program). Anything tagged with a language,
+        /// or reading as shell commands / a diff / terminal output, keeps
+        /// the no-wrap scroller.
+        private var wrapsText: Bool {
+            if ["text", "txt", "plain"].contains(language) { return true }
+            guard language.isEmpty else { return false }
+            // Column alignment inside a fence (pipe/ASCII tables, box
+            // drawings) relies on the mono grid — wrapping would shred it.
+            // NOTE: real markdown pipe tables never reach this view; the
+            // parser renders them as a TableBlockView grid.
+            let gridMarkers = CharacterSet(charactersIn: "|│┃┌┐└┘├┤┬┴┼═║╔╗╚╝")
+            let gridLines = content.split(separator: "\n").filter {
+                $0.unicodeScalars.contains(where: gridMarkers.contains)
+            }
+            if gridLines.count >= 2 { return false }
+            return !AgentTerminalText.looksLikeShellCommands(content)
+                && !AgentTerminalText.isUnifiedDiff(content: content, language: language)
+                && !AgentTerminalText.containsANSI(content)
+        }
+
         private func copyContent() {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(content, forType: .string)
@@ -566,10 +589,28 @@ struct MarkdownBlocksView: View {
                     .padding(.top, 6)
                 }
 
-                ScrollView(.horizontal, showsIndicators: false) {
+                if wrapsText {
+                    // Prose in a fence (a letter to send, a quote to paste)
+                    // wraps at the card edge — a horizontal scroller would
+                    // hide everything past the first screenful of each line.
                     codeText
                         .textSelection(.enabled)
                         .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        codeText
+                            .textSelection(.enabled)
+                            .padding(8)
+                    }
+                    // A ScrollView is infinitely compressible, so a row whose
+                    // measured height came in short (stale intrinsic size after
+                    // a detached rootView swap, 2026-08-17) dumped the WHOLE
+                    // shortfall here — the code Text tail-truncated with "…"
+                    // while the rest of the bubble looked fine. Refuse vertical
+                    // compression: content must never silently disappear.
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .background(palette.isGlass ? AnyShapeStyle(Color.secondary.opacity(0.12)) : palette.codeFill)
