@@ -36,22 +36,30 @@ struct AgentInlineImageView: View {
                 .overlay(ProgressView().controlSize(.small))
                 .task { await load() }
         case .loaded(let image):
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: 420, maxHeight: 420, alignment: .leading)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .help(alt.isEmpty ? urlString : alt)
-                // A mirrored image is NOT a local attachment — without its
-                // own menu there was no way to copy or save a photo that
-                // arrived from another device (feedback 2026-08-01).
-                .contextMenu {
-                    Button(AGL("agent.image.copy")) {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.writeObjects([image])
-                    }
-                    Button(AGL("agent.image.save")) { saveToDownloads(image) }
+            // A real Button, not onTapGesture: the bubble wraps markdown in
+            // .textSelection(.enabled), and clicks over selectable regions
+            // start a selection instead of reaching a gesture (same trap as
+            // ArtifactCardView). Click opens the picture full-size in the
+            // system viewer — zoom, markup, and export come free — while the
+            // right-click menu keeps one-step copy/save (feedback 2026-08-01
+            // and 2026-08-19: no way to enlarge or save a note's photo).
+            Button { openExternally(image) } label: {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 420, maxHeight: 420, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .textSelection(.disabled)
+            .help(alt.isEmpty ? AGL("agent.image.open") : "\(alt) — \(AGL("agent.image.open"))")
+            .contextMenu {
+                Button(AGL("agent.image.copy")) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.writeObjects([image])
                 }
+                Button(AGL("agent.image.save")) { saveToDownloads(image) }
+            }
         case .failed:
             HStack(spacing: 6) {
                 Image(systemName: "photo.badge.exclamationmark")
@@ -87,6 +95,19 @@ struct AgentInlineImageView: View {
             if let comma = urlString.firstIndex(of: ","),
                let data = Data(base64Encoded: String(urlString[urlString.index(after: comma)...])),
                let image = NSImage(data: data) {
+                Self.cache.setObject(image, forKey: urlString as NSString)
+                Self.dataCache.setObject(data as NSData, forKey: urlString as NSString)
+                state = .loaded(image)
+            } else {
+                state = .failed
+            }
+            return
+        }
+        if !urlString.contains("://") {
+            // Cache-relative path (Plaud note pictures downloaded by
+            // PlaudImages): read off disk, never a network fetch.
+            let fileURL = ChatAttachment.resolveURL(urlString)
+            if let data = try? Data(contentsOf: fileURL), let image = NSImage(data: data) {
                 Self.cache.setObject(image, forKey: urlString as NSString)
                 Self.dataCache.setObject(data as NSData, forKey: urlString as NSString)
                 state = .loaded(image)
@@ -132,6 +153,51 @@ struct AgentInlineImageView: View {
         } catch {
             Diagnostics.log("agent", "image.load.fail \(String(error.localizedDescription.prefix(120)))")
             state = .failed
+        }
+    }
+
+    /// Opens the picture in the system viewer (Preview by default): free
+    /// zoom, markup, and export beat any in-app lightbox. A cache-relative
+    /// path opens its file in place; a remote image is written to a stable
+    /// temp file first — original bytes when still cached, PNG re-encode as
+    /// the fallback — so re-clicks reuse the same file.
+    private func openExternally(_ image: NSImage) {
+        if !urlString.contains("://") {
+            NSWorkspace.shared.open(ChatAttachment.resolveURL(urlString))
+            return
+        }
+        var ext = "png"
+        let data: Data
+        if let original = Self.dataCache.object(forKey: urlString as NSString) {
+            data = original as Data
+            ext = data.starts(with: [0xFF, 0xD8]) ? "jpg"
+                : data.starts(with: [0x47, 0x49]) ? "gif"
+                : "png"
+        } else if let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?
+                      .representation(using: .png, properties: [:]) {
+            data = png
+        } else {
+            NSSound.beep()
+            return
+        }
+        // FNV-1a of the URL — a stable per-image temp name.
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in urlString.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CuateImages", isDirectory: true)
+        let name = "image-" + String(format: "%08x", UInt32(truncatingIfNeeded: hash)) + "." + ext
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent(name)
+            try data.write(to: url, options: .atomic)
+            NSWorkspace.shared.open(url)
+        } catch {
+            NSSound.beep()
+            Diagnostics.log("agent", "image.open failed \(String(error.localizedDescription.prefix(120)))")
         }
     }
 

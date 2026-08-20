@@ -557,10 +557,17 @@ private struct PlaudNotePreviewView: View {
                 ?? item["data_type"] as? String
                 ?? "Note"
             if let content = await PlaudClient.resolveContent(of: item), !content.isEmpty {
+                // Pictures referenced by storage path are pulled into the
+                // cache while the response's presigned links are alive, and
+                // the tab keeps local references (PlaudImages).
                 PlaudNoteCache.writeTab(
                     fileID: fileID,
                     tabName: tabName,
-                    content: PlaudFormat.noteMarkdown(fromRaw: content)
+                    content: await PlaudImages.localize(
+                        markdown: PlaudFormat.noteMarkdown(fromRaw: content),
+                        fileID: fileID,
+                        file: file
+                    )
                 )
             }
         }

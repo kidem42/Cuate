@@ -317,9 +317,17 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
             }
             // data_link is presigned with a ~5-minute TTL — resolving right
             // here, inside the same tool call, is not an optimization but a
-            // correctness requirement.
-            let content = await PlaudClient.resolveContent(of: item)
+            // correctness requirement. Same for the note's pictures: their
+            // presigned links (the response's link map) die just as fast, so
+            // they are downloaded into the cache now and the Markdown points
+            // at the local copies from here on (PlaudImages).
+            var content = await PlaudClient.resolveContent(of: item)
                 .map(PlaudFormat.noteMarkdown(fromRaw:))
+            if let resolved = content, resolved.contains("![") {
+                content = await PlaudImages.localize(
+                    markdown: resolved, fileID: fileID, file: file
+                )
+            }
             sections.append("## Tab: \(tabName)\n" + (content?.isEmpty == false
                 ? content!
                 : "(this tab has no content)"))

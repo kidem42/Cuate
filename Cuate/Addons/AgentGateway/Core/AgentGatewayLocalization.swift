@@ -201,6 +201,11 @@ enum AgentGatewayStrings {
             .spanish: "Guardar en Descargas",
             .russian: "Сохранить в «Загрузки»"
         ],
+        "agent.image.open": [
+            .english: "Click to open — right-click to copy or save",
+            .spanish: "Clic para abrir — clic derecho para copiar o guardar",
+            .russian: "Клик — открыть, правый клик — скопировать или сохранить"
+        ],
 
         // MARK: Notifications (§7.1)
         "agent.notif.reply": [

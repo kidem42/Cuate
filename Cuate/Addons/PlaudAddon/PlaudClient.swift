@@ -425,6 +425,43 @@ actor PlaudClient {
         return text
     }
 
+    /// Raw bytes of a storage asset a note references by bare path
+    /// (`picture_link: "permanent/…/mark/….jpg"`). Resolution order mirrors
+    /// Plaud's own clients: the presigned URL from the response's link map
+    /// first (fast, no auth — but minutes-long TTL), then the API host with
+    /// the bearer, then the web host. Never sends the bearer to a presigned
+    /// URL — S3 rejects requests carrying both signatures.
+    func fetchAsset(path: String, linkMap: [String: String]) async -> Data? {
+        var candidates: [(label: String, url: URL, bearer: Bool)] = []
+        if let mapped = linkMap[path], let url = URL(string: mapped) {
+            candidates.append(("map", url, false))
+        }
+        if let url = URL(string: Self.apiBase + "/" + path) {
+            candidates.append(("api", url, true))
+        }
+        if let url = URL(string: Self.webAppURL + path) {
+            candidates.append(("web", url, false))
+        }
+        for candidate in candidates {
+            var request = URLRequest(url: candidate.url)
+            request.timeoutInterval = 20
+            if candidate.bearer {
+                guard let token = try? await validAccessToken() else { continue }
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode), !data.isEmpty else { continue }
+            // An error page or a JSON envelope is not a picture.
+            let mime = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+            guard !mime.contains("text/html"), !mime.contains("application/json") else { continue }
+            Diagnostics.log("plaud", "asset.fetch ok via=\(candidate.label) bytes=\(data.count)")
+            return data
+        }
+        Diagnostics.log("plaud", "asset.fetch failed path=\(path.prefix(80)) mapped=\(linkMap[path] != nil)")
+        return nil
+    }
+
     // MARK: - Helpers
 
     private static func randomBytes(_ count: Int) -> Data {

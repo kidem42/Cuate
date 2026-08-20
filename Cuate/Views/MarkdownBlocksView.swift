@@ -967,7 +967,10 @@ struct MarkdownBlocksView: View {
                let close = trimmed.range(of: "](") {
                 let alt = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<close.lowerBound])
                 let url = String(trimmed[close.upperBound..<trimmed.index(before: trimmed.endIndex)])
-                if url.hasPrefix("http://") || url.hasPrefix("https://") || url.hasPrefix("data:image") {
+                // "PlaudNotes/": recording pictures downloaded into the note
+                // cache (PlaudImages) — a cache-relative path, read off disk.
+                if url.hasPrefix("http://") || url.hasPrefix("https://") || url.hasPrefix("data:image")
+                    || url.hasPrefix("PlaudNotes/") {
                     flushAllText()
                     blocks.append(.image(alt: alt, url: url))
                     continue
