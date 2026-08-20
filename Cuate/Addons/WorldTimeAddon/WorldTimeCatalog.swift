@@ -157,6 +157,27 @@ enum WorldTimeCatalog {
             return f
         }
 
+        // Zone abbreviations are searched too ("CET", "PST", "MSK") — the
+        // bare tz entries carrying those names are non-geographic and
+        // filtered out below, so before this the query "CET" found nothing.
+        // Foundation is no direct help: `abbreviation(for:)` says "GMT+1"
+        // for Berlin, and `abbreviationDictionary` names ONE anchor city per
+        // abbreviation ("CET" → Paris). So each zone is tagged with every
+        // abbreviation whose anchor keeps the same clock — same offset in
+        // BOTH seasons ("CET" then finds Berlin, Madrid, and Rome too, and a
+        // no-DST +1 zone like Algiers stays out rather than false-matching).
+        // The seasonal pair also means "CET" and "CEST" both work in any
+        // month of the year.
+        let calendar = Calendar(identifier: .gregorian)
+        let year = calendar.component(.year, from: now)
+        let winter = calendar.date(from: DateComponents(year: year, month: 1, day: 15)) ?? now
+        let summer = calendar.date(from: DateComponents(year: year, month: 7, day: 15)) ?? now
+        let abbreviationAnchors: [(abbr: String, winterOffset: Int, summerOffset: Int)] =
+            TimeZone.abbreviationDictionary.compactMap { abbr, zoneID in
+                guard let anchor = TimeZone(identifier: zoneID) else { return nil }
+                return (abbr, anchor.secondsFromGMT(for: winter), anchor.secondsFromGMT(for: summer))
+            }
+
         var result: [WorldTimeCity] = []
         for id in TimeZone.knownTimeZoneIdentifiers {
             // Skip the non-geographic entries (GMT, UTC aliases without a
@@ -171,6 +192,12 @@ enum WorldTimeCatalog {
             } ?? ""
             var ownNames = "\(name) \(englishName)"
             var haystack = "\(country) \(id.replacingOccurrences(of: "_", with: " "))"
+            let winterOffset = zone.secondsFromGMT(for: winter)
+            let summerOffset = zone.secondsFromGMT(for: summer)
+            for anchor in abbreviationAnchors
+            where anchor.winterOffset == winterOffset && anchor.summerOffset == summerOffset {
+                haystack += " " + anchor.abbr
+            }
             for (index, formatter) in nameFormatters.enumerated() {
                 formatter.timeZone = zone
                 ownNames += " " + formatter.string(from: now)
