@@ -106,7 +106,7 @@ enum PlaudToolService {
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.dateFormat = "yyyy-MM-dd (EEEE)"
         return """
-You have tools for the user's Plaud voice recorder — their recorded meetings, calls, and memos with AI summaries and transcripts ("Plaud", "плауд"). Today is \(fmt.string(from: Date())). When the user asks about a recorded meeting or their notes, call \(findToolName) first to locate the recording, then \(noteToolName) — the summary tabs usually answer the question. Reach for \(transcriptToolName) only when the summary lacks the needed detail ("who exactly said…", verbatim quotes). Resolve relative dates ("last week") against today's date. Recordings marked "not processed" have no notes or transcript yet — processing them costs the user credits, so never suggest it happened automatically; mention such recordings in a separate line and point the user to the Plaud app (\(PlaudClient.webAppURL)) to process them. When presenting recordings, show name, date, duration, and keep the id available for follow-ups.
+You have tools for the user's Plaud voice recorder — their recorded meetings, calls, and memos with AI summaries and transcripts ("Plaud", "плауд"). Today is \(fmt.string(from: Date())). When the user asks about a recorded meeting or their notes, call \(findToolName) first to locate the recording, then \(noteToolName) — the summary tabs usually answer the question. Reach for \(transcriptToolName) only when the summary lacks the needed detail ("who exactly said…", verbatim quotes). Resolve relative dates ("last week") against today's date. Recordings marked "not processed" have no notes or transcript yet — processing them costs the user credits, so never suggest it happened automatically; mention such recordings in a separate line and point the user to the Plaud app (\(PlaudClient.webAppURL)) to process them. To put recordings in front of the user, end your reply with the line "\(AgentPlaudNote.header)" followed by one line per recording: "- plaud://<id> — <name>". The app replaces that block with clickable recording cards carrying the full notes, transcript, and audio. Reference exactly the recordings the reply is about — the one(s) an answer draws on, or every match when the user asked for a list — and never paste raw ids or long note contents into the prose; the cards carry them.
 """
     }
 
@@ -249,9 +249,11 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
         var lines: [String] = []
         for file in matches.prefix(maxListed) {
             lines.append(formatListLine(file))
-            // Every found recording becomes a clickable chip under the
-            // reply — the preview window fetches tabs/transcript on open,
-            // so no upfront note reads are needed for a browsable list.
+            // NOT a chip: which recordings deserve a card is the MODEL's
+            // call (plaud:// markers in its reply) — chipping every listed
+            // recording flooded a "what does the latest note say?" answer
+            // with the whole library (live, 2026-08-19). The meta cache is
+            // still warmed so a marker resolves without a refetch.
             if let id = file["id"] as? String {
                 PlaudNoteCache.updateMeta(
                     fileID: id,
@@ -259,14 +261,13 @@ You have tools for the user's Plaud voice recorder — their recorded meetings, 
                     day: String((file["created_at"] as? String ?? "").prefix(10)),
                     duration: durationString(file["duration"])
                 )
-                registerChip(fileID: id, title: file["name"] as? String ?? "(untitled)", kind: .note)
             }
         }
         var result = "Recordings (\(matches.count)):\n" + lines.joined(separator: "\n")
         if matches.count > maxListed {
             result += "\n[Showing \(maxListed) of \(matches.count) — narrow the query or date range]"
         }
-        result += "\n[Each listed recording is attached to your reply as a clickable card — do not paste raw IDs or full contents into the answer; give a short readable list and point to the cards.]"
+        result += "\n[Recordings appear to the user as clickable cards ONLY when your final reply references them as plaud://<id> markers — see the marker instructions in the system prompt. Reference exactly the recordings the reply is about: the one(s) an answer draws on, or every match when the user asked to browse. Do not paste raw ids or recording contents into the prose.]"
         return result
     }
 

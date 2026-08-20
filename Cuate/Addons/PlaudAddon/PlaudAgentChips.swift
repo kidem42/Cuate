@@ -45,6 +45,33 @@ enum PlaudAgentChips {
         return chips
     }
 
+    /// The same contract applied to a LOCAL turn: the chat's own model cites
+    /// the recordings its reply is about with `plaud://` markers after its
+    /// Plaud tool calls — one, several, or a whole list, its call entirely.
+    /// `held` are the chips the turn's note/transcript reads already produced;
+    /// a marker matching one reuses it (its kind — note vs unprocessed — and
+    /// fresh title are already right), anything else resolves through the
+    /// cache/grant. Markers leave the text only when every one became a card
+    /// (same rule as the agent path). Returns nil when there are no markers.
+    static func resolvingMarkers(
+        in text: String, held: [ChatAttachment]
+    ) async -> (display: String, chips: [ChatAttachment])? {
+        let (display, references) = AgentPlaudNote.split(text)
+        guard !references.isEmpty else { return nil }
+        var chips: [ChatAttachment] = []
+        for reference in references {
+            if let match = held.first(where: {
+                $0.fileURLString?.contains(reference.fileID) == true
+            }) {
+                chips.append(match)
+            } else if let chip = await attachments(for: [reference]).first {
+                chips.append(chip)
+            }
+        }
+        Diagnostics.log("plaud", "local.chips n=\(chips.count) refs=\(references.count) held=\(held.count)")
+        return (chips.count == references.count ? display : text, chips)
+    }
+
     /// The same contract applied to messages that did NOT come through a live
     /// turn: an agent session run from the phone, a messenger or cron reaches
     /// us through mirror sync, which inserts the gateway's text verbatim —

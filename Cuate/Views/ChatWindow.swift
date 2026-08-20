@@ -2819,6 +2819,24 @@ struct ChatWindow: View {
                         // A marker that survived (continuation budget spent)
                         // must not reach the stored message.
                         finished.text = Self.strippingContinueMarker(finished.text).text
+                        // Plaud contract on local turns: the model cites the
+                        // recordings its reply is about with plaud:// markers;
+                        // those become the reply's cards and the markers leave
+                        // the text. When markers name recordings they REPLACE
+                        // the read-pool chips — reading three notes to answer
+                        // from one must not pin three cards. No markers → the
+                        // read notes stay attached, as before. (Agent turns
+                        // resolved theirs in AgentChatService; text without
+                        // markers skips this entirely.)
+                        if finished.text.contains("plaud://"),
+                           let resolved = await PlaudAgentChips.resolvingMarkers(
+                               in: finished.text, held: pendingChipAttachments
+                           ) {
+                            finished.text = resolved.display
+                            if !resolved.chips.isEmpty {
+                                pendingChipAttachments = resolved.chips
+                            }
+                        }
                         // Tool chips buffered during the turn land on the
                         // finished reply (deduped against redeliveries).
                         if !pendingChipAttachments.isEmpty {
