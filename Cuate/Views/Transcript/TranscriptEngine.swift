@@ -118,6 +118,16 @@ final class TranscriptEngineView: NSScrollView {
     private var retiredRows: [String: Row] = [:]
     private var retiredOrder: [String] = []
     private static let retiredCap = 120
+    /// Hosting views whose rootView was swapped while DETACHED (in the
+    /// retirement pool). AppKit drops intrinsic-size invalidation for views
+    /// outside a window, so the stale measured height survives
+    /// re-attachment: the row renders its NEW content into the OLD frame,
+    /// SwiftUI hands the entire shortfall to the most compressible subview
+    /// — a code block's horizontal ScrollView — and its Text tail-truncates
+    /// with an ellipsis (Hermes bubble showed 2 of 11 questions while the
+    /// copy button had all 11, 2026-08-17). Drained in `apply` once the
+    /// rows are back in the stack, right before the layout solve.
+    private var staleIntrinsicHosts: [NSHostingView<AnyView>] = []
     /// Conversation identity of the current row set. When it changes the
     /// whole transcript is replaced and the pin re-engages (a freshly opened
     /// conversation always lands on its newest message).
@@ -344,6 +354,13 @@ final class TranscriptEngineView: NSScrollView {
         // Resolve the new layout NOW — offset math needs real frames, and
         // deferring it is exactly the "scroll before layout settles" bug
         // class this engine exists to kill.
+        // Detached-swap rows first: their re-attachment must re-measure, or
+        // the solve below runs on heights from before the swap (see
+        // `staleIntrinsicHosts`). Only swapped rows pay — an unchanged
+        // revision keeps its cached measurement, which is what keeps
+        // conversation switches cheap.
+        for host in staleIntrinsicHosts { host.invalidateIntrinsicContentSize() }
+        staleIntrinsicHosts.removeAll()
         layoutSubtreeIfNeeded()
 
         if isPinnedToBottom {
@@ -392,6 +409,10 @@ final class TranscriptEngineView: NSScrollView {
         for (index, item) in items.enumerated() where rows[index].revision != item.revision {
             rows[index].revision = item.revision
             rows[index].host.rootView = item.content()
+            // The hosting view schedules its own invalidation for the NEXT
+            // transaction — the synchronous solve in `apply` would still see
+            // the old height. Explicit, so the frames are right this pass.
+            rows[index].host.invalidateIntrinsicContentSize()
         }
     }
 
@@ -432,6 +453,8 @@ final class TranscriptEngineView: NSScrollView {
         if row.revision != item.revision {
             row.revision = item.revision
             row.host.rootView = item.content()
+            // Swapped while detached — mark for re-measure after attach.
+            staleIntrinsicHosts.append(row.host)
         }
         return row
     }
