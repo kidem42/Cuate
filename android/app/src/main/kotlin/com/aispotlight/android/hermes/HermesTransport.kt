@@ -450,6 +450,20 @@ class HermesTransport(
 
     suspend fun stopRun(runID: String) { json("POST", "v1/runs/$runID/stop") }
 
+    /**
+     * `GET /v1/runs/{id}` — pollable run status. Session-stream turns are
+     * registered here too (the gateway's `_set_run_status`), which is what
+     * makes a relaunched app able to ask "is that run still going?" instead
+     * of guessing from transcript silence. Statuses seen in the source:
+     * queued / running / waiting_for_approval / completed / failed /
+     * cancelled. 404 (`run_not_found`) = the gateway restarted since — the
+     * map is in-memory over there.
+     */
+    suspend fun runStatus(runID: String): String {
+        val obj = json("GET", "v1/runs/$runID")
+        return obj.optString("status", "")
+    }
+
     // MARK: File upload (dashboard server)
 
     /**

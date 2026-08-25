@@ -292,11 +292,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // activity from Telegram/CLI lands without a manual refresh.
                 if (entity.hermesSessionId != null) {
                     launch(Dispatchers.IO) {
-                        try {
-                            if (HermesChatService.syncTranscript(dao, entity) > 0) {
-                                reloadActiveWindow()
-                            }
-                        } catch (_: Exception) { }
+                        // NEVER while this conversation's own turn streams —
+                        // the gateway holds the turn's interim rows and they
+                        // would import as duplicates next to the live bubble
+                        // (same gate as syncHermesSessions).
+                        if (id !in streamingIds.value) {
+                            try {
+                                if (HermesChatService.syncTranscript(dao, entity) > 0) {
+                                    reloadActiveWindow()
+                                }
+                            } catch (_: Exception) { }
+                            // AFTER the sync (its watermark is the attach
+                            // anchor): a run still going on the gateway —
+                            // ours from a dead process, or started elsewhere
+                            // — becomes a live bubble again; otherwise held
+                            // follow-ups from a previous life go out.
+                            maybeResumeHermesTurn(id, entity.hermesSessionId)
+                        }
                     }
                     loadHermesSkills()
                 }
@@ -767,7 +779,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun send(text: String) {
         val trimmed = text.trim()
         val attachments = _pendingAttachments.value
-        if ((trimmed.isEmpty() && attachments.isEmpty()) || _isLoading.value) return
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
+        if (_isLoading.value) {
+            // Mid-turn sends are a Hermes feature: the follow-up steers the
+            // RUNNING agent turn (or waits in the persisted queue). The steer
+            // channel is text-only — staged attachments stay staged and go
+            // out with a regular send after the turn. Built-in chats keep
+            // the old rule: no sends while streaming.
+            if (!_isHermesActive.value || trimmed.isEmpty() || attachments.isNotEmpty()) return
+            dispatch(ChatMessage(text = trimmed, isUser = true))
+            return
+        }
         // Slash commands operate on the newest image instead of the LLM
         // (port of the mac /upscale /bg /cleanup commands).
         if (trimmed.startsWith("/") && handleSlashCommand(trimmed)) return
@@ -1067,6 +1089,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Agent runs are stopped on the GATEWAY too — cancelling only the
         // local collect would leave the agent working (and billing) blind.
         hermesRunIds.remove(conversationId)?.let { runID ->
+            activeConversation?.hermesSessionId?.let { settings.setHermesActiveRun(it, null) }
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     HermesChatService.transport(settings).stopRun(runID)
@@ -1103,8 +1126,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isHermesActive = MutableStateFlow(false)
     val isHermesActive: StateFlow<Boolean> = _isHermesActive
 
-    /** Live run id per conversation — the stop button's gateway target. */
+    /**
+     * Live run id per conversation — the stop button's gateway target and
+     * the steer route's address. Mirrored into [AppSettings.hermesActiveRuns]
+     * (persisted per SESSION) so a relaunched process can find the run still
+     * executing on the gateway and re-attach instead of playing dead.
+     */
     private val hermesRunIds = mutableMapOf<String, String>()
+
+    /** Conversations mid-`maybeResumeHermesTurn` (repeat-open guard). */
+    private val hermesAttaching = mutableSetOf<String>()
+
+    /** Terminal bookkeeping: forget the run locally AND in the persisted map. */
+    private fun clearHermesRun(conversationId: String, sessionId: String) {
+        hermesRunIds.remove(conversationId)
+        settings.setHermesActiveRun(sessionId, null)
+    }
 
     /** Files of the chat (agent-side paths + attachments the user sent). */
     data class ChatFiles(val agentPaths: List<String>, val sentByYou: List<String>)
@@ -1409,6 +1446,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+                // Coming back to the foreground may find the ACTIVE thread's
+                // turn still executing on the gateway (the process died, or
+                // Doze cut the stream and its recovery with it) — re-attach
+                // instead of leaving the chat looking idle.
+                _activeConversationId.value?.let { activeId ->
+                    dao.conversation(activeId)?.hermesSessionId?.let { sid ->
+                        maybeResumeHermesTurn(activeId, sid)
+                    }
+                }
             } catch (e: Exception) {
                 com.aispotlight.android.core.Diagnostics.log("hermes", "sync.fail ${e.message?.take(120)}")
             }
@@ -1549,26 +1595,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Follow-ups typed while a turn streams, awaiting delivery per
-     * conversation. Steer-first: the text rides into the RUNNING turn via
-     * `POST /v1/runs/{id}/steer` (upstream Hermes v2026.8.13+), or the
-     * patched `/api/sessions/{id}/steer` on older gateways. When neither
-     * can steer (no route, 409 race, transport error) the message waits
-     * here and goes out as an ordinary turn the moment the stream ends —
-     * before the patch such a send was silently DROPPED by the streaming
-     * guard (composer cleared, message gone).
-     */
-    private val pendingHermesFollowUps = mutableMapOf<String, MutableList<ChatMessage>>()
-
     /** `model/info` fetched this process (it moves on model change, not per sync). */
     private var hermesModelInfoFetched = false
 
-    /** Steer the in-flight turn, or queue for delivery right after it. */
+    /**
+     * A follow-up typed while a turn runs. The bubble lands in the chat NOW
+     * either way (the desktop `performSteer` contract — a message the user
+     * sent must never be invisible). Steer-first: the text rides into the
+     * RUNNING turn via `POST /v1/runs/{id}/steer` (upstream Hermes
+     * v2026.8.13+), or the patched `/api/sessions/{id}/steer` on older
+     * gateways. When neither can steer (no route, 409 race, transport
+     * error) the TEXT is held in the persisted follow-up queue
+     * ([AppSettings.hermesPendingFollowUps]) and goes out as an ordinary
+     * turn the moment the stream ends — persisted, because the old
+     * in-memory hold died with the process and took the message with it.
+     */
     private fun hermesSteerOrQueue(
         userMessage: ChatMessage, conversationId: String, sessionId: String
     ) {
         viewModelScope.launch {
+            if (_activeConversationId.value == conversationId) {
+                _messages.value = _messages.value + userMessage
+                totalMessageCount += 1
+            }
+            dao.upsertMessage(userMessage.toEntity(conversationId))
+            dao.touch(conversationId, System.currentTimeMillis())
             val runId = hermesRunIds[conversationId]
             val queued = try {
                 withContext(Dispatchers.IO) {
@@ -1593,45 +1644,221 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     "hermes", "steer.fallback ${e.message?.take(120)}")
                 false
             }
-            if (queued) {
-                // The agent sees the text inside the running turn — the
-                // bubble lands in the chat now, exactly like a normal send.
-                if (_activeConversationId.value == conversationId) {
-                    _messages.value = _messages.value + userMessage
-                    totalMessageCount += 1
-                }
-                dao.upsertMessage(userMessage.toEntity(conversationId))
-                dao.touch(conversationId, System.currentTimeMillis())
-            } else {
-                // Not steerable: hold it; the stream-end hook re-dispatches
-                // (the bubble appears then, in its true delivery order).
-                pendingHermesFollowUps.getOrPut(conversationId) { mutableListOf() }
-                    .add(userMessage)
+            if (!queued) {
+                // Not steerable: hold the text; the stream-end hook (or the
+                // next open of this conversation, if the process dies first)
+                // sends it as its own turn.
+                settings.setHermesPendingFollowUps(
+                    conversationId,
+                    settings.hermesPendingFollowUpTexts(conversationId) + userMessage.text,
+                )
             }
         }
     }
 
-    /** Stream ended for [conversationId] — deliver any held follow-ups. */
+    /**
+     * Turn over (or conversation reopened idle) — deliver held follow-ups
+     * as ONE ordinary turn. Their bubbles are already in the chat, so the
+     * dispatch is `alreadyPosted`.
+     */
     private fun deliverPendingHermesFollowUps(conversationId: String) {
-        val held = pendingHermesFollowUps.remove(conversationId) ?: return
-        if (_activeConversationId.value != conversationId) {
-            // Conversation switched away mid-hold: requeue for its return.
-            pendingHermesFollowUps[conversationId] = held
-            return
-        }
-        held.firstOrNull()?.let { first ->
-            if (held.size > 1) {
-                // Coalesce: one turn carrying all held texts, in order.
-                val joined = held.joinToString("\n\n") { it.text }
-                hermesDispatch(first.copy(text = joined))
+        val held = settings.hermesPendingFollowUpTexts(conversationId)
+        if (held.isEmpty()) return
+        // Only when the conversation is on screen: hermesDispatch streams
+        // into the ACTIVE conversation's state. A held queue for another
+        // thread is delivered when that thread is opened.
+        if (_activeConversationId.value != conversationId) return
+        if (conversationId in streamingIds.value) return
+        settings.setHermesPendingFollowUps(conversationId, emptyList())
+        hermesDispatch(
+            ChatMessage(text = held.joinToString("\n\n"), isUser = true),
+            alreadyPosted = true,
+        )
+    }
+
+    /**
+     * A relaunched (or returning) app may find a turn still executing on
+     * the gateway: OUR last run (persisted id — the process died
+     * mid-stream), or one started elsewhere. Re-attach: mark the
+     * conversation streaming, rebuild the reply live from the transcript,
+     * let sends steer into the run — instead of the old behavior, where
+     * the chat played dead and the reply "disappeared". Detection:
+     * `GET /v1/runs/{id}` for the persisted run first, then the
+     * transcript-tail heuristic (the desktop `HermesLiveTurnDetector`).
+     * When nothing is live, held follow-ups from a previous life go out.
+     */
+    private fun maybeResumeHermesTurn(conversationId: String, sessionId: String) {
+        if (conversationId in streamingIds.value) return
+        if (!hermesAttaching.add(conversationId)) return
+        viewModelScope.launch {
+            var attachRun: String? = null
+            var live = false
+            try {
+                withContext(Dispatchers.IO) {
+                    val transport = HermesChatService.transport(settings)
+                    val storedRun = settings.hermesActiveRuns.value[sessionId]
+                    if (storedRun != null) {
+                        val status = try {
+                            transport.runStatus(storedRun)
+                        } catch (e: Exception) {
+                            // 404 = the gateway restarted and forgot the run
+                            // map — fall through to the transcript tail. Any
+                            // other failure: offline, try again next open.
+                            val http = e as? com.aispotlight.android.hermes.HermesTransportException
+                            if (http?.status == 404) "" else return@withContext
+                        }
+                        when (status) {
+                            "queued", "running", "waiting_for_approval" -> {
+                                attachRun = storedRun
+                                live = true
+                            }
+                            // Finished (or forgotten) while we were away —
+                            // the mirror sync has, or will get, the reply.
+                            else -> settings.setHermesActiveRun(sessionId, null)
+                        }
+                    }
+                    if (!live) {
+                        val rows = try {
+                            transport.messages(sessionId)
+                        } catch (_: Exception) {
+                            return@withContext
+                        }
+                        live = HermesChatService.detectLiveTail(rows)
+                    }
+                }
+            } finally {
+                hermesAttaching.remove(conversationId)
+            }
+            if (conversationId in streamingIds.value) return@launch
+            if (live) {
+                attachToGatewayTurn(conversationId, sessionId, attachRun)
             } else {
-                hermesDispatch(first)
+                deliverPendingHermesFollowUps(conversationId)
             }
         }
     }
 
-    /** Runs the agent send pipeline (the Hermes analog of [dispatch]). */
-    private fun hermesDispatch(userMessage: ChatMessage) {
+    /**
+     * Re-joins a run in flight on the gateway: streams the transcript's
+     * new rows into a live bubble exactly like the in-process recovery
+     * path, with the mirror watermark as the anchor so already-imported
+     * interim rows don't render twice.
+     */
+    private fun attachToGatewayTurn(conversationId: String, sessionId: String, runId: String?) {
+        val conversation = activeConversation?.takeIf { it.id == conversationId }
+        runId?.let { hermesRunIds[conversationId] = it }
+        markStreaming(conversationId, true)
+        fun isActive() = _activeConversationId.value == conversationId
+        if (isActive()) {
+            _statusText.value = getApplication<Application>()
+                .getString(com.aispotlight.android.R.string.hermes_agent_working)
+        }
+        val job = viewModelScope.launch {
+            val reply = ChatMessage(text = "", isUser = false)
+            val replyText = StringBuilder()
+            var agentSteps: String? = null
+
+            fun pushReply() {
+                if (!isActive()) return
+                val updated = reply.copy(
+                    text = replyText.toString().trimEnd('\n'),
+                    agentSteps = agentSteps,
+                )
+                val list = _messages.value
+                val index = list.indexOfFirst { it.id == reply.id }
+                _messages.value = if (index >= 0) {
+                    list.toMutableList().also { it[index] = updated }
+                } else {
+                    list + updated
+                }
+            }
+
+            suspend fun persistReply() {
+                val updated = reply.copy(
+                    text = replyText.toString().trimEnd('\n'),
+                    agentSteps = agentSteps,
+                )
+                try {
+                    dao.upsertMessage(updated.toEntity(conversationId))
+                } catch (_: android.database.sqlite.SQLiteException) { }
+            }
+
+            com.aispotlight.android.hermes.HermesRunService.begin(getApplication())
+            try {
+                // Rows at or below the mirror watermark are imported
+                // messages already — the bubble must render only the new.
+                val watermark = dao.conversation(conversationId)?.hermesSyncedSeq ?: 0
+                val recovered = try {
+                    HermesChatService.recoverTurn(
+                        dao, conversationId, sessionId, userText = "",
+                        runID = runId, anchorOverride = watermark,
+                    ) { partial ->
+                        replyText.setLength(0)
+                        replyText.append(partial.text)
+                        partial.steps?.let { agentSteps = it }
+                        if (isActive()) {
+                            // The thinking indicator lives on statusText —
+                            // clearing it before any reply TEXT streams left
+                            // the chat looking idle mid-turn (live bug
+                            // 2026-08-24). Steps-only partials keep it fed
+                            // with the newest step, like the dispatch path.
+                            _statusText.value = if (partial.text.isNotEmpty()) null
+                            else partial.steps?.let { summary ->
+                                HermesChatService.parseSteps(summary).lastOrNull()
+                                    ?.let { (tool, _, preview) ->
+                                        preview?.take(60)?.let { "$tool: $it" } ?: tool
+                                    }
+                            } ?: getApplication<Application>()
+                                .getString(com.aispotlight.android.R.string.hermes_agent_working)
+                        }
+                        pushReply()
+                    }
+                } catch (c: kotlinx.coroutines.CancellationException) {
+                    if (replyText.isNotEmpty()) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { persistReply() }
+                    }
+                    throw c
+                } catch (_: Exception) {
+                    null
+                }
+                if (recovered != null && recovered.text.isNotEmpty()) {
+                    replyText.setLength(0)
+                    replyText.append(recovered.text)
+                    recovered.steps?.let { agentSteps = it }
+                    if (isActive()) _statusText.value = null
+                    pushReply()
+                    persistReply()
+                    dao.touch(conversationId, System.currentTimeMillis())
+                    if (isActive()) totalMessageCount = dao.messageCount(conversationId)
+                    if (!isActive()) {
+                        _hermesUnread.value = _hermesUnread.value + conversationId
+                    }
+                    if (!isActive() || !com.aispotlight.android.NotificationService.appVisible) {
+                        com.aispotlight.android.NotificationService.notifyAgentDone(
+                            getApplication(), conversation?.title ?: "Agent",
+                            replyText.toString().trim().take(160),
+                        )
+                    }
+                }
+                // recovered == null: the run died (or went silent past the
+                // dead-window) — nothing to render; a reply that still lands
+                // later arrives through the regular mirror sync.
+            } finally {
+                clearHermesRun(conversationId, sessionId)
+                markStreaming(conversationId, false)
+                com.aispotlight.android.hermes.HermesRunService.end(getApplication())
+                deliverPendingHermesFollowUps(conversationId)
+            }
+        }
+        streamJobs[conversationId] = job
+    }
+
+    /**
+     * Runs the agent send pipeline (the Hermes analog of [dispatch]).
+     * [alreadyPosted] = the user bubble(s) are in the chat and in Room
+     * already (held follow-ups being delivered) — only the turn itself runs.
+     */
+    private fun hermesDispatch(userMessage: ChatMessage, alreadyPosted: Boolean = false) {
         val conversationId = _activeConversationId.value ?: return
         val conversation = activeConversation ?: return
         val sessionId = conversation.hermesSessionId ?: return
@@ -1646,8 +1873,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         _errorText.value = null
-        _messages.value = _messages.value + userMessage
-        totalMessageCount += 1
+        if (!alreadyPosted) {
+            _messages.value = _messages.value + userMessage
+            totalMessageCount += 1
+        }
         markStreaming(conversationId, true)
         _statusText.value = "Thinking…"
         val isFirst = _messages.value.count { it.isUser } == 1
@@ -1655,9 +1884,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         fun isActive() = _activeConversationId.value == conversationId
 
         val job = viewModelScope.launch {
-            dao.upsertMessage(userMessage.toEntity(conversationId))
-            for (attachment in userMessage.attachments) {
-                dao.upsertAttachment(attachment.toEntity(userMessage.id))
+            if (!alreadyPosted) {
+                dao.upsertMessage(userMessage.toEntity(conversationId))
+                for (attachment in userMessage.attachments) {
+                    dao.upsertAttachment(attachment.toEntity(userMessage.id))
+                }
             }
             val now = System.currentTimeMillis()
             if (isFirst) {
@@ -1715,8 +1946,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     getApplication(), sessionId, userMessage.text, userMessage.attachments,
                 ).collect { event ->
                     when (event) {
-                        is HermesChatService.AgentEvent.Run ->
+                        is HermesChatService.AgentEvent.Run -> {
                             hermesRunIds[conversationId] = event.runID
+                            // Persisted: a relaunched process re-attaches to
+                            // this run instead of declaring the chat idle.
+                            settings.setHermesActiveRun(sessionId, event.runID)
+                        }
                         is HermesChatService.AgentEvent.Text -> {
                             replyText.append(event.chunk)
                             if (isActive()) _statusText.value = null
@@ -1767,7 +2002,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     HermesChatService.advanceWatermark(dao, conversationId, sessionId)
                 }
-                hermesRunIds.remove(conversationId)
+                clearHermesRun(conversationId, sessionId)
                 markStreaming(conversationId, false)
                 // A reply that landed out of sight: unread badge + banner.
                 if (!isActive()) {
@@ -1799,6 +2034,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     recovered = try {
                         HermesChatService.recoverTurn(
                             dao, conversationId, sessionId, userMessage.text,
+                            runID = hermesRunIds[conversationId],
                         ) { partial ->
                             replyText.setLength(0)
                             replyText.append(partial.text)
@@ -1827,7 +2063,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     persistReply()
                     dao.touch(conversationId, System.currentTimeMillis())
                     if (isActive()) totalMessageCount = dao.messageCount(conversationId)
-                    hermesRunIds.remove(conversationId)
+                    clearHermesRun(conversationId, sessionId)
                     markStreaming(conversationId, false)
                     if (!isActive()) {
                         _hermesUnread.value = _hermesUnread.value + conversationId
@@ -1848,7 +2084,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     pushReply(error = true)
                     persistReply(error = true)
                     if (isActive()) totalMessageCount = dao.messageCount(conversationId)
-                    hermesRunIds.remove(conversationId)
+                    clearHermesRun(conversationId, sessionId)
                     markStreaming(conversationId, false)
                 }
             } finally {

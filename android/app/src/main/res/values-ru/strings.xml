@@ -215,6 +215,7 @@
     <string name="hermes_model_current">текущий</string>
     <string name="hermes_model_empty">Модели недоступны — проверьте подключение к гейтвею.</string>
     <string name="hermes_reconnecting">Связь прервалась — восстанавливаю ответ…</string>
+    <string name="hermes_agent_working">Агент работает на сервере…</string>
     <string name="hermes_run_channel">Работа агента</string>
     <string name="hermes_run_notification">Агент работает…</string>
     <string name="hermes_dashboard">Дашборд Hermes (загрузка файлов)</string>

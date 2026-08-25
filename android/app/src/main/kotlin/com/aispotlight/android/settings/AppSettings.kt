@@ -311,6 +311,51 @@ class AppSettings private constructor(context: Context) {
     }
 
     /**
+     * The run id of a session's turn we started, sessionId → runId.
+     * PERSISTED on purpose: it is what lets a relaunched process find the
+     * run still executing on the gateway — re-attach to its transcript,
+     * steer follow-ups into it (`POST /v1/runs/{id}/steer`), or learn from
+     * `GET /v1/runs/{id}` that it finished while we were dead. Cleared when
+     * the turn reaches a terminal state.
+     */
+    private val _hermesActiveRuns = MutableStateFlow(readStringMap("hermesActiveRuns"))
+    val hermesActiveRuns: StateFlow<Map<String, String>> = _hermesActiveRuns
+
+    fun setHermesActiveRun(sessionId: String, runId: String?) {
+        val next = if (runId == null) _hermesActiveRuns.value - sessionId
+            else _hermesActiveRuns.value + (sessionId to runId)
+        if (next == _hermesActiveRuns.value) return
+        _hermesActiveRuns.value = next
+        writeStringMap("hermesActiveRuns", next)
+    }
+
+    /**
+     * Follow-up texts typed mid-turn that could NOT be steered into the
+     * running agent, conversationId → JSON array of texts. Persisted so a
+     * process death doesn't swallow them: the bubbles are already in Room,
+     * and this list is what still owes the agent a delivery.
+     */
+    private val _hermesPendingFollowUps = MutableStateFlow(readStringMap("hermesPendingFollowUps"))
+    val hermesPendingFollowUps: StateFlow<Map<String, String>> = _hermesPendingFollowUps
+
+    fun hermesPendingFollowUpTexts(conversationId: String): List<String> {
+        val raw = _hermesPendingFollowUps.value[conversationId] ?: return emptyList()
+        return try {
+            val array = org.json.JSONArray(raw)
+            (0 until array.length()).map { array.optString(it) }.filter { it.isNotEmpty() }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    fun setHermesPendingFollowUps(conversationId: String, texts: List<String>) {
+        val next = if (texts.isEmpty()) _hermesPendingFollowUps.value - conversationId
+            else _hermesPendingFollowUps.value +
+                (conversationId to org.json.JSONArray(texts).toString())
+        if (next == _hermesPendingFollowUps.value) return
+        _hermesPendingFollowUps.value = next
+        writeStringMap("hermesPendingFollowUps", next)
+    }
+
+    /**
      * Tool-call rounds one reply may spend (the desktop 3.20 "tool budget",
      * same 1–12 range and default). When it runs out the model is forced to
      * write its final answer from what it has gathered.

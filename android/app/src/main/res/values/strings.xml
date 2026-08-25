@@ -217,6 +217,7 @@
     <string name="hermes_model_current">current</string>
     <string name="hermes_model_empty">No models available — check the gateway connection.</string>
     <string name="hermes_reconnecting">Connection lost — recovering the reply…</string>
+    <string name="hermes_agent_working">Agent is working on the server…</string>
     <string name="hermes_run_channel">Agent activity</string>
     <string name="hermes_run_notification">The agent is working…</string>
     <string name="hermes_dashboard">Hermes dashboard (file uploads)</string>

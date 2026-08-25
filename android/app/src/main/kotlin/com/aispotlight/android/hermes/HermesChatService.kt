@@ -484,12 +484,24 @@ object HermesChatService {
      * rows AFTER our user message and rebuilds the reply from them,
      * feeding partial text through [onPartial] as rows land.
      *
-     * Completion is a heuristic (0.19.0 has no fixtured run-status route):
-     * once at least one content-bearing assistant row exists and the
-     * transcript has been QUIET for [QUIET_MS], the turn is considered
-     * done. If a long silent tool makes us finish early, the remainder
-     * arrives through the regular mirror sync — the watermark is advanced
-     * only past what was imported here.
+     * When [runID] is known, `GET /v1/runs/{id}` is the authority on
+     * completion: a terminal status ends the wait immediately (with one
+     * final transcript read), instead of the quiet-window guessing below.
+     * The status route 404s once the gateway restarts (in-memory map) —
+     * that just drops us back to the heuristic.
+     *
+     * Without a run id, completion is a heuristic: once at least one
+     * content-bearing assistant row exists and the transcript has been
+     * QUIET for [QUIET_MS], the turn is considered done. If a long silent
+     * tool makes us finish early, the remainder arrives through the
+     * regular mirror sync — the watermark is advanced only past what was
+     * imported here.
+     *
+     * [anchorOverride] pins the turn's start row explicitly — the ATTACH
+     * case (a relaunched app re-joining a run it no longer owns): the
+     * caller passes the mirror watermark so already-imported interim rows
+     * don't re-render in the live bubble. Without it the anchor is found
+     * by matching [userText] against the transcript's user rows.
      *
      * On failure (nothing new for [DEAD_MS]) returns null; when our user
      * row IS in the transcript the watermark advances past it, so a later
@@ -501,17 +513,40 @@ object HermesChatService {
         conversationId: String,
         sessionID: String,
         userText: String,
+        runID: String? = null,
+        anchorOverride: Int? = null,
         onPartial: suspend (RecoveredTurn) -> Unit,
     ): RecoveredTurn? {
         val settings = AppSettings.current
         var lastTail = -1
         var lastChangeAt = System.currentTimeMillis()
         val startedAt = lastChangeAt
-        var anchorSeq: Int? = null
+        var anchorSeq: Int? = anchorOverride
         var best: RecoveredTurn? = null
+        var statusRoute: String? = runID
 
         while (true) {
             kotlinx.coroutines.delay(POLL_MS)
+
+            // Authoritative completion first, when the gateway can answer.
+            var terminal: String? = null
+            statusRoute?.let { id ->
+                try {
+                    val status = transport(settings).runStatus(id)
+                    when (status) {
+                        "completed", "failed", "cancelled" -> terminal = status
+                        "" -> statusRoute = null // unrecognized shape — heuristics
+                        else -> { } // queued / running / waiting_for_approval
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // 404 = the gateway restarted and forgot the run (the map
+                    // is in-memory); transient errors just skip one check.
+                    if ((e as? HermesTransportException)?.status == 404) statusRoute = null
+                }
+            }
+
             val rows = try {
                 transport(settings).messages(sessionID)
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -557,14 +592,22 @@ object HermesChatService {
                 }
             }
 
-            val quietFor = System.currentTimeMillis() - lastChangeAt
             val current = best
             val hasText = current != null && current.text.isNotEmpty()
-            if (hasText && quietFor > QUIET_MS) {
+
+            // Run reached a terminal state — the transcript we just read is
+            // final. No quiet-window needed.
+            if (terminal != null) {
+                dao.advanceHermesSyncedSeq(conversationId, maxOf(anchor, lastTail))
+                return current?.takeIf { it.text.isNotEmpty() }
+            }
+
+            val quietFor = System.currentTimeMillis() - lastChangeAt
+            if (hasText && statusRoute == null && quietFor > QUIET_MS) {
                 dao.advanceHermesSyncedSeq(conversationId, current!!.tailSeq)
                 return current
             }
-            if (!hasText && quietFor > DEAD_MS) {
+            if (!hasText && statusRoute == null && quietFor > DEAD_MS) {
                 // No reply text and a long-quiet transcript: the run died with
                 // the connection (assistant errors are never persisted —
                 // fixtures). Advance past what we saw so the mirror never
@@ -580,6 +623,24 @@ object HermesChatService {
         }
     }
 
+    /**
+     * Whether the transcript tail reads as a turn STILL RUNNING on the
+     * gateway — the Android port of the desktop `HermesLiveTurnDetector`:
+     * a turn is over when the newest row is an assistant message WITH text;
+     * anything after it (tool rows, tool-call shells, an unanswered user
+     * row) means work is in flight. Stale tails (a run that crashed and
+     * left its tail unfinished forever) stop counting after [LIVE_STALE_MS].
+     */
+    fun detectLiveTail(rows: List<HermesTranscriptMessage>, nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (rows.isEmpty()) return false
+        val lastReply = rows.indexOfLast { it.role == "assistant" && it.content.isNotBlank() }
+        if (lastReply == rows.lastIndex) return false
+        // Freshness is judged on the newest row carrying a timestamp — rows
+        // without one (older gateways) must not read as 1970.
+        val lastRowAt = rows.asReversed().firstNotNullOfOrNull { it.timestampMs } ?: nowMs
+        return nowMs - lastRowAt < LIVE_STALE_MS
+    }
+
     /** How far apart a mirror row and its local echo may sit and still match. */
     private const val ECHO_WINDOW_MS = 15 * 60_000L
     private const val POLL_MS = 4_000L
@@ -592,6 +653,13 @@ object HermesChatService {
      */
     private const val DEAD_MS = 3 * 60_000L
     private const val MAX_RECOVERY_MS = 30 * 60_000L
+    /**
+     * A transcript tail older than this stops counting as a live turn
+     * (desktop `staleAfter`). Generous on purpose: one tool call can
+     * legitimately go quiet for minutes, and a false "still working" is a
+     * smaller sin than a chat that looks dead while the agent works.
+     */
+    private const val LIVE_STALE_MS = 20 * 60_000L
 
     /** Glues the turn's assistant segments + journal from transcript rows. */
     private fun rebuildTurn(

@@ -889,6 +889,26 @@ fun ChatScreen(
                     isTranscribing -> {
                         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                     }
+                    // Agent turn in flight WITH text typed: Send steers the
+                    // running turn (or queues the text for right after it) —
+                    // the pipeline existed, but the slot only ever offered
+                    // Stop, so mid-turn follow-ups were unreachable from the
+                    // UI. Steer is text-only, so staged attachments keep the
+                    // Stop button (they go out after the turn).
+                    isLoading && isHermes && input.isNotBlank() && pendingAttachments.isEmpty() -> {
+                        val sendAction = {
+                            val text = input
+                            input = ""
+                            onSend(text)
+                        }
+                        if (palette.isDynamic) {
+                            FilledIconButton(onClick = sendAction, modifier = Modifier.size(48.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_send))
+                            }
+                        } else {
+                            ThemedSendButton(palette, onClick = sendAction)
+                        }
+                    }
                     isLoading -> {
                         FilledIconButton(onClick = onStop, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.chat_stop))
