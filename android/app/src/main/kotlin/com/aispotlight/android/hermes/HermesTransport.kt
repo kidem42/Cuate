@@ -137,6 +137,12 @@ sealed class HermesStreamEvent {
         val contextTokens: Int? = null,
         /** The agent's effective window (`usage.context_window`, OAuth caps included). */
         val windowTokens: Int? = null,
+        /**
+         * A steer the gateway accepted AFTER the final response — never seen
+         * by the model; the API contract says "replay it as the next user
+         * turn" (api_server `pending_steer`). Dropping it loses the message.
+         */
+        val pendingSteer: String? = null,
     ) : HermesStreamEvent()
     object Done : HermesStreamEvent()
     /** Approval frames (feature-flagged, dormant in 0.19.0) and future events. */
@@ -668,7 +674,8 @@ class HermesTransport(
                     val windowTokens = payload.optJSONObject("usage")?.let { raw ->
                         if (raw.has("context_window")) raw.optInt("context_window").takeIf { it > 0 } else null
                     }
-                    HermesStreamEvent.RunCompleted(usage, contextTokens, windowTokens)
+                    HermesStreamEvent.RunCompleted(usage, contextTokens, windowTokens,
+                        pendingSteer = payload.optString("pending_steer", "").ifEmpty { null })
                 }
                 "done" -> HermesStreamEvent.Done
                 else -> HermesStreamEvent.Unknown(name, payload)

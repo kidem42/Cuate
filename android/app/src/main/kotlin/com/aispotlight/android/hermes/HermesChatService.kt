@@ -38,6 +38,11 @@ object HermesChatService {
         data class Steps(val summary: String) : AgentEvent()
         /** A system line to persist in the chat (courier warnings). */
         data class SystemLine(val text: String) : AgentEvent()
+        /**
+         * A steer the gateway accepted after the final response — the model
+         * never saw it; the caller must re-send it as the next turn.
+         */
+        data class UndeliveredSteer(val text: String) : AgentEvent()
     }
 
     /** One step of the collapsible journal (desktop `AgentStep`). */
@@ -92,6 +97,37 @@ object HermesChatService {
                 parts.joinToString(" · ")
             }
         }
+    }
+
+    /**
+     * Mid-turn steers in the transcript: Hermes injects a steered follow-up
+     * INTO a tool result's content, wrapped in the out-of-band markers from
+     * `agent/prompt_builder.py` — it never becomes a `user` row, so without
+     * extraction a follow-up sent from another device is invisible here.
+     * Matching anchors on the open marker's stable prefix (its bracket text
+     * may evolve); the close marker is exact.
+     * Twin: `HermesSteer.extract` on the desktop — keep in sync.
+     */
+    private const val STEER_OPEN_PREFIX = "[OUT-OF-BAND USER MESSAGE"
+    private const val STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
+
+    /** The steered texts inside one tool row's content, in order. */
+    fun steerTexts(content: String): List<String> {
+        if (!content.contains(STEER_OPEN_PREFIX)) return emptyList()
+        val texts = mutableListOf<String>()
+        var cursor = 0
+        while (true) {
+            val open = content.indexOf(STEER_OPEN_PREFIX, cursor)
+            if (open < 0) break
+            val bracket = content.indexOf(']', open + STEER_OPEN_PREFIX.length)
+            if (bracket < 0) break
+            val close = content.indexOf(STEER_CLOSE, bracket + 1)
+            if (close < 0) break
+            content.substring(bracket + 1, close).trim()
+                .takeIf { it.isNotEmpty() }?.let { texts.add(it) }
+            cursor = close + STEER_CLOSE.length
+        }
+        return texts
     }
 
     /** Parses a persisted summary back into displayable rows. */
@@ -261,6 +297,7 @@ object HermesChatService {
                     // The agent's own effective window (OAuth caps included) —
                     // tier 0 of the gauge denominator.
                     event.windowTokens?.let { settings.recordHermesContextWindow(sessionID, it) }
+                    event.pendingSteer?.let { emit(AgentEvent.UndeliveredSteer(it)) }
                 }
                 is HermesStreamEvent.Done -> { }
                 is HermesStreamEvent.Unknown -> {
@@ -418,6 +455,25 @@ object HermesChatService {
                     val parts = mutableListOf(row.toolName ?: "tool", "ok")
                     command?.takeIf { it.isNotEmpty() }?.let { parts.add(it.replace("\n", " ").take(120)) }
                     pendingSteps.add(parts.joinToString(" · "))
+                    // A mid-turn steer rides INSIDE this tool row's content —
+                    // surface it as the user bubble it really is (the sending
+                    // device's local copy is filtered as an echo). No step
+                    // reset: a steer is not a turn boundary.
+                    val steers = steerTexts(row.content)
+                        .filter { !isLocalEcho(it, row.timestampMs) }
+                    if (steers.isNotEmpty()) {
+                        val id = "${row.externalID(sessionID)}s"
+                        if (id !in known) {
+                            dao.upsertMessage(MessageEntity(
+                                id = id, conversationId = conversation.id,
+                                text = steers.joinToString("\n\n"), isUser = true,
+                                timestamp = row.timestampMs ?: System.currentTimeMillis(),
+                                messageType = "text", audioPath = null,
+                                toolContext = null,
+                            ))
+                            added++
+                        }
+                    }
                 }
                 "user" -> {
                     // Compaction summaries ride the transcript as user rows

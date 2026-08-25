@@ -1986,6 +1986,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             totalMessageCount += 1
                             dao.upsertMessage(line.toEntity(conversationId))
                         }
+                        is HermesChatService.AgentEvent.UndeliveredSteer -> {
+                            // Steer accepted after the final response — the
+                            // model never saw it. Its bubble is already in
+                            // the chat (posted at steer time), so only the
+                            // TEXT joins the queue; the stream-end hook sends
+                            // it as the next turn.
+                            settings.setHermesPendingFollowUps(
+                                conversationId,
+                                settings.hermesPendingFollowUpTexts(conversationId) + event.text,
+                            )
+                        }
                     }
                 }
                 if (replyText.isNotEmpty() || agentSteps != null) {
