@@ -1657,9 +1657,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Turn over (or conversation reopened idle) — deliver held follow-ups
-     * as ONE ordinary turn. Their bubbles are already in the chat, so the
-     * dispatch is `alreadyPosted`.
+     * Turn over (or conversation reopened idle) — deliver held follow-ups.
+     * Their bubbles are already in the chat, so only the TEXT travels.
+     *
+     * ⚠️ Liveness-gated: the gateway has NO busy guard — a new turn posted
+     * while the previous run still executes starts a SECOND agent over the
+     * same session and corrupts it (the exact "final result never came"
+     * failure, live 2026-08-24). A verified-live run gets the texts
+     * STEERED into it; a verified-idle session gets them as one ordinary
+     * turn; when the check can't tell (offline), the queue simply waits
+     * for the next turn end / conversation open.
      */
     private fun deliverPendingHermesFollowUps(conversationId: String) {
         val held = settings.hermesPendingFollowUpTexts(conversationId)
@@ -1669,11 +1676,52 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // thread is delivered when that thread is opened.
         if (_activeConversationId.value != conversationId) return
         if (conversationId in streamingIds.value) return
-        settings.setHermesPendingFollowUps(conversationId, emptyList())
-        hermesDispatch(
-            ChatMessage(text = held.joinToString("\n\n"), isUser = true),
-            alreadyPosted = true,
-        )
+        val sessionId = activeConversation
+            ?.takeIf { it.id == conversationId }?.hermesSessionId ?: return
+        viewModelScope.launch {
+            val joined = held.joinToString("\n\n")
+            val runId = hermesRunIds[conversationId] ?: settings.hermesActiveRuns.value[sessionId]
+            val activity = withContext(Dispatchers.IO) {
+                HermesChatService.sessionActivity(sessionId, runId)
+            }
+            // Re-check after the round-trip: a send may have started a turn.
+            if (conversationId in streamingIds.value ||
+                _activeConversationId.value != conversationId
+            ) return@launch
+            when (activity) {
+                "live" -> {
+                    val queued = try {
+                        withContext(Dispatchers.IO) {
+                            val transport = HermesChatService.transport(settings)
+                            if (runId != null) {
+                                try {
+                                    transport.steerRun(runId, joined)
+                                } catch (_: Exception) {
+                                    transport.steer(sessionId, joined)
+                                }
+                            } else {
+                                transport.steer(sessionId, joined)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        com.aispotlight.android.core.Diagnostics.log(
+                            "hermes", "deliver.steer.fail ${e.message?.take(120)}")
+                        false
+                    }
+                    if (queued) settings.setHermesPendingFollowUps(conversationId, emptyList())
+                    // Not steerable: keep the queue — the run's end brings
+                    // the next delivery opportunity.
+                }
+                "idle" -> {
+                    settings.setHermesPendingFollowUps(conversationId, emptyList())
+                    hermesDispatch(
+                        ChatMessage(text = joined, isUser = true),
+                        alreadyPosted = true,
+                    )
+                }
+                else -> { } // offline — the queue waits
+            }
+        }
     }
 
     /**
@@ -1708,13 +1756,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             if (http?.status == 404) "" else return@withContext
                         }
                         when (status) {
-                            "queued", "running", "waiting_for_approval" -> {
+                            "queued", "running", "waiting_for_approval", "stopping" -> {
                                 attachRun = storedRun
                                 live = true
                             }
-                            // Finished (or forgotten) while we were away —
-                            // the mirror sync has, or will get, the reply.
-                            else -> settings.setHermesActiveRun(sessionId, null)
+                            // Finished while we were away — the mirror sync
+                            // has, or will get, the reply.
+                            "completed", "failed", "cancelled" ->
+                                settings.setHermesActiveRun(sessionId, null)
+                            // Unknown/forgotten: KEEP the id (clearing it on
+                            // a transient oddity lost the re-attach route) —
+                            // the transcript tail decides below.
+                            else -> { }
                         }
                     }
                     if (!live) {

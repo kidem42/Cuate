@@ -658,12 +658,20 @@ object HermesChatService {
                 return current?.takeIf { it.text.isNotEmpty() }
             }
 
+            // Without an authoritative status, an UNFINISHED tail (open
+            // tool shells, an unanswered user row) vetoes the quiet-window
+            // conclusions: "text + 30s of silence" also describes an agent
+            // that answered interim and went into one long tool — ending
+            // there showed the turn as over while the agent kept working
+            // (live 2026-08-24). A dead run's tail stops counting as live
+            // after the staleness window, so the veto expires on its own.
+            val tailLive = detectLiveTail(rows)
             val quietFor = System.currentTimeMillis() - lastChangeAt
-            if (hasText && statusRoute == null && quietFor > QUIET_MS) {
+            if (hasText && statusRoute == null && quietFor > QUIET_MS && !tailLive) {
                 dao.advanceHermesSyncedSeq(conversationId, current!!.tailSeq)
                 return current
             }
-            if (!hasText && statusRoute == null && quietFor > DEAD_MS) {
+            if (!hasText && statusRoute == null && quietFor > DEAD_MS && !tailLive) {
                 // No reply text and a long-quiet transcript: the run died with
                 // the connection (assistant errors are never persisted —
                 // fixtures). Advance past what we saw so the mirror never
@@ -676,6 +684,38 @@ object HermesChatService {
                 dao.advanceHermesSyncedSeq(conversationId, maxOf(anchor, lastTail))
                 return current?.takeIf { it.text.isNotEmpty() }
             }
+        }
+    }
+
+    /**
+     * The delivery/attach gate: "live" (a run is executing), "idle"
+     * (verified quiet), or null (couldn't tell — offline). The gateway has
+     * NO server-side busy guard: a second `chat/stream` on a session whose
+     * run still executes starts a CONCURRENT agent over the same session
+     * and tears it apart — so anything that would start a new turn
+     * automatically must pass through this check first.
+     */
+    suspend fun sessionActivity(sessionID: String, runID: String?): String? {
+        val transport = transport(AppSettings.current)
+        if (runID != null) {
+            try {
+                when (transport.runStatus(runID)) {
+                    "queued", "running", "waiting_for_approval", "stopping" -> return "live"
+                    "completed", "failed", "cancelled" -> return "idle"
+                    else -> { } // unknown shape — let the tail decide
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 404 = the gateway restarted and forgot the run — the tail
+                // decides. Anything else is "offline": no verdict.
+                if ((e as? HermesTransportException)?.status != 404) return null
+            }
+        }
+        return try {
+            if (detectLiveTail(transport.messages(sessionID))) "live" else "idle"
+        } catch (_: Exception) {
+            null
         }
     }
 
