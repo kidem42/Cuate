@@ -48,7 +48,15 @@ struct HermesSettingsView: View {
 
     /// Gateway patch for a REMOTE host, as a paste-into-the-VPS block (we
     /// have no file access over there): `usage.context_tokens` +
-    /// `context_window`, the real context fill the API otherwise omits.
+    /// `context_window`, the real context fill the API otherwise omits —
+    /// plus detached session runs: stock Hermes INTERRUPTS a live run the
+    /// moment the session SSE client disconnects (`agent.interrupt("SSE
+    /// client disconnected")`), which on mobile means every backgrounded
+    /// app or network flap kills the agent mid-task and stamps "Operation
+    /// interrupted" into the transcript. The patch lets the run finish
+    /// detached; clients recover the reply from the transcript (which the
+    /// agent persists row by row anyway). An explicit Stop still works —
+    /// it goes through `POST /v1/runs/{id}/stop`, not the socket.
     ///
     /// Mid-turn steering is NOT patched in anymore — upstream ships its own
     /// `POST /v1/runs/{id}/steer` (`features.run_steer`), and the client
@@ -90,6 +98,25 @@ struct HermesSettingsView: View {
         src, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + window, src)
         assert n >= 1, "context_window anchor not found - different Hermes version, patch by hand"
         print(f"context_window: ok, {n} site(s)")
+
+    # --- edit 2: session SSE disconnect must not kill the run -----------------
+    # Stock: a dropped socket on /api/sessions/{id}/chat/stream interrupts the
+    # live agent run. Detached instead: the run finishes on its own, the reply
+    # lands in the transcript, clients re-attach by polling it. An explicit
+    # Stop is unaffected (it rides POST /v1/runs/{id}/stop).
+    if "continues detached" in src:
+        print("detached runs: already patched")
+    else:
+        old = (
+            '            await self._drain_session_stream_task_on_disconnect(\n'
+            '                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False\n'
+            '            )\n'
+            '            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)'
+        )
+        new = '            logger.info("Session SSE client disconnected; run %s continues detached", run_id)'
+        assert old in src, "disconnect anchor not found - different Hermes version, patch by hand"
+        src = src.replace(old, new)
+        print("detached runs: ok")
 
     if src != orig:
         pathlib.Path(str(p) + ".bak").write_text(orig)  # backup next to the file

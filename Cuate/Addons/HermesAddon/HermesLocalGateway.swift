@@ -74,6 +74,13 @@ enum HermesLocalGateway {
     // overwrites the file, so the state is re-checked each time the
     // settings pane looks and the offer simply reappears. The client copes
     // either way: without the field the gauge falls back to the capped sums.
+    //
+    // Third edit — detached session runs: stock Hermes INTERRUPTS the live
+    // run when the session SSE client disconnects (a backgrounded phone, a
+    // network flap), stamping "Operation interrupted" into the transcript.
+    // Patched, the run finishes on its own and clients recover the reply
+    // from the transcript. Explicit Stop is unaffected (`/v1/runs/{id}/stop`).
+    // Mirrors the remote paste-block in HermesSettingsView — keep in sync.
 
     enum ContextPatchState: Equatable {
         case patched
@@ -94,6 +101,19 @@ enum HermesLocalGateway {
     /// older one-line patch.
     static let contextWindowLine =
         "\"context_window\": max(0, getattr(getattr(agent, \"context_compressor\", None), \"context_length\", 0) or 0),"
+
+    /// Detached-runs edit: the stock disconnect handler of the session SSE
+    /// stream, replaced wholesale by a log line. The marker doubles as the
+    /// idempotence check (it only ever exists in a patched file).
+    static let detachedRunsMarker = "continues detached"
+    private static let detachedRunsOldBlock = [
+        "            await self._drain_session_stream_task_on_disconnect(",
+        "                run_id, task, interrupt_message=\"SSE client disconnected\", shield_wait=False",
+        "            )",
+        "            logger.info(\"Session SSE client disconnected; interrupted live run %s\", run_id)",
+    ].joined(separator: "\n")
+    private static let detachedRunsNewBlock =
+        "            logger.info(\"Session SSE client disconnected; run %s continues detached\", run_id)"
 
     /// The gateway source file, resolved like `cliPath`: the documented
     /// install root first, then the CLI's own `--version` answer ("Install
@@ -119,13 +139,14 @@ enum HermesLocalGateway {
               let src = try? String(contentsOf: file, encoding: .utf8) else { return .unavailable }
         let contextDone = src.contains("\"context_tokens\"")
         let windowDone = src.contains("\"context_window\"")
-        if (contextDone || !src.contains(contextPatchAnchor)),
-           windowDone || !contextDone {  // window rides on the context line
-            // Nothing more we can do here. "Ours is in place" reads as
-            // patched; a fully foreign layout as unavailable.
-            return contextDone ? .patched : .unavailable
-        }
-        return .patchable
+        // Any edit still applicable → offer the patch. A gateway too old to
+        // carry a given anchor simply doesn't get that edit.
+        if !contextDone, src.contains(contextPatchAnchor) { return .patchable }
+        if contextDone, !windowDone { return .patchable }  // window rides on the context line
+        if !src.contains(detachedRunsMarker), src.contains(detachedRunsOldBlock) { return .patchable }
+        // Nothing more we can do here. "Ours is in place" reads as patched;
+        // a fully foreign layout as unavailable.
+        return contextDone ? .patched : .unavailable
     }
 
     /// Edits api_server.py in place (backup lands next to it as .bak):
@@ -168,6 +189,12 @@ enum HermesLocalGateway {
             }
             if windowSites > 0 { work = out.joined(separator: "\n") }
         }
+        // Detached runs: replace the disconnect-interrupt block wholesale.
+        var detachedSites = 0
+        if !work.contains(detachedRunsMarker), work.contains(detachedRunsOldBlock) {
+            work = work.replacingOccurrences(of: detachedRunsOldBlock, with: detachedRunsNewBlock)
+            detachedSites = 1
+        }
         guard work != src else {
             // Nothing applied. Distinguish "already done" (fine, no-op)
             // from "nothing matched at all" (foreign layout — surface it).
@@ -182,7 +209,7 @@ enum HermesLocalGateway {
         } catch {
             throw SetupError.patchFailed(error.localizedDescription)
         }
-        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) window=\(windowSites) file=\(file.path)")
+        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) window=\(windowSites) detached=\(detachedSites) file=\(file.path)")
         return true
     }
 

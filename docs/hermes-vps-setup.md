@@ -42,21 +42,56 @@ API_SERVER_KEY=$(openssl rand -hex 24)
 EOF
 hermes gateway install
 
-# Accurate context gauge: Hermes tracks the real context fill internally but
-# does not expose it over the API — add usage.context_tokens (backup lands
-# next to the file; skips itself if already applied; repeat after a Hermes
-# update, which overwrites the file)
+# Gateway patch (backup lands next to the file; each edit skips itself if
+# already applied; repeat after a Hermes update, which overwrites the file):
+# 1. usage.context_tokens + context_window — the real context fill/window
+#    for the client gauge (newer Hermes ships context_tokens natively; the
+#    edit then no-ops).
+# 2. Detached session runs — stock Hermes INTERRUPTS a live run when the
+#    session SSE client disconnects, so a backgrounded phone or a network
+#    flap killed the agent mid-task ("Operation interrupted" in the chat).
+#    Patched, the run finishes on its own and clients recover the reply
+#    from the transcript. An explicit Stop still works (/v1/runs/{id}/stop).
 HERMES_DIR=$(hermes --version | sed -n 's/^Install directory: //p') python3 - <<'PYEOF'
 import os, re, pathlib
 p = pathlib.Path(os.environ["HERMES_DIR"]) / "gateway/platforms/api_server.py"
-src = p.read_text()
-if '"context_tokens"' not in src:
-    pathlib.Path(str(p) + ".bak").write_text(src)
+src = orig = p.read_text()
+fill = '"context_tokens": max(0, getattr(getattr(agent, "context_compressor", None), "last_prompt_tokens", 0) or 0),'
+window = '"context_window": max(0, getattr(getattr(agent, "context_compressor", None), "context_length", 0) or 0),'
+if '"context_tokens"' in src:
+    print("context_tokens: already patched")
+else:
     pat = re.compile(r'^(\s*)("total_tokens": getattr\(agent, "session_total_tokens", 0\) or 0,)$', re.M)
-    line = '"context_tokens": max(0, getattr(getattr(agent, "context_compressor", None), "last_prompt_tokens", 0) or 0),'
-    src2, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + line, src)
-    if n: p.write_text(src2)
-print("context patch ok")
+    src, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + fill, src)
+    assert n >= 1, "context anchor not found - different Hermes version, patch by hand"
+    print(f"context_tokens: ok, {n} site(s)")
+if '"context_window"' in src:
+    print("context_window: already patched")
+else:
+    pat = re.compile(r'^(\s*)("context_tokens": max\(0, getattr\(getattr\(agent, "context_compressor", None\), "last_prompt_tokens", 0\) or 0\),)$', re.M)
+    src, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + window, src)
+    assert n >= 1, "context_window anchor not found - different Hermes version, patch by hand"
+    print(f"context_window: ok, {n} site(s)")
+if "continues detached" in src:
+    print("detached runs: already patched")
+else:
+    old = (
+        '            await self._drain_session_stream_task_on_disconnect(\n'
+        '                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False\n'
+        '            )\n'
+        '            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)'
+    )
+    new = '            logger.info("Session SSE client disconnected; run %s continues detached", run_id)'
+    assert old in src, "disconnect anchor not found - different Hermes version, patch by hand"
+    src = src.replace(old, new)
+    print("detached runs: ok")
+if src != orig:
+    pathlib.Path(str(p) + ".bak").write_text(orig)
+    import ast; ast.parse(src)
+    p.write_text(src)
+    print("written; backup at api_server.py.bak")
+else:
+    print("nothing to do")
 PYEOF
 hermes gateway restart
 
