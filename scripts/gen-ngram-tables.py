@@ -68,21 +68,48 @@ EXTRA_WORDS = {
 }
 
 
+# Wrong-layout corpus artifacts. The OpenSubtitles lists contain tokens that
+# are themselves text typed in the wrong layout ("рш" is "hi" on a RU keyboard),
+# frequent enough to reach the top-30k. Their presence makes DecisionEngine
+# treat the garbage as a "known word" of the language, which blocks the very
+# fix the user wants (рш(46)→hi(33) lacks the ≥17 frequency dominance).
+#
+# Curation criterion (each entry was verified offline, see the addon README):
+#   - the token is rejected by the language's NSSpellChecker, AND
+#   - its positional flip is a *more frequent*, spellchecker-valid word of the
+#     other language, AND
+#   - removing it actually changes a DecisionEngine verdict (impact-tested).
+# Real tokens whose flip is garbage in the other list (ts, tls, kfc, dj, фиш)
+# stay: pruning those would create false flips of deliberately-typed text.
+WRONG_LAYOUT_GARBAGE = {
+    "ru": ["рш", "ук", "сфе", "вуд"],   # → hi, er, cat, del
+    "en": ["jr"],                        # → ок
+}
+
+
 def append_extras(outdir):
-    """Adds missing EXTRA_WORDS to existing words_<lang>.txt (no corpus needed)."""
+    """Adds missing EXTRA_WORDS to and prunes WRONG_LAYOUT_GARBAGE from
+    existing words_<lang>.txt (no corpus needed). Idempotent."""
     for lang, words in EXTRA_WORDS.items():
         path = os.path.join(outdir, f"words_{lang}.txt")
+        garbage = set(WRONG_LAYOUT_GARBAGE.get(lang, []))
         with open(path, encoding="utf-8") as f:
-            existing = {line.split()[0] for line in f if line.strip()}
+            lines = [line for line in f if line.strip()]
+        existing = {line.split()[0] for line in lines}
+        pruned = sorted(existing & garbage)
+        if pruned:
+            lines = [line for line in lines if line.split()[0] not in garbage]
         alpha = set(ALPHABETS[lang])
         added = []
-        with open(path, "a", encoding="utf-8") as f:
-            for w in words:
-                if w in existing or any(ch not in alpha for ch in w):
-                    continue
-                f.write(f"{w} {EXTRA_Q}\n")
-                added.append(w)
-        print(f"{lang}: +{len(added)} extras {added}")
+        for w in words:
+            if w in existing or any(ch not in alpha for ch in w):
+                continue
+            lines.append(f"{w} {EXTRA_Q}\n")
+            added.append(w)
+        if pruned or added:
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        print(f"{lang}: +{len(added)} extras {added}, -{len(pruned)} garbage {pruned}")
 
 def build(lang, src, outdir):
     alpha = ALPHABETS[lang]
