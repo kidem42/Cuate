@@ -34,8 +34,13 @@ struct WorldTimeView: View {
     @State private var dayStart: Date = .now
     @State private var selectedColumn: Int? = nil
     @State private var hoverColumn: Int? = nil
-    @State private var draggingRow: UUID? = nil
-    @State private var dragTranslation: CGFloat = 0
+    /// Live reorder state, deliberately NOT `@State` scalars: every mouse
+    /// move would then rebuild the whole panel body (N rows × 24 formatted
+    /// cells plus the glass surface) and the drag ran at slideshow rates.
+    /// Held as a plain object the view itself never observes; only the
+    /// per-row `WorldTimeRowDragModifier`s subscribe, so a drag re-renders
+    /// nothing but row transforms.
+    @State private var rowDrag = WorldTimeRowDragState()
     @State private var now: Date = .now
     @State private var searchText = ""
     @State private var searchResults: [WorldTimeCity] = []
@@ -660,10 +665,16 @@ struct WorldTimeView: View {
                 // (a flexible sibling below it was stealing half the space
                 // and forcing a scrollbar). The panel window resizes instead.
                 VStack(spacing: Self.rowSpacing) {
-                    ForEach(settings.rows) { row in
-                        cityRow(row)
+                    ForEach(Array(settings.rows.enumerated()), id: \.element.id) { index, row in
+                        cityRow(row, index: index)
                     }
                 }
+                // The reorder gesture measures in THIS stack's space: the
+                // stack stands still while rows are offset. Measured in the
+                // header's own (.local) space the drag fed back into itself —
+                // the offset moved the space the translation was read from,
+                // and the row oscillated between the cursor and home.
+                .coordinateSpace(name: Self.rowsSpaceName)
                 // The column frame: one rectangle through ALL rows,
                 // following the hover and marking the selection.
                 .overlay { columnFrames }
@@ -731,39 +742,28 @@ struct WorldTimeView: View {
     /// Vertical distance from one row's top to the next.
     private var rowStride: CGFloat { Self.rowHeight + Self.rowSpacing }
 
-    /// Live offset of a row while another row is being dragged over it:
-    /// the dragged row follows the cursor, its neighbors slide out of the
-    /// way by exactly one stride.
-    private func rowOffset(for rowID: UUID) -> CGFloat {
-        guard let dragging = draggingRow,
-              let from = settings.rows.firstIndex(where: { $0.id == dragging }),
-              let index = settings.rows.firstIndex(where: { $0.id == rowID }) else { return 0 }
-        if rowID == dragging { return dragTranslation }
-        let shift = Int((dragTranslation / rowStride).rounded())
-        let to = max(0, min(settings.rows.count - 1, from + shift))
-        if from < to, index > from, index <= to { return -rowStride }
-        if to < from, index >= to, index < from { return rowStride }
-        return 0
+    /// Name of the rows stack's coordinate space — the stationary frame the
+    /// reorder gesture measures in.
+    private static let rowsSpaceName = "worldTimeRows"
+
+    /// The row slot under a cursor at `y` (rows-stack coordinates).
+    private func rowIndex(atY y: CGFloat) -> Int {
+        max(0, min(settings.rows.count - 1, Int((y / rowStride).rounded(.down))))
     }
 
     private func finishRowDrag() {
-        defer {
-            draggingRow = nil
-            dragTranslation = 0
-        }
-        guard let dragging = draggingRow,
-              let from = settings.rows.firstIndex(where: { $0.id == dragging }) else { return }
-        let shift = Int((dragTranslation / rowStride).rounded())
-        let to = max(0, min(settings.rows.count - 1, from + shift))
-        guard to != from else { return }
-        settings.rows.move(fromOffsets: IndexSet(integer: from),
-                           toOffset: to > from ? to + 1 : to)
+        let snapshot = rowDrag.snapshot
+        rowDrag.snapshot = .init()
+        guard snapshot.rowID != nil,
+              settings.rows.indices.contains(snapshot.fromIndex),
+              let to = snapshot.targetIndex, to != snapshot.fromIndex else { return }
+        settings.rows.move(fromOffsets: IndexSet(integer: snapshot.fromIndex),
+                           toOffset: to > snapshot.fromIndex ? to + 1 : to)
     }
 
-    private func cityRow(_ row: WorldTimeRow) -> some View {
+    private func cityRow(_ row: WorldTimeRow, index: Int) -> some View {
         let zone = TimeZone(identifier: row.zoneID) ?? .current
         let isHome = row.id == settings.homeRowID
-        let isDragging = draggingRow == row.id
         return HStack(spacing: 0) {
             rowHeader(row: row, zone: zone, isHome: isHome)
                 .frame(width: Self.headerWidth, alignment: .leading)
@@ -771,11 +771,22 @@ struct WorldTimeView: View {
                 // Rows are dragged by their header — a manual
                 // DragGesture, not system drag-and-drop: the NSItemProvider
                 // route never delivers dropEntered reliably on macOS here.
+                // The gesture reads the STACK's coordinate space (see
+                // `rowsSpaceName`), and the drop slot comes from the cursor's
+                // absolute position — both immune to the row's own offset.
                 .gesture(
-                    DragGesture(minimumDistance: 4)
+                    DragGesture(minimumDistance: 4,
+                                coordinateSpace: .named(Self.rowsSpaceName))
                         .onChanged { value in
-                            draggingRow = row.id
-                            dragTranslation = value.translation.height
+                            // One snapshot write per event = one publish;
+                            // `fromIndex` is this row's slot, frozen for the
+                            // whole drag (rows only move on commit).
+                            rowDrag.snapshot = .init(
+                                rowID: row.id,
+                                fromIndex: index,
+                                translation: value.translation.height,
+                                targetIndex: rowIndex(atY: value.location.y)
+                            )
                         }
                         .onEnded { _ in finishRowDrag() }
                 )
@@ -785,12 +796,10 @@ struct WorldTimeView: View {
             hourBand(zone: zone)
         }
         .frame(height: Self.rowHeight)
-        .opacity(isDragging ? 0.75 : 1)
-        .offset(y: rowOffset(for: row.id))
-        .zIndex(isDragging ? 2 : 0)
-        // The dragged row tracks the cursor raw; its neighbors animate as
-        // they make room.
-        .animation(isDragging ? nil : .easeInOut(duration: 0.14), value: rowOffset(for: row.id))
+        // Offset/opacity/z-order live in the modifier — the only thing that
+        // re-evaluates while a row is dragged.
+        .modifier(WorldTimeRowDragModifier(drag: rowDrag, rowID: row.id,
+                                           index: index, rowStride: rowStride))
         .contentShape(Rectangle())
         .contextMenu {
             Button {
@@ -1114,6 +1123,59 @@ struct WorldTimeView: View {
         }
         Self.formatterCache[key] = formatter
         return formatter
+    }
+}
+
+/// Transient state of a row-reorder drag. A separate ObservableObject —
+/// not `@State` on the panel view — so mouse-move updates invalidate ONLY
+/// the `WorldTimeRowDragModifier`s that observe it. The panel view holds it
+/// without subscribing; its heavy body (grids of formatted cells, the glass
+/// surface) is never rebuilt mid-drag.
+@MainActor
+private final class WorldTimeRowDragState: ObservableObject {
+    /// The whole drag in one value: a single write per mouse event is a
+    /// single publish (four separate `@Published` scalars meant four view
+    /// invalidations per event).
+    struct Snapshot: Equatable {
+        var rowID: UUID? = nil
+        var fromIndex: Int = 0
+        var translation: CGFloat = 0
+        var targetIndex: Int? = nil
+    }
+    @Published var snapshot = Snapshot()
+}
+
+/// The only view code that re-evaluates while a row is dragged: applies the
+/// cursor offset to the grabbed row, slides neighbors one stride out of the
+/// way, and lifts the grabbed row above them. `content` is SwiftUI's opaque
+/// proxy, so the row's subtree is reused, not rebuilt.
+private struct WorldTimeRowDragModifier: ViewModifier {
+    @ObservedObject var drag: WorldTimeRowDragState
+    let rowID: UUID
+    let index: Int
+    let rowStride: CGFloat
+
+    private var isDragging: Bool { drag.snapshot.rowID == rowID }
+
+    private var offset: CGFloat {
+        let snapshot = drag.snapshot
+        guard snapshot.rowID != nil else { return 0 }
+        if isDragging { return snapshot.translation }
+        let from = snapshot.fromIndex
+        let to = snapshot.targetIndex ?? from
+        if from < to, index > from, index <= to { return -rowStride }
+        if to < from, index >= to, index < from { return rowStride }
+        return 0
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isDragging ? 0.75 : 1)
+            .offset(y: offset)
+            .zIndex(isDragging ? 2 : 0)
+            // The dragged row tracks the cursor raw; its neighbors animate
+            // as they make room.
+            .animation(isDragging ? nil : .easeInOut(duration: 0.14), value: offset)
     }
 }
 
