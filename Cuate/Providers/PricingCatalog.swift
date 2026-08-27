@@ -69,6 +69,11 @@ nonisolated enum PricingCatalog {
         .openai: 0.006,    // gpt-4o-transcribe
         .deepgram: 0.0043  // Nova-3 pay-as-you-go
     ]
+    /// Live-streaming STT is priced separately from prerecorded — dictation's
+    /// streaming mode records its spend with these (model tagged "(stream)").
+    static let sttStreamingPerMinute: [STTProviderID: Double] = [
+        .deepgram: 0.0058  // Nova-3 multilingual streaming pay-as-you-go
+    ]
     /// Brave Search "Base AI" plan rate ($5 CPM). The free tier bills nothing —
     /// treat the figure as an upper-bound estimate, not an invoice.
     static let searchPerQuery = 0.005

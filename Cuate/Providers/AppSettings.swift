@@ -329,6 +329,14 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(dictationChunked, forKey: "dictationChunked") }
     }
 
+    /// Live WebSocket transcription while speaking (Deepgram Nova-3 only —
+    /// the toggle is shown only for that provider/model pair). Takes over
+    /// from phrase chunking for the session; the recorded file remains the
+    /// batch fallback. Opt-in: streaming bills at Deepgram's live rate.
+    @Published var dictationStreaming: Bool {
+        didSet { defaults.set(dictationStreaming, forKey: "dictationStreaming") }
+    }
+
     /// Keep the audio input open (samples discarded) for N minutes after a
     /// dictation ends, so the next one starts with zero mic spin-up — the
     /// CoreAudio power-up costs ~100-300 ms on the built-in mic and multiple
@@ -674,6 +682,7 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         dictationCleanupModels = defaults.dictionary(forKey: "dictationCleanupModels") as? [String: String] ?? [:]
         dictationTargetLanguage = defaults.string(forKey: "dictationTargetLanguage") ?? "English"
         dictationChunked = defaults.object(forKey: "dictationChunked") as? Bool ?? true
+        dictationStreaming = defaults.object(forKey: "dictationStreaming") as? Bool ?? false
         dictationWarmMinutes = defaults.object(forKey: "dictationWarmMinutes") as? Int ?? 0
         dictationMicUID = defaults.string(forKey: "dictationMicUID") ?? ""
         customPresets = defaults.dictionary(forKey: "customPresets") as? [String: String] ?? [:]

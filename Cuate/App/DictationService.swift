@@ -66,6 +66,18 @@ final class DictationService: NSObject, ObservableObject {
     private var processingChain: Task<Void, Never>?
     private var sessionCancelled = false
 
+    // Streaming mode (Deepgram live WebSocket): finalized spans are inserted
+    // WHILE speaking (through the same ordered cleanup chain as chunked
+    // phrases); the recorded file is kept as the batch fallback for a broken
+    // stream. Replaces phrase chunking for the session when armed.
+    private var liveTranscriber: DeepgramLiveTranscriber?
+    private var streamingFailed = false
+    /// Spans handed to the insert chain this session — the fallback decision:
+    /// 0 means nothing reached the screen and the recorded file may be
+    /// batch-transcribed whole; >0 means the file's start is already typed
+    /// and must never be transcribed again.
+    private var streamEnqueuedCount = 0
+
     /// VAD thresholds on the dB EXCESS over the adaptive noise floor (the
     /// capture reports gain-independent values — absolute dBFS thresholds
     /// silently stopped detecting speech when the metering source changed,
@@ -232,6 +244,13 @@ final class DictationService: NSObject, ObservableObject {
             speechDetected = false
             silenceBegan = nil
             spectrum = Array(repeating: 0, count: MicCapture.bandCount)
+            streamingFailed = false
+            streamEnqueuedCount = 0
+            await APIKeyStore.warmIfNeeded() // streamingConfig reads the key cache
+            if let config = streamingConfig() {
+                chunkedMode = false // the stream IS the realtime path
+                armStreaming(apiKey: config.apiKey, model: config.model)
+            }
             if !preAuthorized {
                 micReady = false
                 phase = .recording
@@ -276,6 +295,20 @@ final class DictationService: NSObject, ObservableObject {
         engineDeaths += 1
         Diagnostics.log("dictation", "capture.recover #\(engineDeaths): salvage segment, restart capture")
 
+        // A restarted engine may come back at a different sample rate, which
+        // an open linear16 stream cannot renegotiate — abandon streaming and
+        // let the classic salvage below own the rest of the session. When
+        // live-inserted spans already cover the fragment's audio, the
+        // fragment is discarded instead of salvaged (transcribing it again
+        // would type the same words twice).
+        var discardSalvage = false
+        if liveTranscriber != nil {
+            discardSalvage = streamEnqueuedCount > 0
+            Diagnostics.log("dictation", "stream.abandoned on engine death — \(discardSalvage ? "fragment already typed live" : "batch salvage")")
+            teardownStreaming()
+            streamingFailed = true
+        }
+
         // Non-chunked sessions degrade to phrase-by-phrase from here on:
         // fragments across an engine death cannot be joined into one file,
         // and the ordered pipeline already knows how to type them in order.
@@ -298,7 +331,11 @@ final class DictationService: NSObject, ObservableObject {
         // handle is released, so the fragment is finalized and safe to
         // upload. The subsequent beginRecording is queued behind it.
         capture.endRecording(keepWarmSeconds: 0) { [weak self] in
-            self?.enqueueSegment(finishedURL)
+            if discardSalvage {
+                try? FileManager.default.removeItem(at: finishedURL)
+            } else {
+                self?.enqueueSegment(finishedURL)
+            }
         }
         capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
         return true
@@ -321,6 +358,120 @@ final class DictationService: NSObject, ObservableObject {
             }
         @unknown default: return false
         }
+    }
+
+    // MARK: - Streaming mode (Deepgram live)
+
+    /// Streaming is an explicit opt-in and only for Deepgram Nova-3 (the one
+    /// provider/model pair with a documented raw-WebSocket live API here);
+    /// anything else runs the classic file paths.
+    private func streamingConfig() -> (apiKey: String, model: String)? {
+        let settings = AppSettings.shared
+        guard settings.dictationStreaming, settings.sttProvider == .deepgram else { return nil }
+        let model = settings.sttModel(for: .deepgram)
+        guard model.hasPrefix("nova-3"), let apiKey = STTProviderID.deepgram.apiKey else { return nil }
+        return (apiKey, model)
+    }
+
+    private func armStreaming(apiKey: String, model: String) {
+        let transcriber = DeepgramLiveTranscriber(apiKey: apiKey, model: model)
+        // Finalized spans are inserted as they arrive — the "live" in live
+        // streaming. NOT gated on the transcriber identity: the tail spans
+        // flushed by CloseStream land after the stop already detached the
+        // transcriber, and they belong in the text. Stale spans from a dead
+        // session can't fire (teardown kills the receive loop) and the chain
+        // itself honors `sessionCancelled`.
+        transcriber.onFinal = { [weak self] span in
+            // Delivered via DispatchQueue.main.async (see the transcriber) —
+            // assumeIsolated instead of another hop, preserving span order
+            // relative to the finish() continuation.
+            MainActor.assumeIsolated {
+                self?.enqueueStreamText(span)
+            }
+        }
+        transcriber.onFailure = { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.liveTranscriber === transcriber else { return }
+                self.streamingFailed = true
+                self.teardownStreaming()
+                guard self.phase == .recording else { return }
+                // Degrade to phrase chunking for the rest of the session.
+                self.chunkedMode = true
+                if self.streamEnqueuedCount > 0 {
+                    // The recorded file's start is already typed — cut it off
+                    // here and let chunking own only the speech from now on.
+                    // (The last unfinalized words around the break may drop.)
+                    self.discardCurrentSegmentAndContinue()
+                }
+                // Nothing inserted yet: keep the file whole — the chunked
+                // machinery batch-transcribes it (rotation or stop).
+            }
+        }
+        liveTranscriber = transcriber
+        capture.setPCMSink { [weak transcriber] pcm, rate in
+            transcriber?.feed(pcm: pcm, sampleRate: rate)
+        }
+    }
+
+    /// Streaming spans skip STT (they already are text) but share the ordered
+    /// cleanup+insert chain with chunked segments — spoken order guaranteed,
+    /// cleanup serialized (provider rate limits, see `enqueueSegment`).
+    private func enqueueStreamText(_ text: String) {
+        streamEnqueuedCount += 1
+        let previous = processingChain
+        processingChain = Task { [weak self] in
+            await previous?.value
+            guard let self, !self.sessionCancelled else { return }
+            var output = text
+            let settings = AppSettings.shared
+            if self.mode == .translate || settings.dictationCleanup {
+                if let processed = await self.postProcessWithRetry(text) {
+                    output = processed
+                }
+            }
+            guard !self.sessionCancelled else { return }
+            TextInserter.insert(output + " ")
+        }
+    }
+
+    /// Rotates recording onto a fresh segment and DELETES the finished one —
+    /// used when its audio is already represented on screen by live-inserted
+    /// streaming spans and must never reach a transcriber again.
+    private func discardCurrentSegmentAndContinue() {
+        guard let finishedURL = fileURL else { return }
+        let url = Self.segmentURL()
+        fileURL = url
+        segmentStart = Date()
+        speechDetected = false
+        silenceBegan = nil
+        capture.rotate(to: url) {
+            try? FileManager.default.removeItem(at: finishedURL)
+        }
+    }
+
+    /// Detaches and cancels the live stream, recording its spend (Deepgram
+    /// bills the audio it processed whether or not the session completed).
+    private func teardownStreaming() {
+        capture.setPCMSink(nil)
+        guard let live = liveTranscriber else { return }
+        liveTranscriber = nil
+        recordStreamingSpend(model: AppSettings.shared.sttModel(for: .deepgram),
+                             seconds: live.audioSeconds)
+        live.cancel()
+    }
+
+    /// Streaming bills at Deepgram's live rate, not the prerecorded one —
+    /// recorded under a distinct model label so the spend analytics keep the
+    /// two prices apart.
+    private func recordStreamingSpend(model: String, seconds: Double) {
+        guard seconds > 0 else { return }
+        let minutes = seconds / 60
+        SpendStore.shared.record(
+            kind: .stt, provider: STTProviderID.deepgram.rawValue,
+            model: model + " (stream)",
+            units: minutes,
+            costUSD: PricingCatalog.sttStreamingPerMinute[.deepgram].map { $0 * minutes }
+        )
     }
 
     // MARK: - Chunked mode (phrase-by-phrase)
@@ -425,6 +576,7 @@ final class DictationService: NSObject, ObservableObject {
     func cancel() {
         sessionCancelled = true // pending segments will skip insertion
         processingChain = nil
+        teardownStreaming()
         let keepWarm = TimeInterval(AppSettings.shared.dictationWarmMinutes) * 60
         if let url = fileURL {
             // Delete only after the capture queue released the file handle.
@@ -473,6 +625,7 @@ final class DictationService: NSObject, ObservableObject {
         let sessionPeak = capture.sessionPeakDB()
         if sessionPeak <= -80, Date().timeIntervalSince(segmentStart) >= 2 {
             Diagnostics.log("dictation", "silence.session peak=\(Int(sessionPeak))dB — stt skipped, input device likely dead")
+            teardownStreaming()
             NSSound.beep()
             NotificationService.shared.postDictationSilentInput()
             try? FileManager.default.removeItem(at: finishedURL)
@@ -480,6 +633,33 @@ final class DictationService: NSObject, ObservableObject {
             phase = .idle
             hideWidget()
             return
+        }
+
+        // Streaming: the spans were inserted while speaking — flush the tail
+        // (CloseStream finalizes the last words, which arrive through the
+        // same onFinal path) and drain the insert chain. A stream that saw
+        // nothing falls through to the classic batch path on the recorded
+        // file, so no audio is ever lost.
+        if let live = liveTranscriber {
+            capture.setPCMSink(nil)
+            liveTranscriber = nil
+            let tail = await live.finish()   // never-finalized interim only
+            let audioSeconds = live.audioSeconds
+            recordStreamingSpend(model: AppSettings.shared.sttModel(for: .deepgram),
+                                 seconds: audioSeconds)
+            if let tail, !tail.isEmpty {
+                enqueueStreamText(tail)
+            }
+            if streamEnqueuedCount > 0 {
+                Diagnostics.log("dictation", "stream.final spans=\(streamEnqueuedCount) audio_s=\(String(format: "%.1f", audioSeconds))")
+                try? FileManager.default.removeItem(at: finishedURL)
+                await processingChain?.value
+                processingChain = nil
+                phase = .idle
+                hideWidget()
+                return
+            }
+            Diagnostics.log("dictation", "stream.empty — batch fallback")
         }
 
         if chunkedMode {
@@ -976,6 +1156,16 @@ nonisolated final class MicCapture {
         /// -80 dBFS, while a Bluetooth mic whose HFP profile never engaged
         /// streams exact zeros (clamped to -90/-160 below).
         var rawPeakDB: Float = -160
+        /// Live-streaming tap: every buffer, converted to linear16 mono, goes
+        /// here as well as into the file (the file stays the batch fallback).
+        var pcmSink: (@Sendable (_ pcm: Data, _ sampleRate: Int) -> Void)?
+    }
+
+    /// Installs/removes the linear16 side-tap (dictation streaming mode).
+    func setPCMSink(_ sink: (@Sendable (_ pcm: Data, _ sampleRate: Int) -> Void)?) {
+        state.lock.lock()
+        state.pcmSink = sink
+        state.lock.unlock()
     }
 
     // MARK: Control plane (serialized, off the main thread)
@@ -1207,7 +1397,14 @@ nonisolated final class MicCapture {
         let fft = state.fft
         let windowCurve = state.windowCurve
         let sampleRate = state.sampleRate
+        let pcmSink = state.pcmSink
         state.lock.unlock()
+
+        // Streaming side-tap: EVERY buffer (not just the throttled UI frames)
+        // — dropped buffers would be dropped words. The sink only enqueues.
+        if let pcmSink, let pcm = linear16Data(from: buffer) {
+            pcmSink(pcm, Int(buffer.format.sampleRate))
+        }
 
         guard due, let samples = buffer.floatChannelData?[0] else { return }
         let count = Int(buffer.frameLength)
@@ -1258,6 +1455,22 @@ nonisolated final class MicCapture {
         }
         state.lock.unlock()
         emit(dbExcess, bands, isFirst)
+    }
+
+    /// Channel 0 as 16-bit signed little-endian PCM (Deepgram `linear16`).
+    /// vDSP on ≤2048 frames is microseconds — safe on the audio thread.
+    private static func linear16Data(from buffer: AVAudioPCMBuffer) -> Data? {
+        guard let channel = buffer.floatChannelData?[0] else { return nil }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return nil }
+        var scaled = [Float](repeating: 0, count: count)
+        var scale = Float(Int16.max)
+        vDSP_vsmul(channel, 1, &scale, &scaled, 1, vDSP_Length(count))
+        var low = Float(Int16.min), high = Float(Int16.max)
+        vDSP_vclip(scaled, 1, &low, &high, &scaled, 1, vDSP_Length(count))
+        var ints = [Int16](repeating: 0, count: count)
+        vDSP_vfix16(scaled, 1, &ints, 1, vDSP_Length(count))
+        return ints.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
     /// 1024-point real FFT → `bandCount` log-spaced voice bands, 0…1.

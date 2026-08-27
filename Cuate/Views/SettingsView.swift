@@ -967,7 +967,18 @@ struct SettingsView: View {
                 // cleanup toggle off.
                 cleanupModelPicker
 
+                // Live streaming rides Deepgram's WebSocket API — the toggle
+                // exists only for the provider/model pair that supports it.
+                // While it's on, phrase chunking is superseded per session.
+                let streamingAvailable = settings.sttProvider == .deepgram
+                    && settings.sttModel(for: .deepgram).hasPrefix("nova-3")
+                if streamingAvailable {
+                    Toggle(L("dictation.streaming"), isOn: $settings.dictationStreaming)
+                        .help(L("tooltip.dictation.streaming"))
+                }
+
                 Toggle(L("dictation.chunked"), isOn: $settings.dictationChunked)
+                    .disabled(streamingAvailable && settings.dictationStreaming)
 
                 Picker(L("dictation.translateTo"), selection: $settings.dictationTargetLanguage) {
                     ForEach(AppSettings.dictationLanguages, id: \.self) { lang in
