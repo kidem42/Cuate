@@ -65,11 +65,25 @@ final class AutoSwitcher {
     }
     private var lastCorrection: LastCorrection?
 
+    /// The last space-flushed word — context for the retroactive single-letter
+    /// fix. Guarded by `lock`: the boundary path writes on the main thread,
+    /// the commit path reads on the tap thread. Invalidated by the monitor's
+    /// `onContextBreak` whenever the caret may have left "prev + space + word".
+    private struct PrevWord {
+        let word: String
+        let keys: [KeystrokeMonitor.Key]
+        let at: Date
+        let corrected: Bool
+    }
+    private var prevWord: PrevWord?
+    private static let retroWindow: TimeInterval = 4.0
+
     /// Apps where auto-fix must never fire (terminals: commands, and Secure
     /// Keyboard Entry hides keystrokes there anyway).
     private static let blockedApps: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty",
-        "net.kovidgoyal.kitty", "dev.warp.Warp-Stable", "co.zeit.hyper"
+        "net.kovidgoyal.kitty", "dev.warp.Warp-Stable", "co.zeit.hyper",
+        "com.termius-dmg.mac", "com.mitchellh.ghostty", "com.github.wez.wezterm"
     ]
 
     var isRunning: Bool { monitor.isRunning }
@@ -113,7 +127,11 @@ final class AutoSwitcher {
         monitor.onUndoRequested = { [weak self] in
             DispatchQueue.main.async { self?.undoLast() }
         }
+        monitor.onContextBreak = { [weak self] in
+            self?.clearPrevWord()
+        }
         monitor.onTapAutoReenabled = { [weak self] in
+            self?.clearPrevWord()   // keystrokes were lost in the gap
             self?.log("!! tap was disabled by the system and re-enabled (keystrokes lost in the gap)")
         }
         monitor.onPermissionLost = { [weak self] in
@@ -156,6 +174,7 @@ final class AutoSwitcher {
         lock.lock()
         cachedLayouts = nil
         lastCorrection = nil
+        prevWord = nil
         lock.unlock()
     }
 
@@ -204,8 +223,14 @@ final class AutoSwitcher {
         lock.lock()
         frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         lock.unlock()
+        // queue: nil — synchronous delivery on the posting thread. Main-queue
+        // delivery lags behind a busy UI: the user can ⌘Tab into a terminal
+        // and type before the queued notification lands, so the tap thread
+        // would guard against a STALE bundle id and let corrections /
+        // capitalization leak into a blocked app. The handler only writes
+        // under the lock, so it is safe on any thread.
         frontmostObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
         ) { [weak self] note in
             guard let self else { return }
             let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
@@ -353,14 +378,82 @@ final class AutoSwitcher {
             if verbose { log("  skip: SECURE INPUT active (some app is capturing passwords)") }
             return false
         }
-        lock.lock()
-        let bundle = frontmostBundleID
-        lock.unlock()
-        if let bundle, Self.blockedApps.contains(bundle) {
+        let bundle: String?
+        if Thread.isMainThread {
+            // Live truth (boundary path): the cached id can still be a beat
+            // behind right after an app switch; the per-word cost is fine here.
+            bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            lock.lock()
+            frontmostBundleID = bundle
+            lock.unlock()
+        } else {
+            lock.lock()
+            bundle = frontmostBundleID
+            lock.unlock()
+        }
+        guard let bundle else {
+            // Unknown frontmost app — don't touch what we can't identify.
+            if verbose { log("  skip: frontmost app unknown") }
+            return false
+        }
+        if Self.blockedApps.contains(bundle) {
             if verbose { log("  skip: blocked app \(bundle)") }
             return false
         }
         return true
+    }
+
+    // MARK: - Retroactive single-letter fix
+
+    private func setPrevWord(_ word: String, keys: [KeystrokeMonitor.Key], corrected: Bool) {
+        lock.lock()
+        prevWord = PrevWord(word: word, keys: keys, at: Date(), corrected: corrected)
+        lock.unlock()
+    }
+
+    private func clearPrevWord() {
+        lock.lock()
+        prevWord = nil
+        lock.unlock()
+    }
+
+    /// The word before the one just fixed, if it is still adjacent and recent.
+    private func freshPrevWord() -> PrevWord? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let prev = prevWord, Date().timeIntervalSince(prev.at) < Self.retroWindow else { return nil }
+        return prev
+    }
+
+    /// "у владимира" problem: a lone "e" is protected by the single-letter
+    /// frequency bounds (real standalone e/c/d must survive), so it can never
+    /// flip on its own. But once the NEXT word is fixed into the other layout,
+    /// the letter before it was clearly typed in the same wrong layout — the
+    /// corrected neighbor is the context the single-letter rule lacks. Fix
+    /// both together when the letter's rendering in the winner layout is a
+    /// top-frequency function word (у, в, с, а, i …).
+    private func retroFix(for d: Decision) -> (original: String, rendered: String)? {
+        guard let prev = freshPrevWord(), !prev.corrected,
+              prev.word.count == 1, prev.keys.count == 1 else { return nil }
+        let t = DecisionEngine.thresholds
+
+        // A letter that is itself a frequent standalone word of the source
+        // language (я, и, i, a) keeps its protection even here.
+        if let srcLayout = layouts().first(where: { $0.id == d.sourceLayoutID }),
+           let srcLang = languageOf(srcLayout),
+           let srcQ = scorers[srcLang]?.freqQ(prev.word),
+           srcQ <= t.singleTargetMaxQ {
+            return nil
+        }
+
+        let stroke = (keyCode: prev.keys[0].keyCode, modifierByte: prev.keys[0].modifierByte)
+        let rendered = engine.render(keyStrokes: [stroke], using: d.layout)
+        guard rendered != prev.word, rendered.count == 1,
+              rendered.first?.isLetter == true,
+              let lang = languageOf(d.layout),
+              let q = scorers[lang]?.freqQ(rendered),
+              q <= t.singleTargetMaxQ else { return nil }
+        return (prev.word, rendered)
     }
 
     // MARK: - Paths
@@ -368,15 +461,33 @@ final class AutoSwitcher {
     /// Space boundary (async): fix word + boundary space.
     private func handleBoundary(_ word: String, keys: [KeystrokeMonitor.Key]) {
         log("word='\(word)' (\(word.count) keys)")
-        guard guardsPass() else { log("  skip: guarded app/secure input"); return }
-        guard let d = decide(word, keys: keys, useDictionary: true) else { return }
+        guard guardsPass() else { clearPrevWord(); log("  skip: guarded app/secure input"); return }
+        guard let d = decide(word, keys: keys, useDictionary: true) else {
+            // Not corrected — but remember it: if the NEXT word gets fixed,
+            // this one may be retro-fixed as a wrong-layout single letter.
+            setPrevWord(word, keys: keys, corrected: false)
+            return
+        }
+
+        var deleteCount = word.count + 1
+        var insert = d.rendered + " "
+        var undoOriginal = word
+        var undoConverted = d.rendered
+        if let retro = retroFix(for: d) {
+            log("  RETRO '\(retro.original)' → '\(retro.rendered)'")
+            deleteCount += retro.original.count + 1
+            insert = retro.rendered + " " + insert
+            undoOriginal = retro.original + " " + word
+            undoConverted = retro.rendered + " " + d.rendered
+        }
 
         log("  FIX '\(word)' → '\(d.rendered)' (\(d.layout.localizedName))")
-        monitor.applyCorrection(deleteCount: word.count + 1, insert: d.rendered + " ")
+        monitor.applyCorrection(deleteCount: deleteCount, insert: insert)
         if config.switchSystemLayout { selectLayoutOnMain(d.layout) }
-        setLastCorrection(LastCorrection(original: word, converted: d.rendered,
+        setLastCorrection(LastCorrection(original: undoOriginal, converted: undoConverted,
                                          boundary: " ", previousLayoutID: d.sourceLayoutID))
         monitor.armUndo()
+        setPrevWord(d.rendered, keys: keys, corrected: true)
     }
 
     /// Plain Enter (sync, in the tap): decide now so the fixed text is sent.
@@ -384,12 +495,21 @@ final class AutoSwitcher {
     /// to the spell server, and a synchronous XPC round-trip inside the tap
     /// callback would add latency to every Enter keystroke system-wide.
     private func decideForCommit(_ word: String, keys: [KeystrokeMonitor.Key]) -> KeystrokeMonitor.Correction? {
-        guard guardsPass() else { return nil }
+        guard guardsPass() else { clearPrevWord(); return nil }
         guard let d = decide(word, keys: keys, useDictionary: false) else { return nil }
+
+        var deleteCount = word.count
+        var insert = d.rendered
+        if let retro = retroFix(for: d) {
+            log("COMMIT RETRO '\(retro.original)' → '\(retro.rendered)'")
+            deleteCount += retro.original.count + 1
+            insert = retro.rendered + " " + insert
+        }
+
         log("COMMIT FIX '\(word)' → '\(d.rendered)' (\(d.layout.localizedName))")
         if config.switchSystemLayout { selectLayoutOnMain(d.layout) }
         // No undo: the Enter sends the text right after the correction.
-        return .init(deleteCount: word.count, insert: d.rendered)
+        return .init(deleteCount: deleteCount, insert: insert)
     }
 
     /// Mid-word (sync, pure statistics): only on strong evidence — the typed
@@ -427,6 +547,7 @@ final class AutoSwitcher {
         lock.lock()
         let last = lastCorrection
         lastCorrection = nil
+        prevWord = nil   // the revert invalidates the cached context
         lock.unlock()
         guard let last else { return }
 

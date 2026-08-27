@@ -52,6 +52,14 @@ final class KeystrokeMonitor {
     /// the caller should revert its last correction.
     var onUndoRequested: (() -> Void)?
 
+    /// Fired (on the tap thread) when screen contiguity with previously typed
+    /// words is lost — mouse click, navigation, a ⌘/⌃ shortcut, Backspace past
+    /// the word start, Enter, a non-space separator. The owner must forget any
+    /// cached last-word context (used by the retroactive single-letter fix):
+    /// applying a correction that reaches back over stale context would edit
+    /// text that is no longer next to the caret.
+    var onContextBreak: (() -> Void)?
+
     /// Marks synthesized events so the tap skips them (avoids feedback loops).
     private static let injectedTag: Int64 = 0x4C_46_49_58       // "LFIX"
     private static let undoWindow: TimeInterval = 4.0
@@ -281,6 +289,7 @@ final class KeystrokeMonitor {
             buffer = []
             sentenceState = .idle
             disarmUndo()
+            onContextBreak?()
 
         case .keyDown:
             // Undo interception: a plain Backspace right after a correction
@@ -317,6 +326,7 @@ final class KeystrokeMonitor {
         if flags.contains(.maskCommand) || flags.contains(.maskControl) {
             buffer = []
             sentenceState = .idle
+            onContextBreak?()
             return Unmanaged.passUnretained(event)
         }
 
@@ -328,25 +338,32 @@ final class KeystrokeMonitor {
             let keys = buffer
             buffer = []
             sentenceState = .armed   // a new line / message starts a sentence
+            var swallowed = false
             if !word.isEmpty, let fix = onCommitDecision?(word, keys) {
                 applyCorrection(deleteCount: fix.deleteCount, insert: fix.insert)
                 let enterKey = keyCode
                 postQueue.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                     self?.postKeyCode(enterKey)
                 }
-                return nil   // swallow the original Enter
+                swallowed = true
             }
-            return Unmanaged.passUnretained(event)
+            onContextBreak?()   // after the commit decision consumed the context
+            return swallowed ? nil : Unmanaged.passUnretained(event)
         }
 
         // Navigation / control keys break the word without correcting.
         if Self.resetKeyCodes.contains(keyCode) {
             buffer = []
             sentenceState = .idle
+            onContextBreak?()
             return Unmanaged.passUnretained(event)
         }
         if keyCode == UInt16(kVK_Delete) {           // backspace pops a char
-            if !buffer.isEmpty { buffer.removeLast() }
+            if !buffer.isEmpty {
+                buffer.removeLast()
+            } else {
+                onContextBreak?()   // deleting past the word start (into the boundary space)
+            }
             sentenceState = .idle    // user is editing — don't force a capital
             return Unmanaged.passUnretained(event)
         }
@@ -357,7 +374,11 @@ final class KeystrokeMonitor {
         event.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &chars)
         let produced = length > 0 ? String(utf16CodeUnits: chars, count: length) : ""
 
-        guard let ch = produced.first else { buffer = []; return Unmanaged.passUnretained(event) }
+        guard let ch = produced.first else {
+            buffer = []
+            onContextBreak?()
+            return Unmanaged.passUnretained(event)
+        }
 
         // A word character: a real letter, OR a key that types a letter in
         // another installed layout. In US-QWERTY "[" types х, "," types б, ";"
@@ -418,11 +439,17 @@ final class KeystrokeMonitor {
         if ch == " " {
             // ". " arms capitalization; further spaces keep it armed.
             sentenceState = (sentenceState == .afterTerminator || sentenceState == .armed) ? .armed : .idle
-            if !word.isEmpty { onWord?(word, keys, ch) }
+            if !word.isEmpty {
+                onWord?(word, keys, ch)
+            } else {
+                onContextBreak?()   // a run of spaces — retro context no longer "word space word"
+            }
         } else if ".!?".contains(ch) {
             sentenceState = .afterTerminator       // "!"/"?" arrive as shifted digits
+            onContextBreak?()
         } else {
             sentenceState = .idle
+            onContextBreak?()   // digits/symbols between words break retro contiguity
         }
         return Unmanaged.passUnretained(event)
     }
