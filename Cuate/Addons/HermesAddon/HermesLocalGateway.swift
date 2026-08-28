@@ -64,16 +64,21 @@ enum HermesLocalGateway {
     //
     // Hermes reports run-CUMULATIVE token sums in `run.completed.usage` —
     // useless as a context gauge (a 26-step turn "fills" the window
-    // severalfold; seen live: 2188K against a 1050K window). The true fill —
-    // the last call's prompt size — lives in `agent.context_compressor.
-    // last_prompt_tokens`: Hermes' own status bar shows it, the API omits
-    // it. The patch appends it as `usage.context_tokens` after every
-    // `"total_tokens"` line of the two usage dicts in gateway/platforms/
-    // api_server.py (anchored by code, not line numbers — survives version
-    // drift; refuses untouched when the anchor is missing). `hermes update`
-    // overwrites the file, so the state is re-checked each time the
-    // settings pane looks and the offer simply reappears. The client copes
-    // either way: without the field the gauge falls back to the capped sums.
+    // severalfold; seen live: 2188K against a 1050K window). The true fill
+    // is what Hermes' own /context shows: preferably the usage anchor
+    // (`agent._usage_anchor` — the last response's exact provider-reported
+    // prompt+completion, Hermes' usage-anchored context accounting), with
+    // `agent.context_compressor.last_prompt_tokens` as the fallback on
+    // installs that predate the anchor. The patch appends that figure as
+    // `usage.context_tokens` after every `"total_tokens"` line of the two
+    // usage dicts in gateway/platforms/api_server.py (anchored by code,
+    // not line numbers — survives version drift; refuses untouched when
+    // the anchor is missing), upgrading an older v3 fill line in place and
+    // leaving a Hermes that ships the fields natively untouched. `hermes
+    // update` overwrites the file, so the state is re-checked each time
+    // the settings pane looks and the offer simply reappears. The client
+    // copes either way: without the field the gauge falls back to the
+    // capped sums.
     //
     // Third edit — detached session runs: stock Hermes INTERRUPTS the live
     // run when the session SSE client disconnects (a backgrounded phone, a
@@ -93,6 +98,10 @@ enum HermesLocalGateway {
     private static let contextPatchAnchor =
         "\"total_tokens\": getattr(agent, \"session_total_tokens\", 0) or 0,"
     static let contextPatchLine =
+        "\"context_tokens\": (lambda _a, _c: max(0, int(_a[\"prompt_tokens\"]) + int(_a.get(\"completion_tokens\") or 0)) if isinstance(_a, dict) and _a.get(\"prompt_tokens\") else max(0, getattr(_c, \"last_prompt_tokens\", 0) or 0))(getattr(agent, \"_usage_anchor\", None), getattr(agent, \"context_compressor\", None)),"
+    /// The pre-anchor (v3) fill line — recognized so it upgrades in place;
+    /// the window line inserted after it stays put through the swap.
+    static let contextPatchLineV3 =
         "\"context_tokens\": max(0, getattr(getattr(agent, \"context_compressor\", None), \"last_prompt_tokens\", 0) or 0),"
     /// Second usage line: the window the agent ACTUALLY operates with
     /// (OAuth caps included) — paired with the fill above, the gauge's both
@@ -141,6 +150,7 @@ enum HermesLocalGateway {
         let windowDone = src.contains("\"context_window\"")
         // Any edit still applicable → offer the patch. A gateway too old to
         // carry a given anchor simply doesn't get that edit.
+        if src.contains(contextPatchLineV3) { return .patchable }  // v3 → v4 upgrade
         if !contextDone, src.contains(contextPatchAnchor) { return .patchable }
         if contextDone, !windowDone { return .patchable }  // window rides on the context line
         if !src.contains(detachedRunsMarker), src.contains(detachedRunsOldBlock) { return .patchable }
@@ -161,6 +171,13 @@ enum HermesLocalGateway {
             throw SetupError.patchFailed("api_server.py not found")
         }
         var work = src
+        // v3 → v4 upgrade: swap the fill line's content in place — the
+        // window line, inserted after it, stays put.
+        var upgradedSites = 0
+        while let range = work.range(of: contextPatchLineV3) {
+            work = work.replacingCharacters(in: range, with: contextPatchLine)
+            upgradedSites += 1
+        }
         var contextSites = 0
         if !work.contains("\"context_tokens\"") {
             var out: [String] = []
@@ -209,7 +226,7 @@ enum HermesLocalGateway {
         } catch {
             throw SetupError.patchFailed(error.localizedDescription)
         }
-        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) window=\(windowSites) detached=\(detachedSites) file=\(file.path)")
+        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) upgraded=\(upgradedSites) window=\(windowSites) detached=\(detachedSites) file=\(file.path)")
         return true
     }
 
