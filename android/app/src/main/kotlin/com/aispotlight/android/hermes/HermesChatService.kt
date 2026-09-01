@@ -892,8 +892,26 @@ object HermesChatService {
 object HermesFilePaths {
     // /root, /srv, /mnt: a remote gateway commonly runs as root on a VPS —
     // its files never matched (desktop e2e 2026-07-27).
+    private const val ROOT = """(?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)"""
+    // A run with no spaces; Unicode letters, so a Russian filename counts.
+    private const val BARE = """[\p{L}\p{N}._\-/~]"""
+    // Same, plus what a human filename carries between words (quotes and
+    // sentence punctuation stay out — they end the path).
+    private const val SPACEY = """[\p{L}\p{N}._\-/~()&+#%№!@—–]"""
+    // A real extension, letter-led: "rev.0" must not pass for one and
+    // truncate "… — rev.0.docx".
+    private const val EXT = """\.[A-Za-z][A-Za-z0-9]{0,7}(?![A-Za-z0-9])"""
+
+    // Desktop twin: AgentFilePaths.pathRegex — keep the two in step. Three
+    // ordered alternatives (spaceless+extension, widened word by word for
+    // names with spaces, bare fallback), a delimiter set that admits the
+    // "MEDIA:/root/…" gluing agents do, and ^ meaning line start.
     private val pattern = Regex(
-        """(?:^|[\s`'"(\[])((?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)/[A-Za-z0-9._\-/~]+)"""
+        """(?:^|[\s`'"(\[:=*|>])(""" +
+            ROOT + "/" + BARE + "*" + EXT +
+            "|" + ROOT + "/" + BARE + """*(?:[ \t](?!/)""" + SPACEY + "+){1,10}?" + EXT +
+            "|" + ROOT + "/" + BARE + "+)",
+        RegexOption.MULTILINE
     )
 
     /** Conservative: common root prefixes only, punctuation trimmed, capped at 5. */

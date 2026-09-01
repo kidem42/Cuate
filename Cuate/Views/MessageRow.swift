@@ -630,7 +630,9 @@ struct MarkdownText: View {
                                           linkColor: Color) -> AttributedString {
         var result = attributed
         let plain = String(result.characters)
-        for path in AgentFilePaths.extract(from: plain) {
+        // The host-verified names when they are in (a truncated link would
+        // point at half a filename), the regex guess until then.
+        for path in AgentPathResolver.cached(for: plain) ?? AgentFilePaths.extract(from: plain) {
             var searchRange = plain.startIndex..<plain.endIndex
             while let found = plain.range(of: path, range: searchRange) {
                 searchRange = found.upperBound..<plain.endIndex

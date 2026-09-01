@@ -165,8 +165,10 @@ struct ChatWindow: View {
                     user.append(path)
                 }
             } else {
-                for path in AgentFilePaths.extract(from: message.text)
-                where AgentFilePaths.isListableFile(path) && seen.insert(path).inserted {
+                for path in AgentPathResolver.cached(for: message.text)
+                    ?? AgentFilePaths.extract(from: message.text)
+                where (AgentFilePaths.isListableFile(path)
+                       || AgentPathResolver.isVerifiedFile(path)) && seen.insert(path).inserted {
                     agent.append(path)
                 }
             }

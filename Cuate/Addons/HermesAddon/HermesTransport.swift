@@ -93,7 +93,9 @@ struct HermesProviderOption: Identifiable {
 enum HermesStreamEvent {
     case runStarted(runID: String)
     case messageStarted(messageID: String)
-    case toolStarted(tool: String, preview: String?)
+    /// `paths` are the path-shaped values of the call's `args` — the EXACT
+    /// files this step touches, before the reply describes them in prose.
+    case toolStarted(tool: String, preview: String?, paths: [String])
     /// `tool_name == "_thinking"` is the model's reasoning stream, not a tool.
     case toolProgress(tool: String, delta: String)
     case toolCompleted(tool: String)
@@ -626,12 +628,14 @@ nonisolated struct HermesTransport {
             let message = payload["message"] as? [String: Any]
             return .messageStarted(messageID: message?["id"] as? String ?? "")
         case "tool.started":
+            let args = payload["args"] as? [String: Any]
             var preview = payload["preview"] as? String
             // Fall back to the args dict when preview is missing.
-            if preview == nil, let args = payload["args"] as? [String: Any], !args.isEmpty {
+            if preview == nil, let args, !args.isEmpty {
                 preview = args.map { "\($0.key): \($0.value)" }.sorted().joined(separator: ", ")
             }
-            return .toolStarted(tool: payload["tool_name"] as? String ?? "?", preview: preview)
+            return .toolStarted(tool: payload["tool_name"] as? String ?? "?", preview: preview,
+                                paths: AgentToolPaths.extract(fromArguments: args))
         case "tool.progress":
             return .toolProgress(tool: payload["tool_name"] as? String ?? "?",
                                  delta: payload["delta"] as? String ?? "")

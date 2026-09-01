@@ -170,8 +170,12 @@ final class HermesAgentSession: AgentSession {
                             }
                         case .messageStarted:
                             break
-                        case .toolStarted(let tool, let preview):
+                        case .toolStarted(let tool, let preview, let paths):
                             guard tool != "_thinking" else { break }
+                            // The step's files, straight from the call's
+                            // arguments: the reply that follows may name them
+                            // in prose that no parser can cut correctly.
+                            AgentPathResolver.noteToolPaths(paths)
                             let step = AgentStep(
                                 id: "\(self.currentRunID ?? "run")-\(tool)-\(Date().timeIntervalSince1970)",
                                 toolName: tool, preview: preview,

@@ -10,10 +10,45 @@ enum AgentFilePaths {
     // /root, /srv, /mnt: a remote gateway commonly runs as root on a
     // VPS — its files live under /root and never matched (e2e
     // 2026-07-27: "/root/toluca_map.html" rendered as plain prose).
+    private static let root = #"(?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)"#
+    // A run with no spaces. Unicode letters, not just ASCII — a file named
+    // in Russian is still a file.
+    private static let bare = #"[\p{L}\p{N}._\-/~]"#
+    // Same, plus what a HUMAN filename carries between its words. Quotes,
+    // backticks, commas and semicolons stay out: they close a quoted path
+    // and end a sentence, so prose cannot be dragged into the match.
+    private static let spacey = #"[\p{L}\p{N}._\-/~()&+#%№!@—–]"#
+    // The tail that turns a spacey run into a FILE: a real extension, and
+    // one that STARTS with a letter — otherwise "rev.0" passes for an
+    // extension and truncates "… — rev.0.docx" (e2e 2026-08-31).
+    private static let ext = #"\.[A-Za-z][A-Za-z0-9]{0,7}(?![A-Za-z0-9])"#
+
     // Compiled ONCE — extract() runs in row bodies, and re-compiling the
     // regex per call was measurable during history backfill.
+    //
+    // Three ordered alternatives, longest-honest-match first: a spaceless
+    // path ending in an extension, then the same widened word by word for
+    // filenames that contain spaces ("Demo Project — … — rev.0.docx" got
+    // no chip at all, e2e 2026-08-31), then the bare form for paths with
+    // no extension (directories keep the behaviour they had). Order
+    // matters: trying the spaceless form FIRST is what stops a path
+    // followed by prose from swallowing the sentence after it.
+    //
+    // Widening is lazy and refuses a word starting with "/" so a mention
+    // of two paths in one line cannot become one match. It is still a
+    // heuristic: an extension-less path followed by prose that ends in a
+    // filename-looking token ("… /root/work смотри файл report.docx")
+    // over-matches — the honest trade for names with spaces.
+    //
+    // The delimiter before a path is not always whitespace: agents glue
+    // paths to a label or a key ("MEDIA:/root/…png" matched NOTHING), and
+    // ^ has to mean "line start", not "start of the whole reply".
     private static let pathRegex = try? NSRegularExpression(
-        pattern: #"(?:^|[\s`'"(\[])((?:~|/Users|/home|/root|/srv|/mnt|/tmp|/private|/var|/opt|/etc)/[A-Za-z0-9._\-/~]+)"#)
+        pattern: #"(?:^|[\s`'"(\[:=*|>])("#
+            + root + #"/"# + bare + #"*"# + ext
+            + #"|"# + root + #"/"# + bare + #"*(?:[ \t](?!/)"# + spacey + #"+){1,10}?"# + ext
+            + #"|"# + root + #"/"# + bare + #"+)"#,
+        options: [.anchorsMatchLines])
 
     /// Memoized extraction — the result depends only on the text, and the
     /// same reply is re-scanned on every row rebuild.
@@ -149,8 +184,13 @@ struct AgentFileChipsView: View {
         // Directories earn a chip only when they exist HERE (local gateway:
         // click opens Finder). On a remote gateway a directory chip is pure
         // noise — nothing to fetch, nothing to open (e2e 2026-07-27).
-        let paths = AgentFilePaths.extract(from: messageText).filter { path in
+        // The resolved set once the host has answered (AgentPathResolver),
+        // the regex guess until then — the row re-renders when it lands.
+        let mentioned = AgentPathResolver.cached(for: messageText)
+            ?? AgentFilePaths.extract(from: messageText)
+        let paths = mentioned.filter { path in
             AgentFilePaths.localURL(for: path) != nil || AgentFilePaths.isListableFile(path)
+                || AgentPathResolver.isVerifiedFile(path)
         }
         if !paths.isEmpty {
             // A copy the reverse courier already pulled down counts as
@@ -204,6 +244,15 @@ struct AgentFileChipsView: View {
             // re-runs the fetch that silently skipped (e2e 2026-07-27: no
             // card, and the first chip click fell back to copy-the-path).
             .task(id: "\(messageText)#\(autoFetchTick)") {
+                // Ask the host what these mentions really are before doing
+                // anything with them: a truncated path fetches nothing.
+                if AgentPathResolver.cached(for: messageText) == nil {
+                    let resolved = await AgentPathResolver.resolve(text: messageText)
+                    if resolved != mentioned {
+                        autoFetchTick += 1
+                        return
+                    }
+                }
                 var landed = false
                 for path in paths {
                     let ext = (path as NSString).pathExtension.lowercased()
@@ -237,7 +286,7 @@ struct AgentFileChipsView: View {
         // the path (on a LOCAL gateway the same chip opens the folder in
         // Finder, which is the affordance worth keeping).
         let canFetch = AgentFilePaths.localURL(for: path) == nil && HermesFileCourier.canFetchRemote
-            && AgentFilePaths.isListableFile(path)
+            && (AgentFilePaths.isListableFile(path) || AgentPathResolver.isVerifiedFile(path))
         Button {
             if let trulyLocal = AgentFilePaths.localURL(for: path) {
                 // Show, don't blindly launch: preview for HTML/Markdown,
@@ -380,7 +429,8 @@ enum AgentFileLink {
     static func open(_ path: String) {
         if let local = AgentFilePaths.localURL(for: path) {
             AgentFetchedFileOpener.open(local)
-        } else if HermesFileCourier.canFetchRemote, AgentFilePaths.isListableFile(path) {
+        } else if HermesFileCourier.canFetchRemote,
+                  AgentFilePaths.isListableFile(path) || AgentPathResolver.isVerifiedFile(path) {
             Task { @MainActor in
                 if let fetched = await HermesFileCourier.fetchRemoteFile(path: path, to: .cache) {
                     AgentFetchedFileOpener.open(fetched)

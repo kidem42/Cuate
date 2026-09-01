@@ -43,8 +43,16 @@ enum HermesStepDetails {
         for row in rows {
             if row.role == "tool" {
                 var detail = AgentStepDetail()
+                var exactPaths: [String] = []
                 if let callID = row.toolCallID, let raw = argsByCallID[callID] {
                     detail.command = Self.commandText(fromArguments: raw)
+                    // The call's own arguments name its files exactly. Feed
+                    // them to the resolver: a reply from BEFORE this app
+                    // launch has no live tool events behind it, and this is
+                    // where its paths come back (the transcript is fetched
+                    // for the journal anyway).
+                    exactPaths = AgentToolPaths.extract(fromJSON: raw)
+                    AgentPathResolver.noteToolPaths(exactPaths)
                 }
                 if let data = row.content.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -56,9 +64,9 @@ enum HermesStepDetails {
                     detail.output = String(row.content.prefix(4000))
                 }
                 detail.output = detail.output.map { String($0.prefix(4000)) }
-                detail.paths = AgentFilePaths.extract(
+                detail.paths = exactPaths + AgentFilePaths.extract(
                     from: (detail.command ?? "") + "\n" + (detail.output ?? "")
-                )
+                ).filter { !exactPaths.contains($0) }
                 pending.append(detail)
             } else if row.role == "assistant",
                       !row.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

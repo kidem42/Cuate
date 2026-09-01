@@ -244,6 +244,45 @@ enum HermesFileCourier {
         }
     }
 
+    /// ONE directory listing from the dashboard files API
+    /// (`GET /api/files?path=…` → `entries[{name, is_directory, …}]`, read
+    /// from web_server.py, not guessed). The other half of the reverse
+    /// courier: downloading needs the EXACT path, and a name with spaces
+    /// in it cannot be recovered from prose — the host has to be asked.
+    /// nil when the courier can't run or the directory is unreadable.
+    static func listRemoteDirectory(_ path: String) async -> [(name: String, isDirectory: Bool)]? {
+        guard canFetchRemote,
+              let dashboard = HermesSettings.shared.dashboardBaseURL,
+              let token = APIKeyStore.key(aux: .hermesDashboard), !token.isEmpty,
+              var comps = URLComponents(url: dashboard.appendingPathComponent("api/files"),
+                                        resolvingAgainstBaseURL: false)
+        else { return nil }
+        comps.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = comps.url else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(HermesTransport.userAgent, forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200...299).contains(status),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let entries = json["entries"] as? [[String: Any]]
+            else {
+                Diagnostics.log("hermes", "courier.list.fail http=\(status) path=\(path)")
+                return nil
+            }
+            return entries.compactMap { entry in
+                guard let name = entry["name"] as? String, !name.isEmpty else { return nil }
+                return (name, (entry["is_directory"] as? Bool) ?? false)
+            }
+        } catch {
+            Diagnostics.log("hermes", "courier.list.fail \(String(error.localizedDescription.prefix(120)))")
+            return nil
+        }
+    }
+
     /// Extensions rendered inline instead of as a file pill.
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic"]
 
