@@ -12,9 +12,15 @@ or just open an issue with your idea and we'll figure out the approach together.
 2. **Non-trivial changes** — please open an issue first to discuss the
    approach; it saves you from building something that can't be merged.
 3. Fork, create a branch, make your change. Match the style and conventions of
-   the surrounding code.
+   the surrounding code. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) maps
+   the subsystems and says what a change of each kind touches;
+   [`AGENTS.md`](AGENTS.md) lists the conventions (English docs and comments,
+   UI strings in all three languages, tooltips on new controls, settings
+   migrations for existing users).
 4. Make sure it builds: open `Cuate.xcodeproj` in Xcode 26+, or run
-   `./scripts/make-dmg.sh`. For the Android app, see
+   `./scripts/make-dmg.sh`. Run `./scripts/test-attach-note.sh` when you touch
+   a text contract (attach notes, Plaud markers, markdown lists, document
+   queries). For the Android app, see
    [`android/README.md`](android/README.md).
 5. Open a pull request describing what changed and why.
 

@@ -105,7 +105,6 @@ xcshareddata/
 # Local build artifacts
 Cuate_Debug.zip
 *.dmg
-.claude/
 
 # Internal docs — never published
 private/

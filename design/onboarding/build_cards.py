@@ -7,7 +7,7 @@ status-bar menu item, plus the whole tour window.
     python3 design/onboarding/build_cards.py
     open design/onboarding/dist/preview.html
 
-Builds self-contained HTML cards into dist/ (Claude Design format: the
+Builds self-contained HTML cards into dist/ (design-workspace format: the
 first line is the @dsCard marker) plus a local preview.html stand.
 
 The glyphs are real: SF Symbols are rendered to PNG by AppKit

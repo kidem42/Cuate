@@ -18,7 +18,7 @@ open design/onboarding/dist/preview.html     # open the preview stand
 | `symbols.json` | base64 glyphs, attached as a CSS mask |
 | `dist/` | the built cards + `preview.html` (not needed in git, they are regenerated) |
 
-The cards also live in Claude Design, project "Cuate Settings Redesign",
+The cards also live in the design workspace, project "Cuate Settings Redesign",
 group "08 · Onboarding" — the `@dsCard` format on the file's first line.
 
 ## The glyphs are real

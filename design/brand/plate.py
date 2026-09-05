@@ -1,5 +1,6 @@
 """CUATE · LÁMINA I — a phase table of the twin, drawn as a systematic plate."""
-import math
+import math, os
+HERE = os.path.dirname(os.path.abspath(__file__))
 from marks import crescent
 
 W, H = 2480, 3508                      # A4 at 300 dpi
@@ -154,5 +155,5 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}"
 <text x="{W - M}" y="{H - M - 8}" class="note" text-anchor="end">c&#333;&#257;tl &#183; gemelo</text>
 </svg>'''
 
-open('/home/claude/brand/plate.svg', 'w').write(svg)
+open(f'{HERE}/plate.svg', 'w').write(svg)
 print('plate.svg written', W, 'x', H, ' grid bottom', GRID_BOTTOM, ' band', BAND_Y)

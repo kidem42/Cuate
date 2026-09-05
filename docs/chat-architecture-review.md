@@ -2,7 +2,7 @@
 
 **Code version:** 2.13
 **Review date:** 2026-07-18
-**Status:** a historical document. Everything from §3/§6 (except P1-3, "the conversation list") shipped in 3.3 — see §8 at the bottom.
+**Status:** a historical document. Everything from §3/§6 (except P1-3, "the conversation list") shipped in 3.3 — see §8 at the bottom. The current map of the whole app is `docs/ARCHITECTURE.md`; this file stays as the record of why the chat subsystem looks the way it does.
 **Occasion:** a hang on a user's machine (14+ min, 99.7% CPU on main, ~6 GB footprint) + a request for a full audit of the chat subsystem.
 
 ---

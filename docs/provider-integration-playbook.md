@@ -3,7 +3,7 @@
 **Code version:** 3.5+ (after spend tracking landed)
 **Purpose:** a step-by-step checklist for adding a new chat provider to Cuate — from the enum to the "Costs" tab. The order of the steps is the order of the dependencies; each block ends with what to verify it against.
 
-All paths are relative to `Cuate/Cuate/`.
+All paths are relative to the `Cuate/` source folder at the repository root.
 
 ---
 
@@ -85,7 +85,7 @@ No price is not a disaster: the ledger records the tokens with `costUSD = nil` a
 
 - The API key: the slot appears automatically from `ProviderID.allCases` in the Keys section; check that `validateKey` gives a sensible error for a junk key.
 - Strings: new keys go into `App/Localization.swift` — **all three languages** (en/es/ru), English is the fallback.
-- `.help` tooltips on new controls — a project rule (see `docs/TECH-DEBT.md`, the 3.5 fix).
+- `.help` tooltips on new controls — a project rule (see `CLAUDE.md`).
 - The badge: the letter and color were already set in step 1; no separate assets are needed (`Views/ProviderBadge.swift`).
 
 ## 8. e2e checklist before committing

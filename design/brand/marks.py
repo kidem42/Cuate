@@ -1,5 +1,6 @@
 """Cuate — six marks from one grammar: two discs of equal radius at different phases."""
 import math, json, os
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 R = 300.0
 CX = CY = 512.0
@@ -120,9 +121,9 @@ MARKS['anillo'] = svg(
     f'<path fill="url(#w)" d="{crescent(CX, CY, CX - 6, CY - 24)}"/>'
     f'<path fill="url(#c)" d="{crescent(CX, CY, CX + 6, CY + 24)}"/>', 'anillo')
 
-os.makedirs('/home/claude/brand/marks', exist_ok=True)
+os.makedirs(f'{HERE}/marks', exist_ok=True)
 for name, doc in MARKS.items():
-    open(f'/home/claude/brand/marks/{name}.svg', 'w').write(doc)
+    open(f'{HERE}/marks/{name}.svg', 'w').write(doc)
 print('wrote', ', '.join(MARKS))
 
 # menu bar reductions of each, monochrome, 18 pt
@@ -132,7 +133,7 @@ MB = {
     'terminador': half(9, 9, 6.6, 8, 1),
     'anillo':     crescent(9, 9.4, 8.9, 8.9, 6.6),
 }
-json.dump(MB, open('/home/claude/brand/menubar_paths.json', 'w'), indent=2)
+json.dump(MB, open(f'{HERE}/menubar_paths.json', 'w'), indent=2)
 print('menu bar paths ready')
 
 # ---- refinement: cut the ring open so it reads as two lights, not a loader ----
@@ -162,5 +163,5 @@ body_eclipse2 = (
     f'<g clip-path="url(#kw)"><path fill="url(#w)" d="{crescent(CX, CY, CX - 28, CY - 106)}"/></g>'
     f'<g clip-path="url(#kc)"><path fill="url(#c)" d="{crescent(CX, CY, CX + 18, CY + 68)}"/></g>')
 MARKS['eclipse2'] = svg(body_eclipse2, 'eclipse, cut')
-open('/home/claude/brand/marks/eclipse2.svg', 'w').write(MARKS['eclipse2'])
+open(f'{HERE}/marks/eclipse2.svg', 'w').write(MARKS['eclipse2'])
 print('wrote eclipse2  warm_dir=%.1f cool_dir=%.1f' % (warm_dir, cool_dir))

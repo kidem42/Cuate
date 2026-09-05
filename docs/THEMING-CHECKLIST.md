@@ -43,7 +43,7 @@ this file too.
 | The image action pills | `AttachmentActionsBar.swift` `pillColors` | Día=three colors by role, Halloween=a solid outline, everything else — the generic accent |
 | The mic button | `EnhancedVoiceButton.swift` ~L150 | the shape from `composerButtonRadius`, dashed from `micDashed` |
 | ANSI in code blocks | `MarkdownBlocksView.swift` ~L337 | the `placeholderCaret` family paints green with the accent |
-| The background pattern | `AppTheme.swift` ThemePatternOverlay | Blueprint=a grid (+PatternFadeMask in WT), Terminal=scanlines |
+| The background pattern | `AppTheme.swift` ThemePatternOverlay | Blueprint=a grid (+PatternFadeMask in WT), Terminal=scanlines, Synthwave=a perspective horizon grid (`ThemePattern.synthwaveHorizon`) |
 | The timestamp format | `MessageRow.swift` `formatTime` | a new format = a new `ThemeTimestamp` case |
 
 ## 5. Palette consumers (what to check with your eyes)

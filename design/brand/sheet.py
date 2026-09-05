@@ -1,7 +1,8 @@
 """Regenerate the Cuate design-system sheet from tokens.json + the mark SVGs."""
-import json, re, io
+import json, re, io, os
+HERE = os.path.dirname(os.path.abspath(__file__))
 
-T = json.load(open('/home/claude/brand/tokens.json'))
+T = json.load(open(f'{HERE}/tokens.json'))
 R, SEM = T['ramps'], T['semantic']
 STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]
 ANCHOR = {'ambar': 500, 'cielo': 500}
@@ -73,14 +74,14 @@ def token_table(mode):
 
 marks_html = ''
 for slug, title, status, note in VARIANTS:
-    svg = uniq(inner(f'/home/claude/brand/marks/{slug}.svg'), slug)
+    svg = uniq(inner(f'{HERE}/marks/{slug}.svg'), slug)
     cls = 'ok' if status == 'Accepted' else ('alt' if status == 'Reserve' else 'no')
     marks_html += (f'<figure class="mk"><div class="mkart">{svg}</div>'
                    f'<figcaption><div class="mkh"><b>{title}</b>'
                    f'<span class="badge {cls}">{status}</span></div>'
                    f'<p>{note}</p></figcaption></figure>')
 
-hero = uniq(inner('/home/claude/brand/cuate-icon.svg'), 'hero')
+hero = uniq(inner(f'{HERE}/cuate-icon.svg'), 'hero')
 
 HTML = f'''<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -230,5 +231,5 @@ drift out of sync with the contrast checks.</p>
 
 </div></body></html>'''
 
-io.open('/home/claude/brand/design-system.html', 'w', encoding='utf-8').write(HTML)
+io.open(f'{HERE}/design-system.html', 'w', encoding='utf-8').write(HTML)
 print('design-system.html written')

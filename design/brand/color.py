@@ -1,5 +1,6 @@
 """Cuate colour system — OKLCH ramps built from the three brand anchors."""
-import math, json
+import math, json, os
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---------- sRGB <-> OKLab ----------
 def _srgb_to_lin(c):
@@ -195,7 +196,7 @@ json.dump({'ramps': {'ambar': AMBAR, 'cielo': CIELO, 'piedra': PIEDRA,
                      'verde': VERDE, 'rojo': ROJO},
            'anchors': {'obsidiana': OBSIDIANA, 'cal': CAL},
            'semantic': {'dark': DARK, 'light': LIGHT}},
-          open('/home/claude/brand/tokens.json', 'w'), indent=2)
+          open(f'{HERE}/tokens.json', 'w'), indent=2)
 print('\nwrote tokens.json')
 
 # ---------- exporters ----------
