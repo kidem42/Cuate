@@ -273,7 +273,11 @@ final class DictationService: NSObject, ObservableObject {
         guard phase == .recording, !micReady,
               captureRetries < Self.maxCaptureRetries else { return false }
         captureRetries += 1
-        let delay = 0.3 + 0.15 * Double(captureRetries) // 0.45 s … 1.5 s
+        // Backoff, not a hammer: a Bluetooth hands-free link takes real time
+        // to come up, and re-arming every ~0.5 s only re-triggered the
+        // profile switch (field log 2026-09-04) — 0.5 s, 0.75 s, 1.1 s,
+        // 1.7 s, 2.5 s, then 3 s steps; ~15 s in total before giving up.
+        let delay = min(3, 0.5 * pow(1.5, Double(captureRetries - 1)))
         Diagnostics.log("dictation", "capture.retry #\(captureRetries) after \(reason)")
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.phase == .recording, !self.micReady,
@@ -308,6 +312,14 @@ final class DictationService: NSObject, ObservableObject {
             teardownStreaming()
             streamingFailed = true
         }
+        // A fragment the VAD never flagged as speech (chunked mode), or one
+        // whose raw peak never left digital silence, is the engine's own
+        // spin-up — transcribing it only bills a request that comes back
+        // empty (`stt.empty after retry` in the log).
+        if (chunkedMode && !speechDetected) || capture.sessionPeakDB() <= -80 {
+            discardSalvage = true
+            Diagnostics.log("dictation", "capture.recover: fragment had no speech — discarded")
+        }
 
         // Non-chunked sessions degrade to phrase-by-phrase from here on:
         // fragments across an engine death cannot be joined into one file,
@@ -330,7 +342,7 @@ final class DictationService: NSObject, ObservableObject {
         // capture queue: its completion runs after the finished file's
         // handle is released, so the fragment is finalized and safe to
         // upload. The subsequent beginRecording is queued behind it.
-        capture.endRecording(keepWarmSeconds: 0) { [weak self] in
+        capture.endRecording(keepWarmSeconds: 0, releaseHold: false) { [weak self] in
             if discardSalvage {
                 try? FileManager.default.removeItem(at: finishedURL)
             } else {
@@ -697,8 +709,11 @@ final class DictationService: NSObject, ObservableObject {
         }
     }
 
-    /// Fast, cheap LLM pass: cleans fillers/punctuation, or translates.
-    /// Uses mistral-small when a Mistral key exists, otherwise the active chat model.
+    /// Fast, cheap LLM pass: cleans fillers/punctuation, or translates. The
+    /// prompt shape and the reply shaping live in `DictationTextShaping`
+    /// (pure, contract-tested): instruction in the system slot, the bare
+    /// transcript as the user turn, and the reply stripped of the lead-ins,
+    /// quotes and Markdown small models add before it is typed anywhere.
     private func postProcess(_ transcript: String) async throws -> String {
         let settings = AppSettings.shared
         await APIKeyStore.warmIfNeeded() // key lookups below are cache-only
@@ -711,50 +726,37 @@ final class DictationService: NSObject, ObservableObject {
         let model = choice.model
         let apiKey = (try? settings.resolvedAPIKey(for: choice.provider)) ?? ""
 
-        let prompt: String
+        let pass: DictationTextShaping.Pass
         switch mode {
-        case .transcribe:
-            prompt = """
-Clean up this dictated text: remove filler words (um, uh, эм, эээ, ну, короче as filler), false starts and accidental repetitions; fix spelling and punctuation. Keep the original language, meaning and tone. Do not add anything. Never use the "—" character. Output ONLY the cleaned text, nothing else.
-
-\(transcript)
-"""
-        case .translate:
-            prompt = """
-Translate this dictated text into \(settings.dictationTargetLanguage). First mentally clean it up (drop filler words, false starts, accidental repetitions), then produce a natural, well-punctuated translation. Never use the "—" character. Output ONLY the translated text, nothing else.
-
-\(transcript)
-"""
+        case .transcribe: pass = .cleanup
+        case .translate: pass = .translate(into: settings.dictationTargetLanguage)
         }
 
         var result = ""
         let started = Date()
         let stream = provider.streamChat(
-            messages: [LLMMessage(role: .user, text: prompt)],
+            messages: [LLMMessage(role: .user, text: DictationTextShaping.userMessage(transcript))],
             model: model,
-            systemPrompt: nil,
+            systemPrompt: DictationTextShaping.systemPrompt(for: pass),
             options: ChatRequestOptions(maxTokens: 4096, reasoning: .fast, preferNoReasoning: true),
             apiKey: apiKey
         )
-        for try await event in stream {
-            if case .text(let chunk) = event { result += chunk }
+        do {
+            for try await event in stream {
+                if case .text(let chunk) = event { result += chunk }
+            }
+        } catch {
+            // The callers degrade to the raw transcript on failure; without
+            // this line a blocked provider (a zeroed rate limit, 2026-09-04)
+            // is indistinguishable from a model that ignored the instruction.
+            Diagnostics.log("dictation", "cleanup.failed \(choice.provider.rawValue)/\(model) \(String(error.localizedDescription.prefix(120)))")
+            throw error
         }
         // Cleanup runs once per phrase and strictly in order, so a slow model
         // here is what keeps the pill spinning after the stop — the timing is
         // the only way to tell that apart from a slow transcription.
         Diagnostics.log("dictation", "cleanup \(choice.provider.rawValue)/\(model) ms=\(Int(Date().timeIntervalSince(started) * 1000))")
-        let trimmed = Self.stripEmDashes(from: result.trimmingCharacters(in: .whitespacesAndNewlines))
-        return trimmed.isEmpty ? transcript : trimmed
-    }
-
-    /// Models sprinkle em dashes no matter what the prompt says, and the
-    /// app-wide rule (`AppSettings.mandatoryPromptRules`) bans them — enforce
-    /// it mechanically: "app—text" / "app — text" both become "app - text".
-    private static func stripEmDashes(from text: String) -> String {
-        guard text.contains("—") else { return text }
-        return text
-            .replacingOccurrences(of: "[ \\t]*—[ \\t]*", with: " - ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
+        return DictationTextShaping.shape(result, fallback: transcript)
     }
 
     // MARK: - Widget (Liquid Glass pill under the camera notch)
@@ -1070,6 +1072,13 @@ nonisolated final class MicCapture {
     /// Queue-confined: pending warm-window expiry.
     private var cooldown: DispatchWorkItem?
     private var configObserver: NSObjectProtocol?
+    /// Queue-confined: keeps a Bluetooth headset's hands-free link up across
+    /// engine restarts (see `BluetoothInputHold` for the field diagnosis).
+    private let hold = BluetoothInputHold()
+    /// Queue-confined: the mic choice of the last start, so an idle recovery
+    /// re-arms on the SAME device instead of silently reverting to the
+    /// system default.
+    private var lastDeviceUID = ""
 
     init() {
         observeConfigurationChanges()
@@ -1112,7 +1121,9 @@ nonisolated final class MicCapture {
             guard running, !engine.isRunning else { return }
             if recording {
                 Diagnostics.log("dictation", "capture.engine.died mid-recording")
-                shutdownEngine()
+                // The hold stays up: the service restarts capture at once,
+                // and a restart on a link that is still up is what settles.
+                shutdownEngine(releaseHold: false)
                 DispatchQueue.main.async { self.onEngineDied?() }
                 return
             }
@@ -1124,7 +1135,7 @@ nonisolated final class MicCapture {
                 state.levelFloor = nil
                 state.lock.unlock()
                 engine.inputNode.removeTap(onBus: 0)
-                try ensureRunning(deviceUID: "")
+                try ensureRunning(deviceUID: lastDeviceUID)
                 Diagnostics.log("dictation", "capture.engine.recovered")
             } catch {
                 Diagnostics.log("dictation", "capture.engine.died \(String(error.localizedDescription.prefix(120)))")
@@ -1216,7 +1227,11 @@ nonisolated final class MicCapture {
     /// discards samples (the orange mic indicator stays on) so the next start
     /// is instant; a cooldown then releases the mic. `completion` (main
     /// thread) runs after the recording file is finalized.
-    func endRecording(keepWarmSeconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
+    /// `releaseHold: false` keeps a Bluetooth hands-free link up through an
+    /// engine-death recovery — the restart that follows must land on a link
+    /// that is still up (see `BluetoothInputHold`).
+    func endRecording(keepWarmSeconds: TimeInterval, releaseHold: Bool = true,
+                      completion: (@MainActor () -> Void)? = nil) {
         queue.async { [self] in
             state.lock.lock()
             state.file = nil
@@ -1225,7 +1240,7 @@ nonisolated final class MicCapture {
             if keepWarmSeconds > 0 {
                 scheduleCooldown(after: keepWarmSeconds)
             } else {
-                shutdownEngine()
+                shutdownEngine(releaseHold: releaseHold)
             }
             if let completion {
                 DispatchQueue.main.async { completion() }
@@ -1261,6 +1276,10 @@ nonisolated final class MicCapture {
         // never reaches this path.
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        lastDeviceUID = deviceUID
+        // Bluetooth input: raise and hold the hands-free link BEFORE the
+        // engine builds its aggregate, so the aggregate is born settled.
+        armBluetoothHold(deviceUID: deviceUID)
         engine = AVAudioEngine()
         observeConfigurationChanges()
 
@@ -1320,6 +1339,62 @@ nonisolated final class MicCapture {
         Diagnostics.log("dictation", "capture.engine.start device=\(deviceUID.isEmpty ? "auto" : "custom") rate=\(Int(format.sampleRate))")
     }
 
+    /// Resolves the input the engine is about to bind (the chosen mic, else
+    /// the system default). For a Bluetooth device the hold is started
+    /// first and given up to 1.5 s to actually hear the mic — the moment
+    /// after which a fresh engine no longer sees a configuration change.
+    /// Anything else releases a stale hold.
+    private func armBluetoothHold(deviceUID: String) {
+        let chosen = deviceUID.isEmpty ? nil : AudioInputDevices.deviceID(forUID: deviceUID)
+        guard let input = chosen ?? AudioInputDevices.defaultInputDeviceID(),
+              AudioInputDevices.isBluetooth(input) else {
+            if hold.deviceID != nil {
+                hold.stop()
+                Diagnostics.log("dictation", "capture.hold.stop input is not bluetooth")
+            }
+            return
+        }
+        if hold.deviceID != input {
+            let started = hold.start(deviceID: input)
+            Diagnostics.log("dictation", "capture.hold.\(started ? "start" : "failed") device=\(AudioInputDevices.uid(input) ?? "?")")
+            guard started else { return }
+        }
+        waitForHandsFreeLink(input: input)
+    }
+
+    /// Waits (1.5 s at most) until the hold hears the mic — the SCO link is
+    /// up and the headset's output has already moved to the hands-free
+    /// format — then a short grace for the tail of the switch. The output
+    /// rate is logged for the record when the system output is the same
+    /// headset (its nominal rate flips at the REQUEST, ~0.9 s early, which
+    /// is why it is not the readiness signal).
+    private func waitForHandsFreeLink(input: AudioDeviceID) {
+        let began = CFAbsoluteTimeGetCurrent()
+        while !hold.linkHeard, CFAbsoluteTimeGetCurrent() - began < 1.5 {
+            usleep(25_000)
+        }
+        let heard = hold.linkHeard
+        if heard { usleep(150_000) }
+        let ms = Int((CFAbsoluteTimeGetCurrent() - began) * 1000)
+        var outNote = ""
+        if let output = AudioInputDevices.defaultOutputDeviceID(),
+           let inUID = AudioInputDevices.uid(input),
+           let outUID = AudioInputDevices.uid(output),
+           let address = Self.bluetoothAddress(inUID),
+           address == Self.bluetoothAddress(outUID) {
+            outNote = " out=\(Int(AudioInputDevices.nominalSampleRate(output) ?? 0))"
+        }
+        Diagnostics.log("dictation", "capture.hold.link \(heard ? "heard" : "timeout") ms=\(ms)\(outNote)")
+    }
+
+    /// "88-C9-E8-3A-AC-D5:input" → "88-C9-E8-3A-AC-D5": a Bluetooth
+    /// headset's input and output devices share the address part. UIDs
+    /// without a colon (built-in, USB) never match anything.
+    private static func bluetoothAddress(_ uid: String) -> String? {
+        guard let colon = uid.lastIndex(of: ":") else { return nil }
+        return String(uid[..<colon])
+    }
+
     private func makeFile(at url: URL) throws -> AVAudioFile {
         let format = engine.inputNode.outputFormat(forBus: 0)
         // AAC's maximum bitrate scales with sample rate × channels. A fixed
@@ -1354,9 +1429,13 @@ nonisolated final class MicCapture {
         queue.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
-    private func shutdownEngine() {
+    private func shutdownEngine(releaseHold: Bool = true) {
         cooldown?.cancel()
         cooldown = nil
+        if releaseHold, hold.deviceID != nil {
+            hold.stop()
+            Diagnostics.log("dictation", "capture.hold.stop")
+        }
         state.lock.lock()
         let wasRunning = state.engineRunning
         state.engineRunning = false
@@ -1548,6 +1627,44 @@ nonisolated enum AudioInputDevices {
         allDeviceIDs().first {
             inputChannelCount($0) > 0 && stringProperty($0, kAudioDevicePropertyDeviceUID) == uid
         }
+    }
+
+    static func defaultInputDeviceID() -> AudioDeviceID? {
+        systemDevice(kAudioHardwarePropertyDefaultInputDevice)
+    }
+
+    static func defaultOutputDeviceID() -> AudioDeviceID? {
+        systemDevice(kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    static func uid(_ id: AudioDeviceID) -> String? {
+        stringProperty(id, kAudioDevicePropertyDeviceUID)
+    }
+
+    /// Classic or LE Bluetooth transport — a headset's hands-free mic.
+    static func isBluetooth(_ id: AudioDeviceID) -> Bool {
+        var addr = address(kAudioDevicePropertyTransportType)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return false }
+        return value == kAudioDeviceTransportTypeBluetooth || value == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    static func nominalSampleRate(_ id: AudioDeviceID) -> Double? {
+        var addr = address(kAudioDevicePropertyNominalSampleRate)
+        var value: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
+        return value
+    }
+
+    private static func systemDevice(_ selector: AudioObjectPropertySelector) -> AudioDeviceID? {
+        var addr = address(selector)
+        var id: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id) == noErr,
+              id != kAudioObjectUnknown else { return nil }
+        return id
     }
 
     private static func address(_ selector: AudioObjectPropertySelector,
