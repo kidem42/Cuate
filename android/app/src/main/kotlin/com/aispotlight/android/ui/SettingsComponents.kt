@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Eclipse settings primitives — the claude.ai/design prototype's structure:
+ * Eclipse settings primitives — the design-workspace prototype's structure:
  * a section is ONE glass card (subtle gradient fill, 1dp border, 20dp
  * corners, soft shadow with an orange cast) whose rows are separated by
  * hairline dividers; the section title sits above in uppercase accent

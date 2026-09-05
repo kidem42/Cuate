@@ -85,7 +85,7 @@ No price is not a disaster: the ledger records the tokens with `costUSD = nil` a
 
 - The API key: the slot appears automatically from `ProviderID.allCases` in the Keys section; check that `validateKey` gives a sensible error for a junk key.
 - Strings: new keys go into `App/Localization.swift` — **all three languages** (en/es/ru), English is the fallback.
-- `.help` tooltips on new controls — a project rule (see `CLAUDE.md`).
+- `.help` tooltips on new controls — a project rule (see `AGENTS.md`).
 - The badge: the letter and color were already set in step 1; no separate assets are needed (`Views/ProviderBadge.swift`).
 
 ## 8. e2e checklist before committing

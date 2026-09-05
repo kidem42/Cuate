@@ -80,7 +80,7 @@ import com.aispotlight.android.settings.AppSettings
 import kotlinx.coroutines.launch
 
 /**
- * Settings — the "Eclipse" design (claude.ai/design "Eclipse settings-menu
+ * Settings — the "Eclipse" design (design-workspace prototype "Eclipse settings-menu
  * Eclipse»): glass card sections with hairline dividers on a radial near-black
  * (or warm cream) background, the app icon's eclipse orange as the single
  * accent. Structure stays the Android-16 pattern: a top-level category list

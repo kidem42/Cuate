@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * "Eclipse" settings design system — the claude.ai/design prototype
+ * "Eclipse" settings design system — the design-workspace prototype
  * ("Eclipse settings-menu redesign") ported 1:1: settings get their own
  * look, independent of the chat theme. Glass card stacks with hairline
  * dividers, uppercase accent section headers, and the app icon's eclipse
