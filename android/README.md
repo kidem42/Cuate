@@ -4,13 +4,38 @@ The Android port of Cuate: the same multi-provider AI chat, but in the shape of
 an ordinary mobile app (on macOS it is a hotkey panel for quick access; on a
 phone it is an assistant chat with the same features).
 
-## Status: 2.2.0 — Cuate + Hermes Agent; functionally a complete port (except system dictation)
+## Status: 2.9.2 — Cuate + Hermes Agent + documents in chat; functionally a complete port (except system dictation)
 
-A ready-to-install APK: `dist/Cuate-2.2.0.apk` (release, minified, signed with
+A ready-to-install APK: `dist/Cuate-2.9.2.apk` (release, minified, signed with
 the key from `release.keystore`; the keystore and `keystore.properties` are kept
 out of git — store them locally, they are required for updates carrying the same
 signature). Release builds go **only** through `scripts/make-apk.sh` (version
 bump, signing, publishing into `dist/`).
+
+Added in 2.9.2 (documents in chat — the same design as desktop 4.17, see
+[`docs/documents-in-chat.md`](../docs/documents-in-chat.md) §12):
+
+- **Documents as attachments** — PDF, Word and text files, up to 3 per message;
+  OpenAI reads them natively through its Files API, every other provider gets
+  the text extracted on the phone (PdfBox for the PDF text layer, the docx XML
+  for Word; no OCR, so a scanned page yields nothing). Later turns open a
+  document on demand through the `read_document` tool; byte-identical files are
+  recognized by content and never uploaded twice; "Documents of this chat" in
+  the chat menu lists them with pages, size, days left and "attach again".
+  Room schema 5 (migration 4→5), a JUnit contract test, en/es/ru strings.
+- **Mid-turn follow-ups as additions** (with desktop 4.17) — a message typed
+  while an agent turn runs still steers into it, but on the wire it is framed
+  as an addition to the cycle in progress (`hermes/HermesSteer.kt`; the frame
+  wording is shared with the desktop through `shared/fixtures/steer-frame.json`
+  and a JUnit contract test): Hermes alone told the model to "adjust course",
+  and it dropped the original task. The mirror strips the frame from the tool
+  row it comes back in, and a steer the agent never read (`pending_steer`) is
+  re-sent with the frame removed.
+
+Versions 2.3–2.9.1 followed the desktop Hermes cycles (4.3–4.13): the Yule and
+Aurora themes with the holiday auto-switch (2.6.0), then the gateway patches
+and session fixes shipped together with desktop 4.11–4.13 (2.8.0–2.9.1); the
+commit history carries the per-release notes.
 
 Added in 2.2 (Hermes Agent — a port of desktop 4.0–4.2):
 

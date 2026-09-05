@@ -15,6 +15,7 @@ import com.aispotlight.android.data.MessageEntity
 import com.aispotlight.android.data.toDomain
 import com.aispotlight.android.data.toEntity
 import com.aispotlight.android.hermes.HermesChatService
+import com.aispotlight.android.hermes.HermesSteer
 import com.aispotlight.android.hermes.HermesTransport
 import com.aispotlight.android.providers.TranscriptionService
 import com.aispotlight.android.settings.AppSettings
@@ -225,6 +226,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * the payloads leak until the retention sweep ages them out.
      */
     private suspend fun purgeMediaFiles(conversationId: String) {
+        // Provider-side document copies go with the conversation (best-effort;
+        // the server expiry set at upload is the backstop).
+        RemoteFileJanitor.enqueue(com.aispotlight.android.core.ProviderID.OPENAI, dao.remoteFileIds(conversationId))
         for (path in dao.attachmentPaths(conversationId)) {
             ImageStore.delete(getApplication(), path)
         }
@@ -395,9 +399,130 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     .getString(com.aispotlight.android.R.string.attach_failed)
                 return@launch
             }
+            // Ordinary chats take documents only, through the pre-flight;
+            // agent chats keep taking any file as a path for the courier.
+            if (!_isHermesActive.value) {
+                val prepared = prepareDocument(attachment) ?: return@launch
+                _pendingAttachments.value = _pendingAttachments.value + prepared
+                return@launch
+            }
             _pendingAttachments.value = _pendingAttachments.value + attachment
         }
     }
+
+    /**
+     * Pre-flight for a document (type, size, count, encryption), the PDF page
+     * count, the content hash and the duplicate lookup: a byte-identical file
+     * already in this chat (any name, file still present) lends its cached
+     * text and its provider-side copy, so nothing uploads or extracts twice.
+     * A refusal deletes the imported file and shows the reason; returns null.
+     */
+    private fun prepareDocument(imported: ChatAttachment): ChatAttachment? {
+        val app = getApplication<Application>()
+        val file = ImageStore.file(app, imported)
+        val extension = imported.filename.substringAfterLast('.', "")
+        val mime = com.aispotlight.android.core.DocumentPreflight.documentMime(imported.filename, imported.mimeType)
+        var pageCount: Int? = null
+        var locked = false
+        if (mime != null && com.aispotlight.android.core.DocumentPreflight.isPDF(mime)) {
+            DocumentTextService.pdfInfo(file)?.let { info ->
+                pageCount = info.pageCount
+                locked = info.isLocked
+            }
+        }
+        val pendingDocuments = _pendingAttachments.value.filter { it.isDocument }
+        val pendingBytes = pendingDocuments.sumOf { ImageStore.file(app, it).length() }
+        val verdict = com.aispotlight.android.core.DocumentPreflight.check(
+            extension = if (mime == null) extension else extension.ifEmpty { "pdf" },
+            bytes = file.length(),
+            isEncrypted = locked,
+            pendingDocumentCount = pendingDocuments.size,
+            pendingDocumentBytes = pendingBytes,
+        )
+        val size = com.aispotlight.android.core.DocumentPreflight::formattedSize
+        val note: String? = when (verdict) {
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.Accepted -> if (mime == null) app.getString(R.string.attach_doc_unsupported, imported.filename) else null
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.TooManyDocuments -> app.getString(R.string.attach_doc_limit, verdict.limit)
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.FileTooLarge -> app.getString(R.string.attach_doc_too_large, imported.filename, size(verdict.limitBytes))
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.MessageTooLarge -> app.getString(R.string.attach_doc_message_too_large, size(verdict.limitBytes))
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.UnsupportedType -> app.getString(R.string.attach_doc_unsupported, imported.filename)
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.EmptyFile -> app.getString(R.string.attach_doc_empty, imported.filename)
+            is com.aispotlight.android.core.DocumentPreflight.Verdict.Encrypted -> app.getString(R.string.attach_doc_encrypted, imported.filename)
+        }
+        if (note != null || mime == null) {
+            ImageStore.delete(app, imported.filePath)
+            _errorText.value = note ?: app.getString(R.string.attach_doc_unsupported, imported.filename)
+            return null
+        }
+        val hash = DocumentTextService.sha256Hex(file)
+        var attachment = imported.copy(mimeType = mime, pageCount = pageCount, contentHash = hash)
+        val twin = hash?.let { documentDuplicate(it) }
+        if (twin != null) {
+            attachment = attachment.copy(
+                pageCount = attachment.pageCount ?: twin.pageCount,
+                ocrText = twin.ocrText,
+                remoteFileId = if (twin.hasLiveRemoteFile) twin.remoteFileId else null,
+                remoteProvider = if (twin.hasLiveRemoteFile) twin.remoteProvider else null,
+                remoteExpiresAt = if (twin.hasLiveRemoteFile) twin.remoteExpiresAt else null,
+            )
+            com.aispotlight.android.core.Diagnostics.log(
+                "files", "dedup ${imported.filename} = ${twin.filename} remote=${if (twin.hasLiveRemoteFile) twin.remoteFileId else "expired"} text=${twin.ocrText?.length ?: 0}"
+            )
+        }
+        return attachment
+    }
+
+    /** The same bytes already in this chat (loaded window), file still present, newest first. */
+    private fun documentDuplicate(hash: String): ChatAttachment? {
+        val app = getApplication<Application>()
+        for (message in _messages.value.asReversed()) {
+            if (!message.isUser) continue
+            for (attachment in message.attachments) {
+                if (attachment.isDocument && attachment.contentHash == hash &&
+                    ImageStore.file(app, attachment).exists()
+                ) return attachment
+            }
+        }
+        return null
+    }
+
+    /**
+     * "Attach again" from the documents dialog: the document joins the next
+     * message as a fresh row with its own local copy (rows never share files —
+     * the retention sweep deletes per file) that reuses the provider-side id
+     * and the cached text, so nothing is uploaded or extracted twice.
+     */
+    fun reattachDocument(source: ChatAttachment) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            if (_pendingAttachments.value.any { it.filename.equals(source.filename, ignoreCase = true) }) return@launch
+            if (_pendingAttachments.value.count { it.isDocument } >= com.aispotlight.android.core.DocumentPreflight.MAX_DOCUMENTS_PER_MESSAGE) {
+                _errorText.value = app.getString(R.string.attach_doc_limit, com.aispotlight.android.core.DocumentPreflight.MAX_DOCUMENTS_PER_MESSAGE)
+                return@launch
+            }
+            val file = ImageStore.file(app, source)
+            if (!file.exists()) return@launch
+            val copy = ImageStore.importBytes(app, file.readBytes(), source.mimeType, source.filename).copy(
+                pageCount = source.pageCount,
+                ocrText = source.ocrText,
+                contentHash = source.contentHash ?: DocumentTextService.sha256Hex(file),
+                remoteFileId = if (source.hasLiveRemoteFile) source.remoteFileId else null,
+                remoteProvider = if (source.hasLiveRemoteFile) source.remoteProvider else null,
+                remoteExpiresAt = if (source.hasLiveRemoteFile) source.remoteExpiresAt else null,
+            )
+            _pendingAttachments.value = _pendingAttachments.value + copy
+        }
+    }
+
+    // Documents the chat still holds (the folder entry of ordinary chats).
+    private val _chatDocuments = MutableStateFlow<List<DocumentToolService.LiveDocument>?>(null)
+    val chatDocuments: StateFlow<List<DocumentToolService.LiveDocument>?> = _chatDocuments
+
+    fun loadChatDocuments() {
+        _chatDocuments.value = DocumentToolService.liveDocuments(getApplication(), _messages.value)
+    }
+
+    fun dismissChatDocuments() { _chatDocuments.value = null }
 
     /** Clears the error banner (called when the user dismisses it). */
     fun consumeError() {
@@ -940,6 +1065,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     history = requestHistory,
                     summary = summary,
                     presetSystemPrompt = presetPrompt,
+                    onAttachmentRemote = { messageId, attachmentId, fileId, provider, expiresAt ->
+                        // Persist the provider-side copy onto its attachment
+                        // (row + loaded window) so later turns never re-upload.
+                        dao.setAttachmentRemote(attachmentId, fileId, provider, expiresAt)
+                        if (isActive()) {
+                            _messages.value = _messages.value.map { m ->
+                                if (m.id != messageId) m
+                                else m.copy(attachments = m.attachments.map { a ->
+                                    if (a.id == attachmentId) a.copy(remoteFileId = fileId, remoteProvider = provider, remoteExpiresAt = expiresAt) else a
+                                })
+                            }
+                        }
+                    },
                     onAttachmentOCR = { messageId, attachmentId, ocrText ->
                         // Persist the lazily computed OCR extraction onto its
                         // attachment (row + loaded window) so it is never re-paid.
@@ -981,6 +1119,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 .joinToString("\n\n").takeLast(6000)
                         }
                         is ChatService.ChatEvent.BudgetWarning -> {
+                            // Persisted system line (not sent to the LLM) — the
+                            // soft monthly budget crossed a threshold.
+                            val warning = ChatMessage(
+                                text = event.text, isUser = false,
+                                messageType = ChatMessage.Type.SYSTEM,
+                            )
+                            if (isActive()) _messages.value = _messages.value + warning
+                            totalMessageCount += 1
+                            dao.upsertMessage(warning.toEntity(conversationId))
+                        }
+                        is ChatService.ChatEvent.Note -> {
                             // Persisted system line (not sent to the LLM) — the
                             // soft monthly budget crossed a threshold.
                             val warning = ChatMessage(
@@ -1604,11 +1753,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * sent must never be invisible). Steer-first: the text rides into the
      * RUNNING turn via `POST /v1/runs/{id}/steer` (upstream Hermes
      * v2026.8.13+), or the patched `/api/sessions/{id}/steer` on older
-     * gateways. When neither can steer (no route, 409 race, transport
-     * error) the TEXT is held in the persisted follow-up queue
-     * ([AppSettings.hermesPendingFollowUps]) and goes out as an ordinary
-     * turn the moment the stream ends — persisted, because the old
-     * in-memory hold died with the process and took the message with it.
+     * gateways. On the wire it is framed as an ADDITION to the task in
+     * progress ([HermesSteer.framed]): Hermes alone tells the model to
+     * "adjust course", and it dropped the original task for the follow-up
+     * (live 2026-09-04 on the desktop). When neither route can steer (no
+     * route, 409 race, transport error) the TEXT is held in the persisted
+     * follow-up queue ([AppSettings.hermesPendingFollowUps]) and goes out
+     * as an ordinary turn the moment the stream ends — persisted, because
+     * the old in-memory hold died with the process and took the message
+     * with it.
      */
     private fun hermesSteerOrQueue(
         userMessage: ChatMessage, conversationId: String, sessionId: String
@@ -1621,6 +1774,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             dao.upsertMessage(userMessage.toEntity(conversationId))
             dao.touch(conversationId, System.currentTimeMillis())
             val runId = hermesRunIds[conversationId]
+            val wire = HermesSteer.framed(userMessage.text)
             val queued = try {
                 withContext(Dispatchers.IO) {
                     val transport = HermesChatService.transport(settings)
@@ -1631,12 +1785,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // elsewhere, where no run id ever reached us.
                     if (runId != null) {
                         try {
-                            transport.steerRun(runId, userMessage.text)
+                            transport.steerRun(runId, wire)
                         } catch (_: Exception) {
-                            transport.steer(sessionId, userMessage.text)
+                            transport.steer(sessionId, wire)
                         }
                     } else {
-                        transport.steer(sessionId, userMessage.text)
+                        transport.steer(sessionId, wire)
                     }
                 }
             } catch (e: Exception) {
@@ -1690,17 +1844,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             ) return@launch
             when (activity) {
                 "live" -> {
+                    // Into a running turn: an addition to it, framed as such.
+                    val wire = HermesSteer.framed(joined)
                     val queued = try {
                         withContext(Dispatchers.IO) {
                             val transport = HermesChatService.transport(settings)
                             if (runId != null) {
                                 try {
-                                    transport.steerRun(runId, joined)
+                                    transport.steerRun(runId, wire)
                                 } catch (_: Exception) {
-                                    transport.steer(sessionId, joined)
+                                    transport.steer(sessionId, wire)
                                 }
                             } else {
-                                transport.steer(sessionId, joined)
+                                transport.steer(sessionId, wire)
                             }
                         }
                     } catch (e: Exception) {
@@ -2043,12 +2199,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             // Steer accepted after the final response — the
                             // model never saw it. Its bubble is already in
                             // the chat (posted at steer time), so only the
-                            // TEXT joins the queue; the stream-end hook sends
-                            // it as the next turn.
-                            settings.setHermesPendingFollowUps(
-                                conversationId,
-                                settings.hermesPendingFollowUpTexts(conversationId) + event.text,
-                            )
+                            // TEXT joins the queue — the user's words, the
+                            // addendum frame stripped (the queue re-frames
+                            // when it steers, sends plain when it posts a
+                            // turn); the stream-end hook delivers it.
+                            val words = HermesSteer.unframed(event.text)
+                            if (words.isNotEmpty()) {
+                                settings.setHermesPendingFollowUps(
+                                    conversationId,
+                                    settings.hermesPendingFollowUpTexts(conversationId) + words,
+                                )
+                            }
                         }
                     }
                 }

@@ -103,6 +103,8 @@ data class ModelInfo(
     val supportsVision: Boolean,
     val supportsTools: Boolean,
     val supportsReasoning: Boolean,
+    /** Native file input (`input_modalities` contains "file"): a PDF can go to the model as is. */
+    val supportsFiles: Boolean = false,
     val supportedParameters: List<String> = emptyList(),
     /**
      * USD per ONE token (OpenRouter reports prices in that unit), captured
@@ -111,7 +113,16 @@ data class ModelInfo(
      */
     val promptPricePerToken: Double? = null,
     val completionPricePerToken: Double? = null,
-)
+    /** Catalog details for the in-app browser (OpenRouter); absent in older caches. */
+    val name: String? = null,
+    val summary: String? = null,
+    val contextLength: Int? = null,
+    val maxCompletionTokens: Int? = null,
+    val createdAt: Long? = null,
+) {
+    /** Both token prices zero — the ":free" tier. */
+    val isFree: Boolean get() = (promptPricePerToken ?: 0.0) == 0.0 && (completionPricePerToken ?: 0.0) == 0.0
+}
 
 // MARK: - Messages
 
@@ -227,12 +238,32 @@ internal fun bakeExifOrientation(bitmap: android.graphics.Bitmap, orientation: I
     return android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }
 
+/**
+ * A document riding on the attach turn as a provider-side file reference
+ * (OpenAI `input_file`). Text fallbacks are folded into the message text by
+ * ChatService, so providers only ever see the referenced form.
+ */
+data class LLMDocument(
+    val filename: String,
+    val mimeType: String,
+    /** OpenAI Files API id (uploaded once). */
+    val remoteFileId: String? = null,
+    /** The bytes themselves (OpenRouter has no storage: base64 in the request, attach turn only). */
+    val inlineBase64: String? = null,
+)
+
 data class LLMMessage(
     val role: Role,
     val text: String,
     val images: List<LLMImage> = emptyList(),
+    val documents: List<LLMDocument> = emptyList(),
     /** Tool calls the assistant requested (assistant role only). */
     val toolCalls: List<ToolCall> = emptyList(),
+    /**
+     * The reasoning the model produced before those tool calls (DeepSeek);
+     * echoed back verbatim on the follow-up request of the same turn.
+     */
+    val reasoningContent: String? = null,
     /** For TOOL role: which call this result answers. */
     val toolCallID: String? = null,
     /** For TOOL role: the tool's name (Gemini requires it in the response). */
@@ -275,6 +306,10 @@ data class TokenUsage(
     val cacheReadTokens: Int = 0,
     val cacheWriteTokens: Int = 0,
     val reasoningTokens: Int = 0,
+    /** The exact charge the provider reported (OpenRouter `usage.cost`, tools included). */
+    val exactCostUSD: Double? = null,
+    /** Server-side web searches the provider ran (OpenRouter `server_tool_use.web_search_requests`). */
+    val serverSearchRequests: Int = 0,
 ) {
     val isEmpty: Boolean
         get() = inputTokens == 0 && outputTokens == 0 && cacheReadTokens == 0 &&
@@ -287,14 +322,31 @@ data class TokenUsage(
         cacheReadTokens = cacheReadTokens + other.cacheReadTokens,
         cacheWriteTokens = cacheWriteTokens + other.cacheWriteTokens,
         reasoningTokens = reasoningTokens + other.reasoningTokens,
+        exactCostUSD = if (exactCostUSD == null && other.exactCostUSD == null) null
+            else (exactCostUSD ?: 0.0) + (other.exactCostUSD ?: 0.0),
+        serverSearchRequests = serverSearchRequests + other.serverSearchRequests,
     )
 }
+
+/** A source a server-side web tool cited (OpenRouter `url_citation`). */
+data class WebCitation(val url: String, val title: String, val content: String)
+
+/** A provider-executed tool (OpenRouter's `openrouter:*` types). */
+data class ServerTool(val type: String, val parameters: JSONObject = JSONObject())
 
 /** Events produced while streaming a single model turn. */
 sealed class LLMStreamEvent {
     data class Text(val chunk: String) : LLMStreamEvent()
+    /**
+     * Reasoning text streamed alongside the answer (DeepSeek's
+     * `reasoning_content`). Never shown; kept so a tool-calling turn can hand
+     * it back — DeepSeek's thinking mode rejects the follow-up without it.
+     */
+    data class Reasoning(val chunk: String) : LLMStreamEvent()
     /** Emitted once at the end of the turn when the model requested tools. */
     data class ToolCalls(val calls: List<ToolCall>) : LLMStreamEvent()
+    /** Citations a server-side web tool produced — grounding for the turn's digest. */
+    data class Citations(val citations: List<WebCitation>) : LLMStreamEvent()
     /**
      * Emitted once per model call, right before the stream finishes, when the
      * provider reported token usage. Absent on interrupted streams — callers
@@ -319,6 +371,14 @@ data class ChatRequestOptions(
     val tools: List<ToolSpec> = emptyList(),
     /** Whether the selected model honors a reasoning-effort control (resolved by the caller). */
     val modelSupportsReasoning: Boolean = false,
+    /** OpenRouter server tools (`openrouter:web_search`, …), declared next to our function tools. */
+    val serverTools: List<ServerTool> = emptyList(),
+    /** OpenRouter: the model lists "file" input — PDFs use the native engine, else cloudflare-ai. */
+    val modelSupportsNativeDocuments: Boolean = false,
+    /** OpenRouter: route only to providers that don't collect data (`provider.data_collection = "deny"`). */
+    val denyDataCollection: Boolean = false,
+    /** OpenRouter: only zero-data-retention endpoints (`provider.zdr = true`), independent of the account. */
+    val zdrOnly: Boolean = false,
 )
 
 // MARK: - Provider interface
@@ -361,6 +421,9 @@ object ModelCapabilities {
                     m.contains("sonnet-4-6") || m.contains("sonnet-5") ||
                     m.contains("fable") || m.contains("mythos")
             ProviderID.GEMINI -> m.contains("2.5") || m.contains("gemini-3")
+            // V4: thinking on by default at effort "high"; a top-level
+            // `reasoning_effort` (low / high / max) tunes it.
+            ProviderID.DEEPSEEK -> m.contains("deepseek-v4")
             else -> false
         }
     }

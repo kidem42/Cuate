@@ -10,7 +10,24 @@ data class ChatAttachment(
     /** Path relative to the app's files directory. */
     val filePath: String,
     val ocrText: String? = null,
-)
+    /** PDF page count, read at attach time (chips, tool inventory). */
+    val pageCount: Int? = null,
+    /** Hex SHA-256 of the bytes — a re-attached identical file reuses the copy. */
+    val contentHash: String? = null,
+    /** Provider-side copy (OpenAI Files): id, holder, server-side expiry. */
+    val remoteFileId: String? = null,
+    val remoteProvider: String? = null,
+    val remoteExpiresAt: Long? = null,
+) {
+    /** A document (PDF, Word, text, …) as opposed to an image. */
+    val isDocument: Boolean
+        get() = com.aispotlight.android.core.DocumentPreflight.isDocumentMime(mimeType)
+
+    /** Uploaded and not past the server-side expiry. */
+    val hasLiveRemoteFile: Boolean
+        get() = !remoteFileId.isNullOrEmpty() &&
+            (remoteExpiresAt == null || remoteExpiresAt > System.currentTimeMillis())
+}
 
 /** UI-facing value type for a chat message (the analog of `ChatMessage` in Swift). */
 data class ChatMessage(
@@ -78,6 +95,11 @@ fun AttachmentEntity.toDomain() = ChatAttachment(
     mimeType = mimeType,
     filePath = filePath,
     ocrText = ocrText,
+    pageCount = pageCount,
+    contentHash = contentHash,
+    remoteFileId = remoteFileId,
+    remoteProvider = remoteProvider,
+    remoteExpiresAt = remoteExpiresAt,
 )
 
 fun ChatAttachment.toEntity(messageId: String) = AttachmentEntity(
@@ -87,6 +109,11 @@ fun ChatAttachment.toEntity(messageId: String) = AttachmentEntity(
     mimeType = mimeType,
     filePath = filePath,
     ocrText = ocrText,
+    pageCount = pageCount,
+    contentHash = contentHash,
+    remoteFileId = remoteFileId,
+    remoteProvider = remoteProvider,
+    remoteExpiresAt = remoteExpiresAt,
 )
 
 fun ChatMessage.toEntity(conversationId: String) = MessageEntity(

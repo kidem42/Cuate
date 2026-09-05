@@ -221,12 +221,25 @@ struct ModelInfo: Codable, Equatable {
     var supportsVision: Bool
     var supportsTools: Bool
     var supportsReasoning: Bool
+    /// Native file input (`input_modalities` contains "file"): a PDF can go
+    /// to the model as is. Optional so caches written before 4.17 decode.
+    var supportsFiles: Bool?
     var supportedParameters: [String] = []
     /// USD per ONE token (OpenRouter reports prices in that unit), captured
     /// from the catalog so aggregator models get exact per-model pricing.
     /// nil for catalogs that don't carry prices (or older cached entries).
     var promptPricePerToken: Double?
     var completionPricePerToken: Double?
+    /// Catalog details for the in-app browser (OpenRouter). Optional so
+    /// caches written before 5.0 still decode.
+    var name: String?
+    var summary: String?
+    var contextLength: Int?
+    var maxCompletionTokens: Int?
+    var createdAt: Double?
+
+    /// Both token prices zero — the ":free" tier.
+    var isFree: Bool { (promptPricePerToken ?? 0) == 0 && (completionPricePerToken ?? 0) == 0 }
 }
 
 /// Providers that can transcribe audio.
@@ -367,6 +380,19 @@ extension LLMImage {
     }
 }
 
+/// A document riding on the attach turn as a provider-side file reference
+/// (OpenAI `input_file`). Text fallbacks are folded into the message text by
+/// ChatService, so providers only ever see the referenced form.
+struct LLMDocument {
+    let filename: String
+    let mimeType: String
+    /// OpenAI Files API id (uploaded once).
+    var remoteFileID: String? = nil
+    /// The bytes themselves (OpenRouter has no file storage — the PDF rides
+    /// base64 in the request, on the attach turn only).
+    var inlineBase64: String? = nil
+}
+
 struct LLMMessage {
     enum Role: String {
         case user
@@ -377,8 +403,12 @@ struct LLMMessage {
     let role: Role
     let text: String
     var images: [LLMImage] = []
+    var documents: [LLMDocument] = []
     /// Tool calls the assistant requested (assistant role only).
     var toolCalls: [ToolCall] = []
+    /// The reasoning the model produced before those tool calls (DeepSeek);
+    /// echoed back verbatim on the follow-up request of the same turn.
+    var reasoningContent: String?
     /// For `.tool` role: which call this result answers.
     var toolCallID: String?
     /// For `.tool` role: the tool's name (Gemini requires it in the response).
@@ -386,6 +416,12 @@ struct LLMMessage {
 }
 
 // MARK: - Tools
+
+/// A provider-executed tool (OpenRouter's `openrouter:*` types).
+struct ServerTool {
+    let type: String
+    let parameters: [String: Any]
+}
 
 /// A function tool the model may call (JSON-schema parameters).
 struct ToolSpec {
@@ -422,6 +458,12 @@ struct TokenUsage {
     var cacheReadTokens = 0
     var cacheWriteTokens = 0
     var reasoningTokens = 0
+    /// The exact charge the provider reported for the call (OpenRouter's
+    /// `usage.cost`, server tools included); nil where only tokens come back.
+    var exactCostUSD: Double?
+    /// Server-side web searches the provider ran for this call (OpenRouter's
+    /// `server_tool_use.web_search_requests`).
+    var serverSearchRequests = 0
 
     var isEmpty: Bool {
         inputTokens == 0 && outputTokens == 0 && cacheReadTokens == 0
@@ -436,16 +478,34 @@ struct TokenUsage {
             outputTokens: outputTokens + other.outputTokens,
             cacheReadTokens: cacheReadTokens + other.cacheReadTokens,
             cacheWriteTokens: cacheWriteTokens + other.cacheWriteTokens,
-            reasoningTokens: reasoningTokens + other.reasoningTokens
+            reasoningTokens: reasoningTokens + other.reasoningTokens,
+            exactCostUSD: (exactCostUSD == nil && other.exactCostUSD == nil)
+                ? nil : (exactCostUSD ?? 0) + (other.exactCostUSD ?? 0),
+            serverSearchRequests: serverSearchRequests + other.serverSearchRequests
         )
     }
+}
+
+/// A source a server-side web tool cited (OpenRouter `url_citation`).
+struct WebCitation {
+    let url: String
+    let title: String
+    let content: String
 }
 
 /// Events produced while streaming a single model turn.
 enum LLMStreamEvent {
     case text(String)
+    /// Reasoning text streamed alongside the answer (DeepSeek's
+    /// `reasoning_content`). Not shown; kept so a tool-calling turn can hand
+    /// it back — DeepSeek's thinking mode rejects the follow-up request
+    /// without it.
+    case reasoning(String)
     /// Emitted once at the end of the turn when the model requested tools.
     case toolCalls([ToolCall])
+    /// Citations a server-side web tool produced — grounding for the turn's
+    /// digest; the model itself is asked to cite inline.
+    case citations([WebCitation])
     /// Emitted once per model call, right before the stream finishes, when the
     /// provider reported token usage. Absent on interrupted streams — callers
     /// fall back to an estimate.
@@ -474,6 +534,20 @@ struct ChatRequestOptions {
     var maxTokens: Int = 8192
     var reasoning: ReasoningMode = .auto
     var tools: [ToolSpec] = []
+    /// OpenRouter server tools (`openrouter:web_search`, …): executed on
+    /// their side, declared next to our function tools.
+    var serverTools: [ServerTool] = []
+    /// OpenRouter: the selected model lists "file" input — PDFs go with the
+    /// native engine; otherwise the free cloudflare-ai text extraction.
+    var modelSupportsNativeDocuments: Bool = false
+    /// OpenRouter: route only to providers that don't collect data (their
+    /// `provider.data_collection = "deny"`). Set for every turn that involves
+    /// a document, whatever the account setting says.
+    var denyDataCollection: Bool = false
+    /// OpenRouter: route only to zero-data-retention endpoints (`provider.zdr`),
+    /// whatever the account's privacy page says. Off by default: it narrows
+    /// the model choice.
+    var zdrOnly: Bool = false
     /// Whether the selected model honors a reasoning-effort control. Resolved
     /// by the caller (on the main actor, where the model catalog lives) so the
     /// provider layer never has to reach into app state.
@@ -533,7 +607,12 @@ enum ModelCapabilities {
                 || m.contains("fable") || m.contains("mythos")
         case .gemini:
             return m.contains("2.5") || m.contains("gemini-3")
-        case .mistral, .deepseek, .openrouter, .kimi, .ollama, .hermes:
+        case .deepseek:
+            // V4: thinking on by default at effort "high"; a top-level
+            // `reasoning_effort` (low / high / max) tunes it (their
+            // thinking-mode guide, checked 2026-09-04).
+            return m.contains("deepseek-v4")
+        case .mistral, .openrouter, .kimi, .ollama, .hermes:
             return false
         }
     }
@@ -543,7 +622,13 @@ enum ModelCapabilities {
     /// page: "none, low, medium (default), high, xhigh, max"); everything else
     /// gets the lowest effort it accepts instead of a value it would reject.
     static func supportsNoReasoning(provider: ProviderID, model: String) -> Bool {
-        provider == .openai && model.lowercased().contains("gpt-5.6")
+        let m = model.lowercased()
+        switch provider {
+        case .openai: return m.contains("gpt-5.6")
+        // `thinking: {type: "disabled"}` — documented for the V4 models.
+        case .deepseek: return m.contains("deepseek-v4")
+        default: return false
+        }
     }
 }
 

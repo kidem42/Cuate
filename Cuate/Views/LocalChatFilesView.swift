@@ -10,6 +10,8 @@ struct LocalChatFilesView: View {
     struct AttachmentRow: Identifiable {
         let id: UUID
         let attachment: ChatAttachment
+        /// The message's timestamp — the retention clock of the attachment.
+        let attachedAt: Date
     }
     struct ArtifactRow: Identifiable {
         let id: String
@@ -25,6 +27,15 @@ struct LocalChatFilesView: View {
     let userFiles: [AttachmentRow]
     let artifacts: [ArtifactRow]
     let plaudNotes: [PlaudRow]
+    /// Documents only: puts the file back into the next message (the host
+    /// reuses the provider-side copy, so nothing is uploaded twice).
+    var onAttachAgain: ((ChatAttachment) -> Void)? = nil
+
+    func attachAgain(_ handler: @escaping (ChatAttachment) -> Void) -> LocalChatFilesView {
+        var copy = self
+        copy.onAttachAgain = handler
+        return copy
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -70,11 +81,11 @@ struct LocalChatFilesView: View {
                         if !userFiles.isEmpty {
                             section(L("chatfiles.user")) {
                                 ForEach(userFiles) { row in
-                                    fileRow(icon: row.attachment.mimeType.hasPrefix("image") ? "photo" : "doc",
+                                    fileRow(icon: rowIcon(for: row.attachment),
                                             title: row.attachment.filename,
-                                            subtitle: row.attachment.mimeType,
+                                            subtitle: rowSubtitle(for: row),
                                             action: { AttachmentOpener.open(row.attachment) },
-                                            trailing: revealActions(for: row.attachment))
+                                            trailing: userActions(for: row))
                                 }
                             }
                         }
@@ -173,6 +184,31 @@ struct LocalChatFilesView: View {
         }
     }
 
+    private func rowIcon(for attachment: ChatAttachment) -> String {
+        if attachment.isDocument { return DocumentPreflight.iconName(forFilename: attachment.filename) }
+        return attachment.mimeType.hasPrefix("image") ? "photo" : "doc"
+    }
+
+    /// Documents show what matters for them — pages, size and how long the
+    /// chat still holds the file; everything else keeps the MIME type.
+    private func rowSubtitle(for row: AttachmentRow) -> String {
+        guard row.attachment.isDocument else { return row.attachment.mimeType }
+        return DocumentChipView.retentionSubtitle(for: row.attachment, attachedAt: row.attachedAt)
+    }
+
+    /// Open + reveal, plus "attach again" for documents whose file is still
+    /// on disk (the retention prune removes it after 15 days).
+    private func userActions(for row: AttachmentRow) -> [RowAction] {
+        var actions = revealActions(for: row.attachment)
+        if row.attachment.isDocument, let onAttachAgain, row.attachment.fileURL != nil {
+            let attachment = row.attachment
+            actions.append((icon: "paperclip", help: L("chatfiles.attachAgain"), run: {
+                onAttachAgain(attachment)
+            }))
+        }
+        return actions
+    }
+
     /// Open + reveal-in-Finder for a user attachment; reveal only exists
     /// for file-backed payloads (inline base64 has no path to show).
     private func revealActions(for attachment: ChatAttachment) -> [RowAction] {
@@ -226,7 +262,7 @@ struct LocalChatFilesView: View {
                         plaudNotes.append(PlaudRow(id: info.fileID, title: attachment.filename))
                     }
                 } else if message.isUser {
-                    userFiles.append(AttachmentRow(id: attachment.id, attachment: attachment))
+                    userFiles.append(AttachmentRow(id: attachment.id, attachment: attachment, attachedAt: message.timestamp))
                 }
             }
             if !message.isUser {

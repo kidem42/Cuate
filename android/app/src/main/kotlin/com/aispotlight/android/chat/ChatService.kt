@@ -2,6 +2,8 @@ package com.aispotlight.android.chat
 
 import android.content.Context
 import com.aispotlight.android.core.ChatRequestOptions
+import com.aispotlight.android.core.DocumentPreflight
+import com.aispotlight.android.core.LLMDocument
 import com.aispotlight.android.core.LLMImage
 import com.aispotlight.android.core.LLMMessage
 import com.aispotlight.android.core.LLMStreamEvent
@@ -17,6 +19,7 @@ import com.aispotlight.android.data.SpendTracker
 import com.aispotlight.android.providers.BraveSearchService
 import com.aispotlight.android.providers.WebFetchService
 import com.aispotlight.android.providers.MistralOCRService
+import com.aispotlight.android.providers.OpenAIFilesService
 import com.aispotlight.android.providers.ModelPricing
 import com.aispotlight.android.providers.PricingCatalog
 import com.aispotlight.android.providers.ProviderRegistry
@@ -25,6 +28,8 @@ import com.aispotlight.android.settings.AppSettings
 import com.aispotlight.android.settings.Presets
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -54,6 +59,8 @@ object ChatService {
          * surfaces it as a persisted system line in the chat.
          */
         data class BudgetWarning(val text: String) : ChatEvent()
+        /** A persisted system line (not sent to the LLM): e.g. an upload that fell back to text. */
+        data class Note(val text: String) : ChatEvent()
     }
 
     // Tool budget lives in Settings (1–12, AppSettings.maxToolIterations) —
@@ -102,6 +109,8 @@ object ChatService {
         presetSystemPrompt: String?,
         /** Write-back target for lazily computed OCR extractions (messageId, attachmentId, text). */
         onAttachmentOCR: suspend (String, String, String) -> Unit = { _, _, _ -> },
+        /** Write-back for a provider-side copy (messageId, attachmentId, fileId, provider, expiresAtMillis). */
+        onAttachmentRemote: suspend (String, String, String, String, Long?) -> Unit = { _, _, _, _, _ -> },
     ): Flow<ChatEvent> = flow {
         val settings = AppSettings.current
         val providerID = settings.chatProvider.value
@@ -138,14 +147,28 @@ object ChatService {
         if (settings.webSearchEnabled.value &&
             settings.modelSupportsTools(providerID, model)
         ) {
+            // OpenRouter's own web tools replace ours when the user left them
+            // on: one key, no Brave. They run on OpenRouter's side and mix
+            // with our function tools in the same request.
+            val serverSearch = providerID == ProviderID.OPENROUTER && settings.openRouterWebSearch.value
+            val serverFetch = providerID == ProviderID.OPENROUTER && settings.openRouterWebFetch.value
             val tools = buildList {
-                if (BraveSearchService.isAvailable) add(BraveSearchService.toolSpec)
-                add(WebFetchService.toolSpec)
+                if (!serverSearch && BraveSearchService.isAvailable) add(BraveSearchService.toolSpec)
+                if (!serverFetch) add(WebFetchService.toolSpec)
             }
-            options = options.copy(tools = tools)
+            val serverTools = buildList {
+                if (serverSearch) add(com.aispotlight.android.core.ServerTool(
+                    "openrouter:web_search", org.json.JSONObject().put("max_results", 5).put("max_uses", 5)
+                ))
+                // "openrouter" is their free fetch engine; the others bill.
+                if (serverFetch) add(com.aispotlight.android.core.ServerTool(
+                    "openrouter:web_fetch", org.json.JSONObject().put("engine", "openrouter").put("max_uses", 5)
+                ))
+            }
+            options = options.copy(tools = tools, serverTools = serverTools)
             // Usage hint appended at request time — the user's editable prompt
             // stays clean; the tool's schema/description travels via the API.
-            systemPrompt += if (BraveSearchService.isAvailable) {
+            systemPrompt += if (serverSearch || BraveSearchService.isAvailable) {
                 "\n\n" +
                     "You have web tools. Use web_search when the answer depends on current events, live data, or facts you are unsure about; do not guess. " +
                     "Use web_fetch to read a specific page in full — a promising search result, or a URL the user gave you; prefer fetching the actual page over relying on search snippets when details matter. " +
@@ -161,8 +184,40 @@ object ChatService {
             }
         }
 
+        // Documents attached earlier in this chat: the read_document tool
+        // lets the model open them on demand — only when there is something
+        // to open and the model can call tools (the web tools' gate).
+        val liveDocuments = DocumentToolService.liveDocuments(context, history)
+        val documentTools = if (settings.modelSupportsTools(providerID, model)) {
+            DocumentToolService.toolSpecs(liveDocuments)
+        } else {
+            emptyList()
+        }
+        if (documentTools.isNotEmpty()) {
+            options = options.copy(tools = options.tools + documentTools)
+            systemPrompt += "\n\n" + DocumentToolService.systemPromptHint()
+        }
+        val hasDocumentTool = documentTools.isNotEmpty()
+        // OpenRouter: every turn that involves a document goes only to
+        // providers that don't collect data.
+        val lastUserHasDocuments = history.lastOrNull { it.isUser }?.attachments?.any { it.isDocument } ?: false
+        options = options.copy(
+            modelSupportsNativeDocuments = settings.modelSupportsNativeDocuments(providerID, model),
+            denyDataCollection = providerID == ProviderID.OPENROUTER && (hasDocumentTool || lastUserHasDocuments),
+            zdrOnly = providerID == ProviderID.OPENROUTER && settings.openRouterZDROnly.value,
+        )
         val supportsVision = settings.modelSupportsVision(providerID, model)
-        val initialMessages = buildMessages(context, history, providerID, supportsVision, onAttachmentOCR)
+        // Attach turn: the documents of the last user message get their
+        // provider-side copy (OpenAI) before the request is built.
+        val preparedHistory = uploadPendingDocuments(
+            context, history, providerID, apiKey, onAttachmentRemote,
+            onStatus = { emit(ChatEvent.Status(it)) },
+            onNote = { emit(ChatEvent.Note(it)) },
+        )
+        val initialMessages = buildMessages(
+            context, preparedHistory, providerID, supportsVision,
+            hasDocumentTool, documentsAsText = false, onAttachmentOCR,
+        ) { emit(ChatEvent.Status(it)) }
         val provider = ProviderRegistry.provider(providerID)
         com.aispotlight.android.core.Diagnostics.log(
             "chat", "turn.start provider=${providerID.id} model=$model history=${history.size} tools=${options.tools.size}"
@@ -174,25 +229,62 @@ object ChatService {
         // Search results gathered this turn — handed to the UI at the end so
         // they persist on the reply message as grounding.
         var toolDigest = ""
+        val citedURLs = mutableSetOf<String>()
         // Token usage summed across the agent loop's model calls; received
         // chars accumulate for the estimate fallback on interrupted streams.
         var turnUsage = TokenUsage()
         var receivedChars = 0
+        // One retry when the provider rejects a document reference: the same
+        // turn again with the documents as local text.
+        var documentRetryDone = false
         try {
             while (true) {
                 iteration += 1
                 var turnText = ""
+                var turnReasoning = ""
                 var toolCalls = emptyList<com.aispotlight.android.core.ToolCall>()
 
-                provider.streamChat(messages, model, systemPrompt, options, apiKey).collect { event ->
-                    when (event) {
-                        is LLMStreamEvent.Text -> {
-                            turnText += event.chunk
-                            emit(ChatEvent.Text(event.chunk))
+                try {
+                    provider.streamChat(messages, model, systemPrompt, options, apiKey).collect { event ->
+                        when (event) {
+                            is LLMStreamEvent.Text -> {
+                                turnText += event.chunk
+                                emit(ChatEvent.Text(event.chunk))
+                            }
+                            is LLMStreamEvent.ToolCalls -> toolCalls = event.calls
+                            // Kept for the tool loop only (DeepSeek wants it
+                            // back); never rendered.
+                            is LLMStreamEvent.Reasoning -> turnReasoning += event.chunk
+                            is LLMStreamEvent.Citations -> {
+                                // Server-side search: the sources become the
+                                // grounding digest, same as Brave.
+                                for (cite in event.citations) {
+                                    if (!citedURLs.add(cite.url)) continue
+                                    val heading = if (cite.title.isEmpty()) cite.url else "${cite.title} — ${cite.url}"
+                                    toolDigest += (if (toolDigest.isEmpty()) "" else "\n\n") + "$heading\n${cite.content.take(400)}"
+                                }
+                            }
+                            is LLMStreamEvent.Usage -> turnUsage = turnUsage.merged(event.usage)
                         }
-                        is LLMStreamEvent.ToolCalls -> toolCalls = event.calls
-                        is LLMStreamEvent.Usage -> turnUsage = turnUsage.merged(event.usage)
                     }
+                } catch (e: ProviderException) {
+                    val message = e.message ?: ""
+                    if (!documentRetryDone && iteration == 1 &&
+                        message.lowercase().contains("file") &&
+                        messages.any { it.documents.isNotEmpty() }
+                    ) {
+                        documentRetryDone = true
+                        com.aispotlight.android.core.Diagnostics.log(
+                            "files", "attach turn rejected (${message.take(120)}) — retrying with local text"
+                        )
+                        messages = buildMessages(
+                            context, preparedHistory, providerID, supportsVision,
+                            hasDocumentTool, documentsAsText = true, onAttachmentOCR,
+                        ) { emit(ChatEvent.Status(it)) }
+                        iteration = 0
+                        continue
+                    }
+                    throw e
                 }
                 receivedChars += turnText.length
 
@@ -210,7 +302,8 @@ object ChatService {
                         "chat", "tool budget exhausted — forcing final answer"
                     )
                     messages = messages + LLMMessage(
-                        role = LLMMessage.Role.ASSISTANT, text = turnText, toolCalls = toolCalls
+                        role = LLMMessage.Role.ASSISTANT, text = turnText, toolCalls = toolCalls,
+                        reasoningContent = turnReasoning.ifEmpty { null },
                     )
                     for (call in toolCalls) {
                         messages = messages + LLMMessage(
@@ -228,7 +321,8 @@ object ChatService {
             // Record the assistant turn with its calls, execute the tools,
             // and loop for the follow-up turn.
             messages = messages + LLMMessage(
-                role = LLMMessage.Role.ASSISTANT, text = turnText, toolCalls = toolCalls
+                role = LLMMessage.Role.ASSISTANT, text = turnText, toolCalls = toolCalls,
+                reasoningContent = turnReasoning.ifEmpty { null },
             )
             for (call in toolCalls) {
                 com.aispotlight.android.core.Diagnostics.log("chat", "tool.call ${call.name}")
@@ -256,6 +350,10 @@ object ChatService {
                     } catch (e: Exception) {
                         "Fetch failed: ${e.message}"
                     }
+                } else if (DocumentToolService.canHandle(call.name)) {
+                    emit(ChatEvent.Status(DocumentToolService.statusLine(call)))
+                    // Not in toolDigest: document text is big and re-fetchable.
+                    result = DocumentToolService.run(context, call, liveDocuments, onAttachmentOCR)
                 } else {
                     result = "Unknown tool: ${call.name}"
                 }
@@ -272,7 +370,7 @@ object ChatService {
             // The turn still consumed tokens (cancelled/failed streams bill
             // whatever was generated) — record what we know, then rethrow.
             recordSpend(SpendKind.CHAT, providerID, model, turnUsage, messages, receivedChars)
-            throw e
+            throw explainRoutingError(context, e, providerID)
         }
         if (toolDigest.isNotEmpty()) {
             // Capped: one digest rides along on future requests (most recent
@@ -283,6 +381,21 @@ object ChatService {
         recordSpend(SpendKind.CHAT, providerID, model, turnUsage, messages, receivedChars)?.let {
             emit(ChatEvent.BudgetWarning(it))
         }
+    }
+
+    /**
+     * OpenRouter answers a request no endpoint can serve under its routing
+     * constraints (the account's privacy page, our `data_collection: deny` on
+     * document turns, the ZDR toggle) with a bare 503 — say what to do.
+     */
+    private fun explainRoutingError(context: Context, error: Exception, providerID: ProviderID): Exception {
+        if (providerID != ProviderID.OPENROUTER || error !is ProviderException) return error
+        val message = error.message ?: return error
+        val text = message.lowercase()
+        val routing = text.contains("http 503") || text.contains("routing requirements") ||
+            text.contains("data policy") || text.contains("no endpoints")
+        if (!routing) return error
+        return ProviderException(error.kind, context.getString(com.aispotlight.android.R.string.or_routing_hint) + "\n" + message)
     }
 
     // MARK: - Spend recording
@@ -332,9 +445,24 @@ object ChatService {
                 )
             }
         }
+        var costUSD = pricing?.cost(effective)
+        // OpenRouter reports the exact charge, server tools included: book
+        // it, with the search share moved to its own line so the provider
+        // total still equals what OpenRouter charged.
+        var searchShare = 0.0
+        if (providerID == ProviderID.OPENROUTER && effective.serverSearchRequests > 0) {
+            searchShare = effective.serverSearchRequests * PricingCatalog.OPENROUTER_SEARCH_PER_REQUEST
+            SpendTracker.record(
+                kind = SpendKind.SEARCH, provider = providerID.id, model = "web_search",
+                units = effective.serverSearchRequests.toDouble(), costUSD = searchShare, isEstimate = true,
+            )
+        }
+        if (providerID == ProviderID.OPENROUTER && effective.exactCostUSD != null) {
+            costUSD = (effective.exactCostUSD - searchShare).coerceAtLeast(0.0)
+        }
         return SpendTracker.record(
             kind = kind, provider = providerID.id, model = model,
-            usage = effective, costUSD = pricing?.cost(effective), isEstimate = isEstimate,
+            usage = effective, costUSD = costUSD, isEstimate = isEstimate,
         )
     }
 
@@ -352,13 +480,22 @@ object ChatService {
      * - When the selected model does not support vision (DeepSeek, or a
      *   text-only OpenRouter model), images are run through Mistral OCR and
      *   injected as text.
+     * - Documents follow the same shape with a different fallback: the most
+     *   recent user message (the attach turn) carries them in full — as an
+     *   OpenAI file reference when one exists, else as locally extracted text
+     *   — and every older message keeps a one-line placeholder that points the
+     *   model at the read_document tool. [documentsAsText] forces the text
+     *   form (the retry after a provider rejected the reference).
      */
     private suspend fun buildMessages(
         context: Context,
         history: List<ChatMessage>,
         providerID: ProviderID,
         supportsVision: Boolean,
+        hasDocumentTool: Boolean,
+        documentsAsText: Boolean,
         onAttachmentOCR: suspend (String, String, String) -> Unit,
+        onStatus: suspend (String) -> Unit = {},
     ): List<LLMMessage> {
         val conversational = history.filter { it.messageType != ChatMessage.Type.SYSTEM && !it.isError }
         val lastUserID = conversational.lastOrNull { it.isUser }?.id
@@ -381,36 +518,66 @@ object ChatService {
         // the reply behind a burst of OCR calls.
         var lazyOCRBudget = 3
 
+        // The attach turn's inline text, across all its documents: one
+        // message must never eat the context on its own.
+        var inlineBudget = DocumentPreflight.INLINE_TEXT_CHARACTER_CAP_PER_MESSAGE
+        var attachNative = 0
+        var attachInline = 0
+        var attachInlineChars = 0
         val result = mutableListOf<LLMMessage>()
         for (message in conversational) {
             var text = message.text
             var images = emptyList<LLMImage>()
-
-            if (message.attachments.isNotEmpty()) {
-                // Documents (PDF/Word — shared in or picked) never travel as
-                // pixels: their content is injected as extracted text (Mistral
-                // OCR / direct read for text files), cached per attachment
-                // like image OCR. Fails soft into a filename note.
-                val imageAttachments = message.attachments.filter { it.mimeType.startsWith("image") }
-                for (attachment in message.attachments) {
-                    if (attachment.mimeType.startsWith("image")) continue
-                    val fresh = message.id in pixelIDs
-                    var extracted = attachment.ocrText
-                    if (extracted.isNullOrEmpty() && (fresh || lazyOCRBudget > 0)) {
-                        if (!fresh) lazyOCRBudget -= 1
-                        extracted = try {
-                            cachedDocumentText(context, attachment, message.id, onAttachmentOCR)
-                        } catch (_: Exception) {
-                            null
+            val documents = mutableListOf<LLMDocument>()
+            val imageAttachments = message.attachments.filter { it.mimeType.startsWith("image") }
+            val documentAttachments = message.attachments.filter { !it.mimeType.startsWith("image") }
+            for (attachment in documentAttachments) {
+                val label = documentLabel(attachment)
+                if (message.id == lastUserID) {
+                    val remote = attachment.remoteFileId
+                    val file = ImageStore.file(context, attachment)
+                    if (providerID == ProviderID.OPENAI && !documentsAsText && attachment.hasLiveRemoteFile && remote != null) {
+                        documents.add(LLMDocument(attachment.filename, attachment.mimeType, remoteFileId = remote))
+                        attachNative += 1
+                    } else if (providerID == ProviderID.OPENROUTER && !documentsAsText &&
+                        DocumentPreflight.isPDF(attachment.mimeType) && file.exists() &&
+                        file.length() <= DocumentPreflight.MAX_INLINE_FILE_BYTES
+                    ) {
+                        // The PDF itself, base64, on this turn only; the engine
+                        // (native / cloudflare-ai) is the provider's call.
+                        val base64 = withContext(Dispatchers.IO) {
+                            android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
+                        }
+                        documents.add(LLMDocument(attachment.filename, attachment.mimeType, inlineBase64 = base64))
+                        attachNative += 1
+                    } else {
+                        val extracted = cachedDocumentText(context, attachment, message.id, onAttachmentOCR, onStatus)
+                        if (!extracted.isNullOrEmpty()) {
+                            var body = extracted
+                            val cap = minOf(DocumentPreflight.INLINE_TEXT_CHARACTER_CAP, maxOf(0, inlineBudget))
+                            if (body.length > cap) {
+                                body = body.take(cap) + if (hasDocumentTool) {
+                                    "\n[Truncated — the rest is available through read_document]"
+                                } else {
+                                    "\n[Truncated]"
+                                }
+                            }
+                            inlineBudget -= body.length
+                            attachInline += 1
+                            attachInlineChars += body.length
+                            text += "\n\n[Document: $label]\n$body"
+                        } else {
+                            text += "\n\n[Document attached: $label — not readable by this provider]"
                         }
                     }
-                    text += if (!extracted.isNullOrEmpty()) {
-                        val cap = if (fresh) MAX_DOC_CHARS else 4000
-                        "\n\n[Attached file ${attachment.filename}; extracted content:]\n${extracted.take(cap)}"
+                } else {
+                    text += if (hasDocumentTool) {
+                        "\n[Attached document: $label — open it with read_document when needed]"
                     } else {
-                        "\n[The user attached a file: ${attachment.filename}]"
+                        "\n[Attached document: $label — re-attach it to discuss its content]"
                     }
                 }
+            }
                 if (imageAttachments.isNotEmpty()) {
                 if (message.id in pixelIDs) {
                     if (supportsVision) {
@@ -453,62 +620,104 @@ object ChatService {
                     }
                 }
                 }
-            }
-
             if (message.id == lastToolContextID && message.toolContext != null) {
                 text += "\n\n[Web search results this answer was based on:]\n${message.toolContext}"
             }
-
-            if (text.isEmpty() && images.isEmpty()) continue
+            if (text.isEmpty() && images.isEmpty() && documents.isEmpty()) continue
             result.add(LLMMessage(
                 role = if (message.isUser) LLMMessage.Role.USER else LLMMessage.Role.ASSISTANT,
                 text = text,
                 images = images,
+                documents = documents,
             ))
+        }
+        if (attachNative + attachInline > 0) {
+            com.aispotlight.android.core.Diagnostics.log(
+                "files", "attach turn provider=${providerID.id} native=$attachNative inline=$attachInline inlineChars=$attachInlineChars"
+            )
         }
         return result
     }
 
-    /** Longest extracted-document injection for the message being answered. */
-    private const val MAX_DOC_CHARS = 24_000
+    /** "contract.pdf, 12 pages" / "notes.docx" — for placeholders. */
+    private fun documentLabel(attachment: ChatAttachment): String {
+        val pages = attachment.pageCount ?: return attachment.filename
+        return "${attachment.filename}, $pages page${if (pages == 1) "" else "s"}"
+    }
 
-    /** Document types Mistral OCR accepts through `document_url`. */
-    private val OCR_DOCUMENT_MIMES = setOf(
-        "application/pdf",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    )
+    /** Server-side expiry for uploads = the media retention window (App.sweepExpiredMedia). */
+    private const val REMOTE_EXPIRY_SECONDS = 15L * 24 * 60 * 60
 
     /**
-     * Extracts a non-image attachment's content as text, persisted on the
-     * attachment (same cache as image OCR): plain-text files are read
-     * directly, PDFs/Office documents go through Mistral OCR. Returns ""
-     * when the type can't be extracted or OCR isn't configured.
+     * Attach turn on OpenAI: the documents of the last user message get their
+     * provider-side copy here, once; a re-attach or a duplicate already
+     * carries one. An upload failure degrades that document to the local text
+     * path with a note — the turn itself always goes out.
+     */
+    private suspend fun uploadPendingDocuments(
+        context: Context,
+        history: List<ChatMessage>,
+        providerID: ProviderID,
+        apiKey: String,
+        onAttachmentRemote: suspend (String, String, String, String, Long?) -> Unit,
+        onStatus: suspend (String) -> Unit,
+        onNote: suspend (String) -> Unit,
+    ): List<ChatMessage> {
+        if (providerID != ProviderID.OPENAI) return history
+        val index = history.indexOfLast { it.isUser }
+        if (index < 0) return history
+        val message = history[index]
+        if (message.attachments.none { it.isDocument && !it.hasLiveRemoteFile }) return history
+        val updated = message.attachments.map { attachment ->
+            if (!attachment.isDocument || attachment.hasLiveRemoteFile) return@map attachment
+            val file = ImageStore.file(context, attachment)
+            if (!file.exists()) return@map attachment
+            onStatus("Uploading ${attachment.filename}…")
+            try {
+                val uploaded = OpenAIFilesService.upload(
+                    file, attachment.filename, attachment.mimeType, REMOTE_EXPIRY_SECONDS, apiKey
+                )
+                com.aispotlight.android.core.Diagnostics.log(
+                    "files", "upload id=${uploaded.id} bytes=${file.length()} pages=${attachment.pageCount ?: 0} expires=${uploaded.expiresAtMillis ?: "none"}"
+                )
+                onAttachmentRemote(message.id, attachment.id, uploaded.id, providerID.id, uploaded.expiresAtMillis)
+                attachment.copy(
+                    remoteFileId = uploaded.id, remoteProvider = providerID.id,
+                    remoteExpiresAt = uploaded.expiresAtMillis,
+                )
+            } catch (e: Exception) {
+                com.aispotlight.android.core.Diagnostics.log(
+                    "files", "upload failed ${attachment.filename}: ${e.message?.take(160)}"
+                )
+                onNote("${attachment.filename} was sent as text — the upload failed: ${e.message}")
+                attachment
+            }
+        }
+        return history.toMutableList().also { it[index] = message.copy(attachments = updated) }
+    }
+
+    /**
+     * Local extraction with per-attachment persistence (the document twin of
+     * [cachedOCRText]): computed once on the phone, written back onto the
+     * attachment. Null when the type isn't readable locally or nothing
+     * readable was found (a scan).
      */
     private suspend fun cachedDocumentText(
         context: Context,
         attachment: ChatAttachment,
         messageId: String,
         onAttachmentOCR: suspend (String, String, String) -> Unit,
-    ): String {
+        onStatus: suspend (String) -> Unit,
+    ): String? {
         attachment.ocrText?.takeIf { it.isNotEmpty() }?.let { return it }
-        val mime = attachment.mimeType.substringBefore(";").trim()
-        val extracted = when {
-            mime.startsWith("text/") || mime == "application/json" || mime == "application/xml" -> {
-                val file = ImageStore.file(context, attachment)
-                if (file.exists()) file.readText().take(MAX_DOC_CHARS) else ""
-            }
-            mime in OCR_DOCUMENT_MIMES && MistralOCRService.isAvailable -> {
-                val base64 = ImageStore.contentBase64(context, attachment)
-                if (base64.isEmpty()) ""
-                else MistralOCRService.extractDocumentText(base64, mime, attachment.filename)
-            }
-            else -> ""
-        }
-        if (extracted.isNotEmpty()) onAttachmentOCR(messageId, attachment.id, extracted)
-        return extracted
+        val file = ImageStore.file(context, attachment)
+        if (!file.exists()) return null
+        onStatus("Reading ${attachment.filename}…")
+        val text = withContext(Dispatchers.IO) { DocumentTextService.extract(file, attachment.mimeType) }
+            ?: return null
+        onAttachmentOCR(messageId, attachment.id, text)
+        com.aispotlight.android.core.Diagnostics.log("files", "extract ${attachment.filename} chars=${text.length}")
+        return text
     }
 
     /**

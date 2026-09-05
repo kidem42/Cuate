@@ -24,14 +24,49 @@ nonisolated struct ChatAttachment: Identifiable, Codable {
     /// turns never re-pay the OCR call, and older turns keep their image
     /// content as grounding instead of a content-free "[attached earlier]" note.
     var ocrText: String?
+    /// Document attachments (see DocumentPreflight): the provider-side copy —
+    /// its id, which provider holds it, and when the server deletes it. nil
+    /// for images and for documents that only ever travelled as text.
+    var remoteFileID: String?
+    var remoteProvider: String?
+    var remoteExpiresAt: Date?
+    /// PDF page count, read by PDFKit at attach time (chips, tool inventory).
+    var pageCount: Int?
+    /// SHA-256 of the document bytes (hex), computed at attach time. Lets a
+    /// re-attached copy of the same file — under any name — reuse the
+    /// provider-side id and the cached text instead of uploading again.
+    var contentHash: String?
 
-    init(filename: String, mimeType: String, base64: String, id: UUID = UUID(), fileURLString: String? = nil, ocrText: String? = nil) {
+    init(filename: String, mimeType: String, base64: String, id: UUID = UUID(), fileURLString: String? = nil, ocrText: String? = nil,
+         remoteFileID: String? = nil, remoteProvider: String? = nil, remoteExpiresAt: Date? = nil, pageCount: Int? = nil,
+         contentHash: String? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.base64 = base64
         self.fileURLString = fileURLString
         self.ocrText = ocrText
+        self.remoteFileID = remoteFileID
+        self.remoteProvider = remoteProvider
+        self.remoteExpiresAt = remoteExpiresAt
+        self.pageCount = pageCount
+        self.contentHash = contentHash
+    }
+
+    /// Hex SHA-256 of a payload — the document identity for deduplication.
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A document (PDF, Word, text, …) as opposed to an image.
+    var isDocument: Bool { DocumentPreflight.isDocumentMime(mimeType) }
+
+    /// A provider-side copy that can still be referenced: uploaded and not
+    /// past its server-side expiry.
+    var hasLiveRemoteFile: Bool {
+        guard let remoteFileID, !remoteFileID.isEmpty else { return false }
+        if let remoteExpiresAt, remoteExpiresAt <= Date() { return false }
+        return true
     }
 
     /// Resolves a stored payload path: absolute (legacy rows) is used as-is,
@@ -314,6 +349,9 @@ class ChatStore: ObservableObject {
         ChatPersistence.migrateFromJSONIfNeeded()
         ChatPersistence.externalizeInlineMediaIfNeeded()
         loadConversation(conversation)
+        // Every conversation, not just the one opening: dormant presets must
+        // age their media out on the same 15-day clock.
+        ChatPersistence.applyRetentionToAllConversations(mediaExpiredText: L("chat.mediaExpired"))
         ChatPersistence.sweepOrphanedMedia()
         // Quit-time flush: without it, ⌘Q within the debounce window (or
         // mid-stream, where the max-latency cap still leaves a gap) drops the
@@ -654,9 +692,70 @@ class ChatStore: ObservableObject {
         }
     }
 
+    /// Mutates one attachment in place (remote file id, page count, cached
+    /// text) and persists — the general form of setAttachmentOCRText.
+    func updateAttachment(messageID: UUID, attachmentID: UUID, _ mutate: @escaping (inout ChatAttachment) -> Void) {
+        DispatchQueue.main.async {
+            guard let messageIndex = self.messages.firstIndex(where: { $0.id == messageID }),
+                  let attachmentIndex = self.messages[messageIndex].attachments
+                      .firstIndex(where: { $0.id == attachmentID }) else { return }
+            mutate(&self.messages[messageIndex].attachments[attachmentIndex])
+            self.scheduleSave()
+        }
+    }
+
+    struct LiveDocument: Identifiable {
+        let attachment: ChatAttachment
+        let messageID: UUID
+        let attachedAt: Date
+        let sizeBytes: Int
+        var id: UUID { attachment.id }
+    }
+
+    /// Documents of this conversation whose local file still exists (the
+    /// 15-day prune deletes it), newest first, one per file name. Feeds the
+    /// read_document inventory and the "in memory" chips.
+    var liveDocuments: [LiveDocument] {
+        var seen = Set<String>()
+        var result: [LiveDocument] = []
+        for message in messages.reversed() where message.isUser {
+            for attachment in message.attachments where attachment.isDocument {
+                let key = attachment.filename.lowercased()
+                guard !seen.contains(key), let url = attachment.fileURL,
+                      let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int
+                else { continue }
+                seen.insert(key)
+                result.append(LiveDocument(
+                    attachment: attachment, messageID: message.id,
+                    attachedAt: message.timestamp, sizeBytes: size
+                ))
+            }
+        }
+        return result
+    }
+
+    /// The same document already in this conversation (byte-identical, any
+    /// file name) whose local copy is still within the retention window —
+    /// newest first. A hit lets the new attachment inherit the provider-side
+    /// id and the cached text instead of uploading and extracting again.
+    func documentDuplicate(hash: String) -> ChatAttachment? {
+        for message in messages.reversed() where message.isUser {
+            for attachment in message.attachments
+            where attachment.isDocument && attachment.contentHash == hash {
+                if let url = attachment.fileURL, FileManager.default.fileExists(atPath: url.path) {
+                    return attachment
+                }
+            }
+        }
+        return nil
+    }
+
     /// Removes a message (e.g. an empty streaming placeholder after an error).
     func removeMessage(id messageID: UUID) {
         DispatchQueue.main.async {
+            if let message = self.messages.first(where: { $0.id == messageID }) {
+                ChatPersistence.releaseRemoteFiles(of: message.attachments)
+            }
             self.messages.removeAll { $0.id == messageID }
             self.summaryCoversCount = min(self.summaryCoversCount, self.totalMessageCount)
             self.scheduleSave()
@@ -665,6 +764,9 @@ class ChatStore: ObservableObject {
 
     func clearMessages() {
         DispatchQueue.main.async {
+            // Provider-side document copies go with the conversation — the
+            // loaded rows here, the rows below the window in deleteAllMediaFiles.
+            ChatPersistence.releaseRemoteFiles(of: self.messages.flatMap(\.attachments), checkReferences: false)
             // Delete voice recordings and file-backed attachments referenced
             // by the cleared conversation so they don't pile up as orphans
             // in Application Support.

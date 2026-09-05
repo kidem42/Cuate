@@ -770,6 +770,15 @@ private struct AttachmentPreviewBubble: View {
                 // Plaud note/transcript chip — branded, previews in the
                 // artifact window instead of a raw file open.
                 PlaudNoteChipView(attachment: attachment)
+            } else if attachment.isDocument {
+                DocumentChipView(attachment: attachment)
+                    .padding(12)
+                    .background(Color.secondary.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        AttachmentOpener.open(attachment)
+                    }
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.fill")

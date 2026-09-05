@@ -79,12 +79,20 @@ class AppSettings private constructor(context: Context) {
 
     fun setOpenRouterCatalog(catalog: List<ModelInfo>) {
         _openRouterCatalog.value = catalog.associateBy { it.id }
+        _openRouterCatalogUpdatedAt.value = System.currentTimeMillis()
+        prefs.edit().putLong("openRouterCatalogUpdatedAt", _openRouterCatalogUpdatedAt.value).apply()
         val json = JSONObject()
         for (info in catalog) {
             json.put(info.id, JSONObject().apply {
                 put("vision", info.supportsVision)
                 put("tools", info.supportsTools)
                 put("reasoning", info.supportsReasoning)
+                put("files", info.supportsFiles)
+                info.name?.let { put("name", it) }
+                info.summary?.let { put("summary", it) }
+                info.contextLength?.let { put("context", it) }
+                info.maxCompletionTokens?.let { put("maxOut", it) }
+                info.createdAt?.let { put("created", it) }
                 // Per-token USD prices for cost tracking (absent = unknown).
                 info.promptPricePerToken?.let { put("promptPrice", it) }
                 info.completionPricePerToken?.let { put("completionPrice", it) }
@@ -100,6 +108,13 @@ class AppSettings private constructor(context: Context) {
             return _openRouterCatalog.value[model]?.supportsVision ?: false
         }
         return provider.supportsVision
+    }
+
+    /** A document can go to the model as a file: OpenAI's Files API, or an OpenRouter model listing "file" input. */
+    fun modelSupportsNativeDocuments(provider: ProviderID, model: String): Boolean = when (provider) {
+        ProviderID.OPENAI -> true
+        ProviderID.OPENROUTER -> _openRouterCatalog.value[model]?.supportsFiles ?: false
+        else -> false
     }
 
     fun modelSupportsTools(provider: ProviderID, model: String): Boolean {
@@ -151,6 +166,49 @@ class AppSettings private constructor(context: Context) {
     fun setWebSearchEnabled(value: Boolean) {
         _webSearchEnabled.value = value
         prefs.edit().putBoolean("webSearchEnabled", value).apply()
+    }
+
+    // OpenRouter's server-side web tools in place of Brave / the local fetch
+    // (OpenRouter turns only, only with web access on). Default on.
+    private val _openRouterWebSearch = MutableStateFlow(prefs.getBoolean("openRouterWebSearch", true))
+    val openRouterWebSearch: StateFlow<Boolean> = _openRouterWebSearch
+    fun setOpenRouterWebSearch(value: Boolean) {
+        _openRouterWebSearch.value = value
+        prefs.edit().putBoolean("openRouterWebSearch", value).apply()
+    }
+    private val _openRouterWebFetch = MutableStateFlow(prefs.getBoolean("openRouterWebFetch", true))
+    val openRouterWebFetch: StateFlow<Boolean> = _openRouterWebFetch
+    fun setOpenRouterWebFetch(value: Boolean) {
+        _openRouterWebFetch.value = value
+        prefs.edit().putBoolean("openRouterWebFetch", value).apply()
+    }
+    /** When the OpenRouter catalog was last fetched (epoch millis; 0 = never). */
+    private val _openRouterCatalogUpdatedAt = MutableStateFlow(prefs.getLong("openRouterCatalogUpdatedAt", 0L))
+    val openRouterCatalogUpdatedAt: StateFlow<Long> = _openRouterCatalogUpdatedAt
+    /** OpenRouter: only zero-data-retention endpoints, independent of the account page. Off by default. */
+    private val _openRouterZDROnly = MutableStateFlow(prefs.getBoolean("openRouterZDROnly", false))
+    val openRouterZDROnly: StateFlow<Boolean> = _openRouterZDROnly
+    fun setOpenRouterZDROnly(value: Boolean) {
+        _openRouterZDROnly.value = value
+        prefs.edit().putBoolean("openRouterZDROnly", value).apply()
+    }
+    /** Models that still have an endpoint under the account's privacy settings (`/models/user`); null = unknown. */
+    private val _openRouterAllowedModels = MutableStateFlow<Set<String>?>(
+        prefs.getStringSet("openRouterAllowedModels", null)?.toSet()
+    )
+    val openRouterAllowedModels: StateFlow<Set<String>?> = _openRouterAllowedModels
+    fun setOpenRouterAllowedModels(ids: Set<String>?) {
+        _openRouterAllowedModels.value = ids
+        prefs.edit().apply {
+            if (ids == null) remove("openRouterAllowedModels") else putStringSet("openRouterAllowedModels", ids)
+        }.apply()
+    }
+    /** null = unknown; false = in the catalog but the account's privacy settings leave it no endpoint. */
+    fun openRouterModelAllowed(slug: String): Boolean? {
+        val allowed = _openRouterAllowedModels.value ?: return null
+        val id = slug.trim()
+        if (id.isEmpty() || _openRouterCatalog.value[id] == null) return null
+        return id in allowed
     }
 
     // MARK: - Hermes Agent addon
@@ -863,6 +921,12 @@ class AppSettings private constructor(context: Context) {
                     supportsVision = entry.optBoolean("vision"),
                     supportsTools = entry.optBoolean("tools"),
                     supportsReasoning = entry.optBoolean("reasoning"),
+                    supportsFiles = entry.optBoolean("files"),
+                    name = entry.optString("name").ifEmpty { null },
+                    summary = entry.optString("summary").ifEmpty { null },
+                    contextLength = entry.optInt("context", 0).takeIf { it > 0 },
+                    maxCompletionTokens = entry.optInt("maxOut", 0).takeIf { it > 0 },
+                    createdAt = entry.optLong("created", 0L).takeIf { it > 0 },
                     promptPricePerToken = if (entry.has("promptPrice")) entry.optDouble("promptPrice") else null,
                     completionPricePerToken = if (entry.has("completionPrice")) entry.optDouble("completionPrice") else null,
                 )

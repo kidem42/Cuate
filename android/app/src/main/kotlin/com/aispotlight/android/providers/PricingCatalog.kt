@@ -95,6 +95,8 @@ object PricingCatalog {
     )
     /** Brave Search "Base AI" plan rate ($5 CPM); free tier bills nothing. */
     const val SEARCH_PER_QUERY = 0.005
+    /** OpenRouter `openrouter:web_search` at engine "auto": Exa, $0.007/request (an estimate — native search bills at the provider's rate). */
+    const val OPENROUTER_SEARCH_PER_REQUEST = 0.007
 
     // MARK: Parsing (snapshot + cache share the format)
 

@@ -236,6 +236,36 @@ final class AppSettings: ObservableObject {
     @Published var webSearchEnabled: Bool {
         didSet { defaults.set(webSearchEnabled, forKey: "webSearchEnabled") }
     }
+    /// OpenRouter's server-side web tools in place of Brave / the local fetch
+    /// (OpenRouter turns only, only with web access on). Default on: one key,
+    /// no further setup.
+    @Published var openRouterWebSearch: Bool {
+        didSet { defaults.set(openRouterWebSearch, forKey: "openRouterWebSearch") }
+    }
+    @Published var openRouterWebFetch: Bool {
+        didSet { defaults.set(openRouterWebFetch, forKey: "openRouterWebFetch") }
+    }
+    /// When the OpenRouter catalog was last fetched (the browser's caption).
+    @Published var openRouterCatalogUpdatedAt: Date? {
+        didSet { defaults.set(openRouterCatalogUpdatedAt, forKey: "openRouterCatalogUpdatedAt") }
+    }
+    /// OpenRouter: only zero-data-retention endpoints (`provider.zdr = true`),
+    /// independent of the account's privacy page. Off by default.
+    @Published var openRouterZDROnly: Bool {
+        didSet { defaults.set(openRouterZDROnly, forKey: "openRouterZDROnly") }
+    }
+    /// Models that still have an endpoint under the account's privacy settings
+    /// (`/models/user`); nil until fetched with a key. Drives the greyed rows
+    /// and the "available to me" filter of the catalog browser.
+    @Published private(set) var openRouterAllowedModels: Set<String>? {
+        didSet {
+            if let ids = openRouterAllowedModels {
+                defaults.set(Array(ids), forKey: "openRouterAllowedModels")
+            } else {
+                defaults.removeObject(forKey: "openRouterAllowedModels")
+            }
+        }
+    }
 
     // MARK: - Hotkeys
 
@@ -655,6 +685,11 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         maxTokens = defaults.object(forKey: "maxTokens") as? Int ?? 16384
         localMaxTokens = defaults.object(forKey: "localMaxTokens") as? Int ?? 0
         webSearchEnabled = defaults.object(forKey: "webSearchEnabled") as? Bool ?? true
+        openRouterWebSearch = defaults.object(forKey: "openRouterWebSearch") as? Bool ?? true
+        openRouterWebFetch = defaults.object(forKey: "openRouterWebFetch") as? Bool ?? true
+        openRouterCatalogUpdatedAt = defaults.object(forKey: "openRouterCatalogUpdatedAt") as? Date
+        openRouterZDROnly = defaults.object(forKey: "openRouterZDROnly") as? Bool ?? false
+        openRouterAllowedModels = (defaults.array(forKey: "openRouterAllowedModels") as? [String]).map(Set.init)
         // Default matches the previous hardcoded cap — existing setups keep
         // their behavior until the user touches the new control.
         maxToolIterations = defaults.object(forKey: "maxToolIterations") as? Int ?? 4
@@ -1132,12 +1167,33 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         var dict: [String: ModelInfo] = [:]
         for info in catalog { dict[info.id] = info }
         openRouterCatalog = dict
+        openRouterCatalogUpdatedAt = Date()
+        // The account-filtered list rides along: what the privacy page on
+        // openrouter.ai still lets this key reach. No key → unknown.
+        if let key {
+            openRouterAllowedModels = try? await OpenAICompatibleProvider.openRouter.fetchUserModelIDs(apiKey: key)
+        } else {
+            openRouterAllowedModels = nil
+        }
+    }
+
+    /// nil = unknown (no key or not fetched yet); false = the catalog lists
+    /// the model but the account's privacy settings leave it no endpoint.
+    func openRouterModelAllowed(_ slug: String) -> Bool? {
+        guard let allowed = openRouterAllowedModels else { return nil }
+        let id = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, openRouterCatalog[id] != nil else { return nil }
+        return allowed.contains(id)
     }
 
     /// Loads the OpenRouter catalog in the background if it hasn't been fetched
     /// yet, so the manual model field can validate slugs. Best-effort, silent.
     func autoLoadOpenRouterCatalogIfNeeded() {
-        guard openRouterCatalog.isEmpty else { return }
+        // Empty, written before the browser existed (no descriptions), or a
+        // week old — the catalog moves daily.
+        let stale = openRouterCatalogUpdatedAt.map { Date().timeIntervalSince($0) > 7 * 86_400 } ?? true
+        let thin = openRouterCatalog.values.first.map { $0.name == nil } ?? false
+        guard openRouterCatalog.isEmpty || stale || thin else { return }
         Task { try? await refreshOpenRouterCatalog() }
     }
 
@@ -1189,6 +1245,17 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
             return ollamaCatalog[model]?.supportsVision ?? true
         }
         return provider.supportsVision
+    }
+
+    /// Whether a document can go to the model as a file (OpenAI's Files API;
+    /// OpenRouter models whose catalog lists "file" input). Everyone else gets
+    /// the text extracted on this Mac.
+    func modelSupportsNativeDocuments(provider: ProviderID, model: String) -> Bool {
+        switch provider {
+        case .openai: return true
+        case .openrouter: return openRouterModelInfo(for: model)?.supportsFiles ?? false
+        default: return false
+        }
     }
 
     /// Whether the model supports function tools (web search). Per-model for

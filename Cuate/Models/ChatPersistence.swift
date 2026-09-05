@@ -84,10 +84,18 @@ final class SDAttachment {
     var sortIndex: Int
     /// Cached OCR extraction of the payload (optional column — see ChatAttachment.ocrText).
     var ocrText: String?
+    /// Provider-side document copy (optional columns — see ChatAttachment).
+    var remoteFileID: String?
+    var remoteProvider: String?
+    var remoteExpiresAt: Date?
+    var pageCount: Int?
+    var contentHash: String?
     var message: SDMessage?
 
     init(id: UUID, filename: String, mimeType: String, base64: String,
-         fileURLString: String?, sortIndex: Int, ocrText: String? = nil) {
+         fileURLString: String?, sortIndex: Int, ocrText: String? = nil,
+         remoteFileID: String? = nil, remoteProvider: String? = nil,
+         remoteExpiresAt: Date? = nil, pageCount: Int? = nil, contentHash: String? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
@@ -95,6 +103,11 @@ final class SDAttachment {
         self.fileURLString = fileURLString
         self.sortIndex = sortIndex
         self.ocrText = ocrText
+        self.remoteFileID = remoteFileID
+        self.remoteProvider = remoteProvider
+        self.remoteExpiresAt = remoteExpiresAt
+        self.pageCount = pageCount
+        self.contentHash = contentHash
     }
 }
 
@@ -114,7 +127,10 @@ extension ChatMessage {
             SDAttachment(
                 id: attachment.id, filename: attachment.filename, mimeType: attachment.mimeType,
                 base64: attachment.base64, fileURLString: attachment.fileURLString, sortIndex: index,
-                ocrText: attachment.ocrText
+                ocrText: attachment.ocrText,
+                remoteFileID: attachment.remoteFileID, remoteProvider: attachment.remoteProvider,
+                remoteExpiresAt: attachment.remoteExpiresAt, pageCount: attachment.pageCount,
+                contentHash: attachment.contentHash
             )
         }
         return row
@@ -143,7 +159,9 @@ extension SDMessage {
     func toStruct() -> ChatMessage {
         let atts = attachments
             .sorted { $0.sortIndex < $1.sortIndex }
-            .map { ChatAttachment(filename: $0.filename, mimeType: $0.mimeType, base64: $0.base64, id: $0.id, fileURLString: $0.fileURLString, ocrText: $0.ocrText) }
+            .map { ChatAttachment(filename: $0.filename, mimeType: $0.mimeType, base64: $0.base64, id: $0.id, fileURLString: $0.fileURLString, ocrText: $0.ocrText,
+                                  remoteFileID: $0.remoteFileID, remoteProvider: $0.remoteProvider, remoteExpiresAt: $0.remoteExpiresAt, pageCount: $0.pageCount,
+                                  contentHash: $0.contentHash) }
         return ChatMessage(
             id: id, text: text, isUser: isUser, timestamp: timestamp,
             messageType: ChatMessage.MessageType(rawValue: typeRaw) ?? .text,
@@ -354,17 +372,21 @@ nonisolated enum ChatPersistence {
     }
 
     private static func reconcileAttachments(of row: SDMessage, with message: ChatMessage, in ctx: ModelContext) {
-        // Identity AND ocrText: a lazily cached OCR extraction mutates an
-        // attachment in place — an ID-only comparison would never persist it.
-        let rowState = Set(row.attachments.map { "\($0.id.uuidString)|\($0.ocrText ?? "")" })
-        let msgState = Set(message.attachments.map { "\($0.id.uuidString)|\($0.ocrText ?? "")" })
+        // Identity AND the lazily written fields (OCR text, remote file id,
+        // page count): they mutate an attachment in place — an ID-only
+        // comparison would never persist them.
+        let rowState = Set(row.attachments.map { "\($0.id.uuidString)|\($0.ocrText ?? "")|\($0.remoteFileID ?? "")|\($0.pageCount ?? -1)" })
+        let msgState = Set(message.attachments.map { "\($0.id.uuidString)|\($0.ocrText ?? "")|\($0.remoteFileID ?? "")|\($0.pageCount ?? -1)" })
         guard rowState != msgState else { return }
         for attachment in row.attachments { ctx.delete(attachment) }
         row.attachments = message.attachments.enumerated().map { index, attachment in
             SDAttachment(
                 id: attachment.id, filename: attachment.filename, mimeType: attachment.mimeType,
                 base64: attachment.base64, fileURLString: attachment.fileURLString, sortIndex: index,
-                ocrText: attachment.ocrText
+                ocrText: attachment.ocrText,
+                remoteFileID: attachment.remoteFileID, remoteProvider: attachment.remoteProvider,
+                remoteExpiresAt: attachment.remoteExpiresAt, pageCount: attachment.pageCount,
+                contentHash: attachment.contentHash
             )
         }
     }
@@ -427,6 +449,7 @@ nonisolated enum ChatPersistence {
         queue.async {
             let ctx = ModelContext(container)
             guard let convo = fetchConversation(key: key, in: ctx) else { return }
+            var remoteIDs: [String] = []
             for row in convo.messages {
                 if let s = row.audioURLString, let url = SDMessage.resolveAudioURL(s) {
                     try? FileManager.default.removeItem(at: url)
@@ -435,10 +458,33 @@ nonisolated enum ChatPersistence {
                     if let path = attachment.fileURLString {
                         try? FileManager.default.removeItem(at: ChatAttachment.resolveURL(path))
                     }
+                    if let remote = attachment.remoteFileID { remoteIDs.append(remote) }
                 }
             }
+            RemoteFileJanitor.enqueue(provider: .openai, fileIDs: remoteIDs)
             ctx.delete(convo) // cascades to messages + attachments
             try? ctx.save()
+        }
+    }
+
+    // MARK: Startup retention pass (across ALL conversations)
+
+    /// The media retention rule over EVERY conversation. `load` prunes only
+    /// the conversation being opened, so a preset chat left unopened kept
+    /// its attachments — files, cached text, provider-side ids — past the
+    /// window. Runs at launch, before the orphan sweep (which then removes
+    /// whatever files the prune unreferenced).
+    static func applyRetentionToAllConversations(mediaExpiredText: String) {
+        queue.async {
+            let ctx = ModelContext(container)
+            let keys = ((try? ctx.fetch(FetchDescriptor<SDConversation>())) ?? []).map { $0.key }
+            var prunedCount = 0
+            for key in keys where applyStoreRetention(key: key, in: ctx, mediaExpiredText: mediaExpiredText) {
+                prunedCount += 1
+            }
+            if prunedCount > 0 {
+                Diagnostics.log("files", "retention sweep pruned media in \(prunedCount) conversation(s)")
+            }
         }
     }
 
@@ -552,6 +598,7 @@ nonisolated enum ChatPersistence {
         }
         guard let rows = try? ctx.fetch(FetchDescriptor(predicate: predicate)) else { return false }
         var pruned = false
+        var remoteIDs: [String] = []
         for row in rows {
             if let urlString = row.audioURLString, let url = SDMessage.resolveAudioURL(urlString) {
                 try? FileManager.default.removeItem(at: url)
@@ -563,6 +610,9 @@ nonisolated enum ChatPersistence {
                     if let path = attachment.fileURLString {
                         try? FileManager.default.removeItem(at: ChatAttachment.resolveURL(path))
                     }
+                    // Uploaded the same day as the local copy, so the server
+                    // expiry lands now anyway — the delete is a courtesy.
+                    if let remote = attachment.remoteFileID { remoteIDs.append(remote) }
                     ctx.delete(attachment)
                 }
                 row.attachments = []
@@ -571,6 +621,7 @@ nonisolated enum ChatPersistence {
             }
         }
         if pruned { try? ctx.save() }
+        RemoteFileJanitor.enqueue(provider: .openai, fileIDs: remoteIDs)
         return pruned
     }
 
@@ -585,6 +636,7 @@ nonisolated enum ChatPersistence {
         queue.async {
             let ctx = ModelContext(container)
             guard let convo = fetchConversation(key: key, in: ctx) else { return }
+            var remoteIDs: [String] = []
             for row in convo.messages {
                 if let urlString = row.audioURLString, let url = SDMessage.resolveAudioURL(urlString) {
                     try? FileManager.default.removeItem(at: url)
@@ -593,8 +645,37 @@ nonisolated enum ChatPersistence {
                     if let path = attachment.fileURLString {
                         try? FileManager.default.removeItem(at: ChatAttachment.resolveURL(path))
                     }
+                    if let remote = attachment.remoteFileID { remoteIDs.append(remote) }
                 }
             }
+            // The whole conversation goes: every provider-side copy with it.
+            RemoteFileJanitor.enqueue(provider: .openai, fileIDs: remoteIDs)
+        }
+    }
+
+    /// Provider-side copies released by rows the store is about to drop.
+    /// With `checkReferences` a copy still referenced by another row of the
+    /// same conversation (a chip re-attach shares the id) is kept; a
+    /// conversation wipe passes false. Best-effort — the server expiry set
+    /// at upload is the backstop.
+    static func releaseRemoteFiles(of attachments: [ChatAttachment], checkReferences: Bool = true) {
+        let candidates = attachments.filter { $0.isDocument && ($0.remoteFileID ?? "").isEmpty == false }
+        guard !candidates.isEmpty else { return }
+        let excluded = Set(candidates.map { $0.id })
+        queue.async {
+            let ctx = ModelContext(container)
+            var ids: [String] = []
+            for attachment in candidates {
+                guard let remote = attachment.remoteFileID else { continue }
+                if checkReferences {
+                    let wanted: String? = remote
+                    let predicate = #Predicate<SDAttachment> { $0.remoteFileID == wanted }
+                    let rows = (try? ctx.fetch(FetchDescriptor(predicate: predicate))) ?? []
+                    if rows.contains(where: { !excluded.contains($0.id) }) { continue }
+                }
+                ids.append(remote)
+            }
+            RemoteFileJanitor.enqueue(provider: .openai, fileIDs: ids)
         }
     }
 

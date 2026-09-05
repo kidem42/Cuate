@@ -39,15 +39,17 @@ Then add a key for at least one provider in **Settings → API Keys** and press 
 | Dictation (types where the cursor is) | ⌥Space |
 | Dictation with translation | ⌥⇧Space |
 | World Time panel | ⌥⇧T |
+| LayoutFix: convert the selection (or the last word) | ⌃⌥F |
+| LayoutFix: smart fix through the model | ⌃⌥G |
 | Close the panel | Esc |
 
-All of them are configurable in Settings → General.
+All of them are configurable: the app hotkeys in Settings → General, the addon ones in their own tabs.
 
 ## What it does
 
 **Chat with any model.** OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, Kimi and OpenRouter (any model by slug); model lists come live from each provider's API. Or run models locally through **Ollama** — free, offline, no key — with a built-in console to download, delete, load and unload them without the terminal. A master switch can disable cloud providers entirely.
 
-**Talk instead of typing.** Speech-to-text via Mistral (Voxtral), OpenAI or Deepgram. System-wide dictation types your words into any text field as you speak, and can translate on the fly.
+**Talk instead of typing.** Speech-to-text via Mistral (Voxtral), OpenAI or Deepgram. System-wide dictation types your words into any text field phrase by phrase as you speak (over Deepgram it streams live, words landing while you talk), optionally cleaned up or translated on the fly by a small model of the provider you pick in Settings → Voice.
 
 **Feed it your screen.** Screenshots (full or area) go straight into the conversation, selected text arrives as an editable quote, and OCR extracts text from any image — on-device and free by default (Apple Vision), or through Mistral OCR for layout-aware Markdown.
 
@@ -73,11 +75,15 @@ Two addons are large enough to have their own sections: [Hermes Agent](#hermes-a
 <summary><b>The details</b> — attachments, presets, artifacts, the transcript engine</summary>
 
 - **Attachments** — up to 5 images per message by any route: paperclip, ⌘V, drag & drop, screenshot hotkeys; HEIC/TIFF converted automatically. Models without vision get each image OCR'd into text.
+- **Documents** — PDF, Word, PowerPoint, Excel and text files as attachments (up to 3 per message). OpenAI reads them natively through its Files API; every other provider gets the text extracted on the Mac (PDFKit, Apple Vision for scans). After the first turn the model opens a document on demand through a `read_document` tool instead of re-reading it every turn; identical files are recognized by content and never uploaded twice; everything expires with the chat's 15-day media window. Details: [docs/documents-in-chat.md](docs/documents-in-chat.md).
+- **OpenRouter, one key for everything** — with only an OpenRouter key the model searches the web and reads pages through OpenRouter's own server tools (no Brave key), takes documents, and is picked from the whole catalog in an in-app browser with search, filters, descriptions and prices; costs come from OpenRouter's exact per-request charge. Details: [docs/openrouter.md](docs/openrouter.md).
 - **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its own isolated chat with separate history and context.
 - **Artifacts** — a complete HTML page or Markdown document arrives as a compact card; the preview window gives a live WKWebView, a Code tab, copy, save and open-in-browser. Ask for changes and the revision arrives as a new card while earlier versions stay openable.
 - **Terminal commands** — shell commands in answers get a ▶ button: by default it opens Terminal with the command typed in and you press Enter; an opt-in mode runs it immediately.
 - **Transcript engine** — the message list is an AppKit scroll engine with row-level updates: streamed replies grow smoothly without re-rendering the list, auto-follow sticks to the bottom, and scrolling up to read never gets yanked back.
-- **Interface** — light/dark/system themes, English, Spanish and Russian, launch at login.
+- **Interface** — ten panel themes (the Liquid Glass default, Blueprint, Terminal, Synthwave, Sakura, Pastel, Halloween, Día de Muertos, Yule, Aurora), each with light and dark palettes and a system/light/dark appearance mode; seasonal themes switch on by themselves for Halloween, Día de Muertos and Yule and step back when you pick a theme yourself. English, Spanish and Russian, launch at login, a first-run tour reopenable from Settings.
+- **Chat files** — a folder button in the header lists everything the conversation holds: the files you attached (with how long the chat still keeps them), the HTML and Markdown documents the model produced, and the Plaud recordings it touched.
+- **Diagnostics** — an opt-in local log with a main-thread hang watchdog; "Export Logs" zips it into Downloads and nothing leaves the Mac otherwise.
 
 </details>
 
@@ -87,7 +93,7 @@ A [Hermes agent](https://github.com/NousResearch/hermes-agent) (Nous Research) i
 
 The agent stays a black box with its own configuration — Cuate never injects prompts, tools or model settings into it.
 
-**In the chat.** The agent appears as a role in the prompt switcher, next to your presets. Every gateway session opens as **its own conversation** with its own history and streaming, so a long task in one session keeps running while you talk in another. Typing `/` autocompletes the agent's **skills**; a composer control switches the session's **model and reasoning effort**; a message typed mid-turn reaches the working agent instead of waiting for it to finish.
+**In the chat.** The agent appears as a role in the prompt switcher, next to your presets. Every gateway session opens as **its own conversation** with its own history and streaming, so a long task in one session keeps running while you talk in another. Typing `/` autocompletes the agent's **skills**; a composer control switches the session's **model and reasoning effort**; a message typed mid-turn reaches the working agent as an addition to the task in progress instead of waiting for it to finish — and one the agent finished before reading is sent again on its own.
 
 **While it works.** Tool runs appear live in the status pill and stay as a collapsible step journal — expand a step for the command, its output, exit code and touched paths. A context gauge shows how full the model's window actually is, and clicking it compacts the conversation on the agent's side.
 
@@ -115,7 +121,7 @@ A [Plaud](https://www.plaud.ai) recorder captures meetings and calls; its app tu
 
 ## Android
 
-A native Kotlin/Compose companion app shares the same multi-provider chat, voice, OCR, image tools, artifacts and cost tracking, and connects to the same Hermes agent — see [`android/`](android/README.md).
+A native Kotlin/Compose companion app shares the same multi-provider chat, voice, OCR, documents, image tools, artifacts and cost tracking, and connects to the same Hermes agent — see [`android/`](android/README.md).
 
 ## Build from source
 
@@ -136,24 +142,45 @@ SKIP_BUILD=1 ./scripts/make-dmg.sh # repackage without rebuilding
 
 The script builds a universal Release (arm64 + x86_64), signs with the "Cuate Signing" self-signed certificate (ad-hoc if absent — the stable identity keeps TCC permissions across updates), and produces `build/Cuate-<version>.dmg`. No external tools required.
 
+Contract tests (the text formats the app shares with the Hermes agent and the Android app, the document pre-flight, markdown lists) compile standalone with `swiftc` and need no Xcode scheme:
+
+```bash
+./scripts/test-attach-note.sh
+```
+
 <details>
 <summary>Project layout</summary>
 
 ```text
 Cuate/
-├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots, terminal runner
+├── App/          # app entry, floating panel, hotkeys, dictation, selection capture, screenshots, terminal runner, localization
 ├── Addons/       # self-contained addons (LayoutFix, ImageAddon, CalendarAddon, WorldTimeAddon, HermesAddon, PlaudAddon, AgentGateway core)
-├── Diagnostics/  # in-app logging and hang watchdog
-├── Providers/    # LLM/STT/OCR/search clients, settings, Keychain key store
-├── Models/       # chat data models
-└── Views/        # SwiftUI: chat window, settings, onboarding, voice UI
+├── Diagnostics/  # opt-in logging and the hang watchdog
+├── Providers/    # LLM/STT/OCR/search clients, documents, settings, Keychain key store, the chat turn (ChatService)
+├── Models/       # chat data models, SwiftData persistence, spend ledger
+├── Resources/    # bundled mermaid renderer
+└── Views/        # SwiftUI: chat window, settings, onboarding, themes, voice UI
     └── Transcript/  # AppKit transcript engine
 android/          # Android companion app (Kotlin/Compose) — own README and build script
-docs/             # architecture reviews, setup guides, tech debt
-scripts/          # make-dmg.sh and helpers
+hermes-plugins/   # tools installed into a Hermes agent (Plaud)
+shared/fixtures/  # JSON fixtures for the cross-platform text contracts
+design/           # brand system and onboarding mockups
+docs/             # the architecture map, playbooks, feature docs, setup guides
+scripts/          # make-dmg.sh, contract tests, the LayoutFix table generator
+AGENTS.md         # working notes for coding agents (conventions, build, where things are)
 ```
 
 </details>
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the map of every subsystem, its seams and invariants; start here before changing anything.
+- [docs/provider-integration-playbook.md](docs/provider-integration-playbook.md) — adding an LLM provider, from the enum to the Costs tab.
+- [docs/addon-tool-playbook.md](docs/addon-tool-playbook.md) — giving the model a new client-side tool.
+- [docs/THEMING-CHECKLIST.md](docs/THEMING-CHECKLIST.md) — adding a theme.
+- [docs/documents-in-chat.md](docs/documents-in-chat.md) — how document attachments work across providers.
+- [docs/plaud-addon.md](docs/plaud-addon.md), [docs/hermes-vps-setup.md](docs/hermes-vps-setup.md), [docs/ImageAddon-TZ.md](docs/ImageAddon-TZ.md) — the addons with a document of their own; LayoutFix and ImageAddon also carry a README inside their folders.
+- [docs/chat-architecture-review.md](docs/chat-architecture-review.md) — the historical audit of the chat subsystem and the per-cycle notes that followed it.
 
 ## Privacy
 

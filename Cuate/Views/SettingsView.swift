@@ -339,6 +339,27 @@ struct SettingsView: View {
                     .tag(provider)
                 }
             }
+            .help(ProviderCapabilityHints.summary(for: settings.chatProvider))
+            // What the selected provider can take — documents differ the
+            // most between providers, so that line sits right under the picker.
+            Text(ProviderCapabilityHints.documentsLine(for: settings.chatProvider))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if settings.chatProvider == .openrouter {
+                // OpenRouter's server tools instead of Brave / local fetch:
+                // one key, a little more per search, no other setup.
+                Toggle(L("or.tools.search"), isOn: $settings.openRouterWebSearch)
+                    .help(L("or.tools.searchHelp"))
+                Toggle(L("or.tools.fetch"), isOn: $settings.openRouterWebFetch)
+                    .help(L("or.tools.fetchHelp"))
+                Toggle(L("or.zdrOnly"), isOn: $settings.openRouterZDROnly)
+                    .help(L("or.zdrOnlyHelp"))
+                Text(L("or.tools.note"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if settings.chatProvider.usesManualModelEntry {
                 OpenRouterModelField(settings: settings)
@@ -491,6 +512,7 @@ struct SettingsView: View {
                 Text(provider.displayName)
             }
             .frame(width: 150, alignment: .leading)
+            .help(ProviderCapabilityHints.summary(for: provider))
 
             if let masked = maskedKeys[provider] ?? nil {
                 HStack(spacing: 6) {
@@ -1716,6 +1738,8 @@ private struct OpenRouterModelField: View {
     @ObservedObject var settings: AppSettings
     @State private var text: String = ""
     @State private var hoveringSuggestions = false
+    @State private var showBrowser = false
+    @State private var refreshingCatalog = false
     @FocusState private var focused: Bool
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1753,13 +1777,41 @@ private struct OpenRouterModelField: View {
             // Capabilities of a recognized model, or a "not found" caption.
             if let info {
                 capabilityChips(info)
+                if settings.openRouterModelAllowed(trimmed) == false {
+                    // In the catalog, but the account's privacy page leaves
+                    // it no endpoint — the request would fail with a 503.
+                    Text(L("or.notAllowed"))
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else if !trimmed.isEmpty, settings.isOpenRouterCatalogLoaded {
                 Text(L("or.notFound"))
                     .font(.caption)
                     .foregroundColor(.orange)
             }
 
-            HStack {
+            HStack(spacing: 10) {
+                // The in-app catalog browser: search, filters, descriptions,
+                // prices — no trip to the website.
+                Button(L("or.browserOpen")) { showBrowser = true }
+                    .font(.caption)
+                    .disabled(!settings.isOpenRouterCatalogLoaded)
+                Button {
+                    refreshingCatalog = true
+                    Task {
+                        try? await settings.refreshOpenRouterCatalog()
+                        refreshingCatalog = false
+                    }
+                } label: {
+                    if refreshingCatalog {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(L("or.refresh")).font(.caption)
+                    }
+                }
+                .disabled(refreshingCatalog)
+                .help(catalogUpdatedCaption)
                 if let url = settings.chatProvider.modelCatalogURL {
                     Link(destination: url) {
                         Text(L("or.browse")).font(.caption)
@@ -1771,6 +1823,12 @@ private struct OpenRouterModelField: View {
                     Text(L("chat.addKeyFirst"))
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+            }
+            .sheet(isPresented: $showBrowser) {
+                OpenRouterModelBrowser(settings: settings) { slug in
+                    commit(slug)
+                    showBrowser = false
                 }
             }
 
@@ -1787,6 +1845,14 @@ private struct OpenRouterModelField: View {
         .onChange(of: text) { _, newValue in
             settings.setSelectedModel(newValue.trimmingCharacters(in: .whitespacesAndNewlines), for: .openrouter)
         }
+    }
+
+    private var catalogUpdatedCaption: String {
+        guard let at = settings.openRouterCatalogUpdatedAt else { return L("or.refreshHelp") }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return String(format: L("or.updatedAt"), formatter.string(from: at))
     }
 
     @ViewBuilder
@@ -1810,6 +1876,7 @@ private struct OpenRouterModelField: View {
     private func capabilityChips(_ info: ModelInfo) -> some View {
         HStack(spacing: 6) {
             if info.supportsVision { chip(L("cap.vision")) }
+            if info.supportsFiles == true { chip(L("cap.documents")) }
             if info.supportsTools { chip(L("cap.tools")) }
             if info.supportsReasoning { chip(L("cap.reasoning")) }
         }

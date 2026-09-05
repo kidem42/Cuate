@@ -110,6 +110,12 @@ data class AttachmentEntity(
      * "attach pixels" window) — retries never re-pay the OCR call.
      */
     val ocrText: String?,
+    /** Documents: PDF page count, content hash (dedup), provider-side copy. */
+    @ColumnInfo(defaultValue = "NULL") val pageCount: Int? = null,
+    @ColumnInfo(defaultValue = "NULL") val contentHash: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val remoteFileId: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val remoteProvider: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val remoteExpiresAt: Long? = null,
 )
 
 @Dao
@@ -196,6 +202,13 @@ interface ChatDao {
     @Query("UPDATE attachments SET ocrText = :ocrText WHERE id = :id")
     suspend fun setAttachmentOCR(id: String, ocrText: String)
 
+    @Query("UPDATE attachments SET remoteFileId = :fileId, remoteProvider = :provider, remoteExpiresAt = :expiresAt WHERE id = :id")
+    suspend fun setAttachmentRemote(id: String, fileId: String?, provider: String?, expiresAt: Long?)
+
+    /** Provider-side copies held by a conversation — released when it goes. */
+    @Query("SELECT remoteFileId FROM attachments WHERE remoteFileId IS NOT NULL AND messageId IN (SELECT id FROM messages WHERE conversationId = :conversationId)")
+    suspend fun remoteFileIds(conversationId: String): List<String>
+
     /** File paths of every attachment in a conversation (for cleanup on delete). */
     @Query("SELECT filePath FROM attachments WHERE messageId IN (SELECT id FROM messages WHERE conversationId = :conversationId)")
     suspend fun attachmentPaths(conversationId: String): List<String>
@@ -207,7 +220,7 @@ interface ChatDao {
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, AttachmentEntity::class, SpendRecordEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -252,6 +265,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 4→5: document attachment columns (hand-written, same reason). */
+        private val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `pageCount` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `contentHash` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `remoteFileId` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `remoteProvider` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `remoteExpiresAt` INTEGER DEFAULT NULL")
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -259,7 +283,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // stay, or existing installs open an empty database.
                     context.applicationContext, AppDatabase::class.java, "aispotlight.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     // Pre-1.0 schema churn: rebuild rather than hand-written
                     // migrations — EXCEPT hops covered by explicit migrations
                     // above, which preserve user data.

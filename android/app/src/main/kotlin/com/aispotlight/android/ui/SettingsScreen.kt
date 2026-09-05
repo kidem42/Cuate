@@ -318,6 +318,39 @@ private fun ChatTab(settings: AppSettings) {
     Column {
         SettingsGroup(stringResource(R.string.settings_provider)) {
             item { ProviderDropdown(selected = chatProvider, onSelect = { settings.setChatProvider(it) }) }
+            // What the selected provider can take — documents differ the most
+            // between providers, so that line sits right under the picker.
+            item { SettingsFootnote(providerDocumentsHint(chatProvider)) }
+            if (chatProvider == ProviderID.OPENROUTER) {
+                // OpenRouter's server tools instead of Brave / local fetch:
+                // one key, a little more per search, no other setup.
+                item {
+                    val orSearch by settings.openRouterWebSearch.collectAsState()
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.or_tools_search),
+                        checked = orSearch,
+                        onCheckedChange = { settings.setOpenRouterWebSearch(it) },
+                    )
+                }
+                item {
+                    val orFetch by settings.openRouterWebFetch.collectAsState()
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.or_tools_fetch),
+                        checked = orFetch,
+                        onCheckedChange = { settings.setOpenRouterWebFetch(it) },
+                    )
+                }
+                item {
+                    val zdrOnly by settings.openRouterZDROnly.collectAsState()
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.or_zdr_only),
+                        checked = zdrOnly,
+                        onCheckedChange = { settings.setOpenRouterZDROnly(it) },
+                    )
+                }
+                item { SettingsFootnote(stringResource(R.string.or_zdr_only_note)) }
+                item { SettingsFootnote(stringResource(R.string.or_tools_note)) }
+            }
         }
         if (!hasKey) {
             SettingsFootnote(stringResource(R.string.settings_no_key, chatProvider.apiKeyURL), isError = true)
@@ -332,6 +365,9 @@ private fun ChatTab(settings: AppSettings) {
                     var slug by rememberSaveable(chatProvider) {
                         mutableStateOf(selectedModels[chatProvider.id] ?: "")
                     }
+                    var showBrowser by remember { mutableStateOf(false) }
+                    var refreshingCatalog by remember { mutableStateOf(false) }
+                    val catalogUpdatedAt by settings.openRouterCatalogUpdatedAt.collectAsState()
                     Column {
                         OutlinedTextField(
                             value = slug,
@@ -353,6 +389,66 @@ private fun ChatTab(settings: AppSettings) {
                                 } catch (_: Exception) { /* offline — validated on next apply */ }
                             }
                         })
+                        // The in-app catalog browser (search, filters,
+                        // descriptions, prices) and a forced refresh.
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            EclipseTextButton(stringResource(R.string.or_browser_open), onClick = { showBrowser = true })
+                            EclipseTextButton(
+                                stringResource(R.string.or_refresh),
+                                enabled = !refreshingCatalog,
+                                onClick = {
+                                    refreshingCatalog = true
+                                    scope.launch {
+                                        try {
+                                            val key = ApiKeyStore.key(ProviderID.OPENROUTER)
+                                            settings.setOpenRouterCatalog(
+                                                com.aispotlight.android.providers.OpenAICompatibleProvider
+                                                    .openRouter.fetchModelCatalog(key)
+                                            )
+                                            // The account-filtered list rides along
+                                            // (what the privacy page still allows).
+                                            settings.setOpenRouterAllowedModels(
+                                                key?.let { k ->
+                                                    try {
+                                                        com.aispotlight.android.providers.OpenAICompatibleProvider
+                                                            .openRouter.fetchUserModelIds(k)
+                                                    } catch (_: Exception) { null }
+                                                }
+                                            )
+                                        } catch (e: Exception) {
+                                            status = modelsFailedTemplate.format(e.message ?: "")
+                                        }
+                                        refreshingCatalog = false
+                                    }
+                                },
+                            )
+                        }
+                        if (settings.openRouterModelAllowed(slug) == false) {
+                            // In the catalog, but the account's privacy page
+                            // leaves it no endpoint — the request would 503.
+                            SettingsFootnote(stringResource(R.string.or_not_allowed), isError = true)
+                        }
+                        if (catalogUpdatedAt > 0) {
+                            SettingsFootnote(stringResource(
+                                R.string.or_updated_at,
+                                java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+                                    .format(java.util.Date(catalogUpdatedAt)),
+                            ))
+                        }
+                        if (showBrowser) {
+                            OpenRouterModelBrowserSheet(
+                                settings = settings,
+                                onDismiss = { showBrowser = false },
+                                onSelect = { picked ->
+                                    slug = picked
+                                    settings.setSelectedModel(chatProvider, picked)
+                                    showBrowser = false
+                                },
+                            )
+                        }
                         // Recently used slugs — one tap to switch back.
                         val history by settings.openRouterModelHistory.collectAsState()
                         if (history.isNotEmpty()) {
@@ -577,6 +673,16 @@ private fun providerKeyDesc(provider: ProviderID): String = stringResource(
         ProviderID.DEEPSEEK -> R.string.key_desc_deepseek
         ProviderID.OPENROUTER -> R.string.key_desc_openrouter
         ProviderID.KIMI -> R.string.key_desc_kimi
+    }
+) + "\n" + providerDocumentsHint(provider)
+
+/** Documents line: native on OpenAI, extracted text everywhere else. */
+@Composable
+private fun providerDocumentsHint(provider: ProviderID): String = stringResource(
+    when (provider) {
+        ProviderID.OPENAI -> R.string.cap_documents_native
+        ProviderID.OPENROUTER -> R.string.cap_documents_openrouter
+        else -> R.string.cap_documents_text
     }
 )
 

@@ -4,6 +4,8 @@
 #   - the attach note (attachments in agent chats), Swift + Kotlin, against
 #     shared/fixtures/attach-note.json;
 #   - the Plaud marker (plaud://<id>), against shared/fixtures/plaud-note.json;
+#   - the mid-turn follow-up frame (steer), Swift + Kotlin, against
+#     shared/fixtures/steer-frame.json;
 #   - markdown lists (numbering, nesting, continuations);
 #   - the Hermes Plaud plugin, including the seam with the Hermes runtime.
 # Run after touching any of those implementations or their fixtures.
@@ -26,11 +28,37 @@ xcrun swiftc -o "$tmp/plaud-note-test" \
     scripts/PlaudNoteContractTest.swift
 "$tmp/plaud-note-test" shared/fixtures/plaud-note.json
 
+echo "== Swift contract: steer frame =="
+# What a message typed mid-turn looks like on the wire (an addition to the
+# task in progress) and how the words come back out of a tool row.
+xcrun swiftc -o "$tmp/steer-test" \
+    Cuate/Addons/HermesAddon/HermesSteer.swift \
+    scripts/SteerContractTest.swift
+"$tmp/steer-test" shared/fixtures/steer-frame.json
+
 echo "== Swift contract: markdown lists =="
 # Numbering, nesting and continuation lines — the shapes a sub-list used to
 # break (every point rendering as "1.").
 xcrun swiftc -o "$tmp/md-list-test" scripts/MarkdownListContractTest.swift
 "$tmp/md-list-test"
+
+echo "== Swift contract: documents =="
+# Document attachments: the pre-flight limits and the read_document text
+# queries (page markers, ranges, search, cap) — pure files, no app target.
+xcrun swiftc -o "$tmp/document-test" \
+    Cuate/Providers/DocumentPreflight.swift \
+    Cuate/Providers/DocumentTextQuery.swift \
+    scripts/DocumentContractTest.swift
+"$tmp/document-test"
+
+echo "== Swift contract: dictation shaping =="
+# The dictation post-process: instruction in the system slot, bare transcript
+# in the user slot, and the reply shaped before it is typed (lead-ins, labels,
+# quotes, Markdown, code fences, em dashes) — pure file, no app target.
+xcrun swiftc -o "$tmp/dictation-shaping-test" \
+    Cuate/App/DictationTextShaping.swift \
+    scripts/DictationShapingContractTest.swift
+"$tmp/dictation-shaping-test"
 
 echo "== Python contract: Hermes Plaud plugin =="
 # The seam with Hermes (how it calls a handler, what it does with check_fn)
@@ -41,5 +69,6 @@ echo "== Kotlin contract =="
 # Same JDK default as android/scripts/make-apk.sh.
 export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 (cd android && ./gradlew --console=plain -q :app:testDebugUnitTest \
-    --tests 'com.aispotlight.android.hermes.AgentAttachNoteTest')
+    --tests 'com.aispotlight.android.hermes.AgentAttachNoteTest' \
+    --tests 'com.aispotlight.android.hermes.HermesSteerTest')
 echo "kotlin: all green"

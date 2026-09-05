@@ -178,6 +178,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     // Hermes agent role: active thread state, session rows for the pill
     // menu, unread badges and the files dialog.
     val isHermesActive by viewModel.isHermesActive.collectAsStateWithLifecycle()
+    val chatDocuments by viewModel.chatDocuments.collectAsStateWithLifecycle()
     val hermesUnread by viewModel.hermesUnread.collectAsStateWithLifecycle()
     val hermesEndpoint by settings.hermesEndpoint.collectAsStateWithLifecycle()
     val hermesConfigured = hermesEndpoint.isNotEmpty()
@@ -519,6 +520,18 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
                             filePicker.launch(arrayOf("*/*"))
                         },
                     )
+                    if (!isHermesActive) {
+                        // Documents the chat still holds — with "attach again"
+                        // (the desktop chat-files popover's paperclip).
+                        androidx.compose.material3.DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                            text = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_documents_title)) },
+                            onClick = {
+                                menuOpen = false
+                                viewModel.loadChatDocuments()
+                            },
+                        )
+                    }
                     if (isHermesActive) {
                         // Agent threads: the gateway owns the history — the
                         // clear action becomes new session / delete session.
@@ -760,6 +773,63 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
 
     // Files of the agent chat: agent-side paths (tap = copy) and the
     // attachments the user sent, in their own group (desktop 4.2 grouping).
+    // Documents of an ordinary chat: pages, size, days left, attach again.
+    chatDocuments?.let { docs ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { viewModel.dismissChatDocuments() },
+            title = { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_documents_title)) },
+            text = {
+                androidx.compose.foundation.lazy.LazyColumn {
+                    if (docs.isEmpty()) {
+                        item { Text(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_documents_empty)) }
+                    }
+                    items(docs.size) { index ->
+                        val doc = docs[index]
+                        val expiry = doc.attachment.remoteExpiresAt
+                            ?: (doc.attachedAt + 15L * 24 * 60 * 60 * 1000)
+                        val daysLeft = kotlin.math.ceil((expiry - System.currentTimeMillis()) / 86_400_000.0).toInt().coerceAtLeast(0)
+                        val parts = mutableListOf<String>()
+                        doc.attachment.pageCount?.let { parts.add(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.doc_pages, it)) }
+                        parts.add(com.aispotlight.android.core.DocumentPreflight.formattedSize(doc.sizeBytes))
+                        parts.add(androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.doc_days_left, daysLeft))
+                        androidx.compose.foundation.layout.Row(
+                            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
+                                Text(
+                                    doc.attachment.filename,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    parts.joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                            androidx.compose.material3.IconButton(onClick = {
+                                viewModel.reattachDocument(doc.attachment)
+                                viewModel.dismissChatDocuments()
+                            }) {
+                                Icon(
+                                    Icons.Filled.AttachFile,
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.aispotlight.android.R.string.chat_documents_attach_again),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel.dismissChatDocuments() }) {
+                    Text(androidx.compose.ui.res.stringResource(android.R.string.ok))
+                }
+            },
+        )
+    }
     chatFiles?.let { files ->
         val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
         androidx.compose.material3.AlertDialog(

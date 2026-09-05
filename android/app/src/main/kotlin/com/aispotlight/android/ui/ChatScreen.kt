@@ -1060,13 +1060,25 @@ private fun PendingAttachmentChip(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.width(6.dp))
-                Text(
-                    attachment.filename,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 140.dp),
-                )
+                Column {
+                    Text(
+                        attachment.filename,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 140.dp),
+                    )
+                    val detail = documentDetail(context, attachment)
+                    if (detail.isNotEmpty()) {
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if ((attachment.pageCount ?: 0) >= com.aispotlight.android.core.DocumentPreflight.LARGE_PDF_PAGES)
+                                MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
         }
         IconButton(
@@ -1764,16 +1776,41 @@ private fun AttachmentThumbnail(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(5.dp))
-            Text(
-                attachment.filename,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 220.dp),
-            )
+            Column {
+                Text(
+                    attachment.filename,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 220.dp),
+                )
+                val detail = documentDetail(LocalContext.current, attachment)
+                if (detail.isNotEmpty()) {
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
     }
+}
+
+/** "12 pages · 1.2 MB" (+ the large-document warning) for document chips. */
+@Composable
+private fun documentDetail(context: android.content.Context, attachment: ChatAttachment): String {
+    if (!attachment.isDocument) return ""
+    val parts = mutableListOf<String>()
+    attachment.pageCount?.let { parts.add(stringResource(R.string.doc_pages, it)) }
+    val size = remember(attachment.id) { ImageStore.file(context, attachment).length() }
+    if (size > 0) parts.add(com.aispotlight.android.core.DocumentPreflight.formattedSize(size))
+    if ((attachment.pageCount ?: 0) >= com.aispotlight.android.core.DocumentPreflight.LARGE_PDF_PAGES) {
+        parts.add(stringResource(R.string.doc_large))
+    }
+    return parts.joinToString(" · ")
 }
 
 /** Empty-chat welcome (the mac panel's greeting). */

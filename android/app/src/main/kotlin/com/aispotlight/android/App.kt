@@ -14,6 +14,11 @@ class App : Application() {
         com.aispotlight.android.core.Diagnostics.init(this, settings.diagnosticsEnabled.value)
         com.aispotlight.android.providers.PricingCatalog.init(this)
         com.aispotlight.android.data.SpendTracker.init(this)
+        // PdfBox needs its resource loader before the first PDF is opened.
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(this)
+        // Provider-side document copies whose deletion failed earlier (offline).
+        com.aispotlight.android.chat.RemoteFileJanitor.init(this)
+        com.aispotlight.android.chat.RemoteFileJanitor.drainSoon()
         sweepExpiredMedia()
     }
 

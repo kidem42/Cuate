@@ -64,6 +64,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Provider-side document copies whose deletion failed earlier (offline).
+        RemoteFileJanitor.drainSoon()
 #if DEBUG
         // Dev-only: --onboarding-shots <dir> renders the tour and exits.
         OnboardingShotExport.runIfRequested()

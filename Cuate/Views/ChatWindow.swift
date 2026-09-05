@@ -1672,7 +1672,13 @@ struct ChatWindow: View {
         .buttonStyle(PlainButtonStyle())
         .help(L("chatfiles.help"))
         .popover(isPresented: $showAgentFiles, arrowEdge: .bottom) {
+            // Documents get "attach again" here — the popover is the one
+            // place that lists everything the chat still holds.
             LocalChatFilesView.collect(from: chatStore.messages)
+                .attachAgain { attachment in
+                    reattachDocument(attachment)
+                    showAgentFiles = false
+                }
                 .environment(\.themePalette, palette)
         }
     }
@@ -2364,10 +2370,17 @@ struct ChatWindow: View {
 
     /// Mid-turn follow-up: the bubble lands in the chat as usual, the text
     /// rides into the RUNNING turn via `/steer` (the agent sees it on its
-    /// next tool-batch boundary). When the turn is already over by the time
-    /// the request lands (409) — or the gateway balks — the text goes out as
-    /// an ordinary new turn instead: the bubble is already in the store, so
-    /// the fallback only starts the stream.
+    /// next tool-batch boundary). On the wire it is framed as an ADDITION
+    /// to the cycle in progress (`HermesSteer.framed`): Hermes alone tells
+    /// the model to "adjust course", and it dropped the original task for
+    /// the follow-up (live 2026-09-04). The frame names the cycle only —
+    /// the addition itself may redirect the work.
+    /// When the turn is already over by the time the request lands (409) —
+    /// or the gateway balks — the text goes out as an ordinary new turn
+    /// instead: the bubble is already in the store, so the fallback only
+    /// starts the stream. A steer accepted but never read by the agent
+    /// comes back on `run.completed` and is replayed the same way
+    /// (`redeliverFollowUp`).
     private func performSteer(text: String) {
         let conversationKey = chatStore.conversation.storageKey
         guard let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationKey),
@@ -2376,16 +2389,17 @@ struct ChatWindow: View {
         messageText = ""
         quotedText = nil
         clearPendingAttachments()
+        let wire = HermesSteer.framed(text)
         Task { @MainActor in
             do {
                 let transport = HermesAddon.shared.transport()
                 let queued: Bool
                 switch route {
                 case .run(let runID):
-                    queued = try await transport.steerRun(runID: runID, text: text)
+                    queued = try await transport.steerRun(runID: runID, text: wire)
                     Diagnostics.log("hermes", "steer run=\(runID) accepted=\(queued)")
                 case .session:
-                    queued = try await transport.steer(sessionID: sessionID, text: text)
+                    queued = try await transport.steer(sessionID: sessionID, text: wire)
                     Diagnostics.log("hermes", "steer session=\(sessionID) queued=\(queued)")
                 }
                 guard queued else {
@@ -2548,6 +2562,10 @@ struct ChatWindow: View {
             // they arrive mid-turn, usually BEFORE any reply text exists to
             // hang them on.
             var pendingChipAttachments: [ChatAttachment] = []
+            // Agent turns: a mid-turn follow-up the agent never read
+            // (`.agentFollowUp`) — sent again as the next turn once this
+            // one is delivered.
+            var undeliveredFollowUp: String?
 
             // Persistence checkpoint: the partial reply lands in the store
             // (whose debounced save persists it) about once a second, so a
@@ -2775,6 +2793,10 @@ struct ChatWindow: View {
                             pendingAgentApproval = PendingAgentApproval(approval: approval, resolve: resolve)
                             transcriptController.scrollToBottom(animated: true)
                         }
+                    case .agentFollowUp(let text):
+                        // Replayed after delivery, never mid-stream — see
+                        // the tail of this task.
+                        undeliveredFollowUp = text
                     }
                 }
                 flush()
@@ -2880,6 +2902,10 @@ struct ChatWindow: View {
                     if isLive { pendingRetry = .chat }
                 }
             }
+            // A follow-up the agent never read goes out again once this
+            // turn is fully retired below — and only if the turn was still
+            // ours: after a stop/new-chat the user walked away from it.
+            let replay = owns && !Task.isCancelled ? undeliveredFollowUp : nil
             // Retire the slot only AFTER the delivery above put the final
             // text into the store row (a synchronous upsert when live): both
             // changes land in one UI update, so the live→store row swap is
@@ -2904,10 +2930,55 @@ struct ChatWindow: View {
                     await ChatService.compressHistoryIfNeeded(store: chatStore)
                 }
             }
+            if let replay {
+                redeliverFollowUp(replay, to: origin, after: reply?.id)
+            }
         }
         // Both writes are on the MainActor: the task body cannot have run
         // before this line, so the slot always sees its task handle.
         streamSlots[origin]?.task = task
+    }
+
+    /// Sends a mid-turn follow-up the agent never read (`pending_steer`) as
+    /// its own turn. The user's bubble is already in the chat — typed while
+    /// the agent worked, it sits ABOVE the reply that ended without it. It
+    /// moves below that reply: the gateway's transcript now holds the
+    /// follow-up after the reply, and the mirror's claim pass matches user
+    /// rows in order, so a bubble left above would come back as a second
+    /// copy below. Several steers accepted before one drain point arrive
+    /// joined (`HermesSteer.pieces`); they go out as one turn, one bubble.
+    /// Detached (the chat is off screen): the bubble is added to the chat's
+    /// file and the earlier copy stays where it is.
+    private func redeliverFollowUp(_ text: String, to origin: ChatStore.ConversationID, after replyID: UUID?) {
+        let pieces = HermesSteer.pieces(text)
+        guard !pieces.isEmpty else { return }
+        let message = ChatMessage(text: text, isUser: true)
+        if chatStore.conversation == origin, chatStore.isHistoryLoaded {
+            // The bubbles to move: our unstamped user rows of THIS turn —
+            // above the previous turn's reply, either side of this one's.
+            var remaining = pieces
+            var stale: [UUID] = []
+            for row in chatStore.messages.reversed() {
+                if !row.isUser {
+                    if row.id == replyID { continue }
+                    break
+                }
+                guard row.externalID == nil, row.messageType != .system, row.attachments.isEmpty,
+                      let index = remaining.firstIndex(of: row.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                else { continue }
+                remaining.remove(at: index)
+                stale.append(row.id)
+                if remaining.isEmpty { break }
+            }
+            for id in stale { chatStore.removeMessage(id: id) }
+            chatStore.appendNow(message)
+        } else {
+            chatStore.deliver(message, to: origin)
+        }
+        Diagnostics.log("hermes", "steer.replay pieces=\(pieces.count) chars=\(text.count)")
+        // Only the new turn goes over the wire (AgentChatService reads the
+        // last user message of the history it is handed).
+        streamAssistantReply(for: origin, history: [message])
     }
 
     // MARK: - Attachments / OCR
@@ -2932,7 +3003,7 @@ struct ChatWindow: View {
                         removeAction: clearPendingAttachments
                     )
                     HStack(alignment: .top, spacing: 8) {
-                        if imageFeaturesAllowed {
+                        if imageFeaturesAllowed, attachment.mimeType.hasPrefix("image") {
                             ImageAttachmentActionsBar(
                                 attachment: attachment,
                                 chatStore: chatStore,
@@ -2963,7 +3034,8 @@ struct ChatWindow: View {
                             }
                         }
                     }
-                    Text(String(format: L("panel.attachCount"),
+                    Text(String(format: L(pendingAttachments.contains { $0.isDocument }
+                                          ? "panel.attachCountMixed" : "panel.attachCount"),
                                 pendingAttachments.count, Self.maxPendingAttachments))
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -3029,6 +3101,7 @@ struct ChatWindow: View {
         panel.allowsMultipleSelection = true
         if settings.activeAgentRole == nil {
             panel.allowedContentTypes = [.png, .jpeg, .webP, .heic, .heif, .tiff, .gif]
+                + Self.documentContentTypes
         }
         panel.beginSheetModal(for: window) { response in
             guard response == .OK else { return }
@@ -3045,6 +3118,9 @@ struct ChatWindow: View {
         let mime = UTType(filenameExtension: url.pathExtension.lowercased())?.preferredMIMEType ?? ""
         if mime.hasPrefix("image"), pendingAttachments.count < Self.maxPendingAttachments {
             _ = attachImageFile(at: url)
+        } else if settings.activeAgentRole == nil,
+                  DocumentPreflight.mimeType(forExtension: url.pathExtension) != nil {
+            attachDocumentFile(at: url)
         } else if settings.activeAgentRole != nil {
             if !pendingAgentFilePaths.contains(url.path) {
                 pendingAgentFilePaths.append(url.path)
@@ -3070,6 +3146,97 @@ struct ChatWindow: View {
         attach(data: png, mime: "image/png",
                filename: (url.lastPathComponent as NSString).deletingPathExtension + ".png")
         return true
+    }
+
+    /// Document types the picker offers in ordinary chats (agent chats take
+    /// any file as a path). Derived from the pre-flight allowlist so the two
+    /// never disagree.
+    private static let documentContentTypes: [UTType] =
+        DocumentPreflight.mimeByExtension.keys.sorted().compactMap { UTType(filenameExtension: $0) }
+
+    /// Documents (PDF, Word, text, …) in ordinary chats: pre-flight first,
+    /// then a file-backed attachment carrying the PDF page count. A refusal
+    /// posts its reason in the chat — never a silent drop.
+    private func attachDocumentFile(at url: URL) {
+        let ext = url.pathExtension.lowercased()
+        guard let mime = DocumentPreflight.mimeType(forExtension: ext),
+              let data = try? Data(contentsOf: url) else { return }
+        var pageCount: Int?
+        var isLocked = false
+        if DocumentPreflight.isPDF(mime: mime), let info = DocumentTextService.pdfInfo(data: data) {
+            pageCount = info.pageCount
+            isLocked = info.isLocked
+        }
+        let pendingDocuments = pendingAttachments.filter { $0.isDocument }
+        let pendingBytes = pendingDocuments.reduce(0) { $0 + ($1.data?.count ?? 0) }
+        let name = url.lastPathComponent
+        let note: String?
+        switch DocumentPreflight.check(
+            ext: ext, bytes: data.count, isEncrypted: isLocked,
+            pendingDocumentCount: pendingDocuments.count, pendingDocumentBytes: pendingBytes
+        ) {
+        case .accepted:
+            note = nil
+        case .tooManyDocuments(let limit):
+            note = String(format: L("panel.docLimit"), limit)
+        case .fileTooLarge(let limit):
+            note = String(format: L("panel.docTooLarge"), name, DocumentPreflight.formattedSize(limit))
+        case .messageTooLarge(let limit):
+            note = String(format: L("panel.docMessageTooLarge"), DocumentPreflight.formattedSize(limit))
+        case .unsupportedType:
+            note = String(format: L("panel.docUnsupported"), name)
+        case .emptyFile:
+            note = String(format: L("panel.docEmpty"), name)
+        case .encrypted:
+            note = String(format: L("panel.docEncrypted"), name)
+        }
+        if let note {
+            chatStore.addMessage(text: note, isUser: false, messageType: .system)
+            return
+        }
+        var attachment = ChatAttachment.fileBacked(data: data, mimeType: mime, filename: name)
+        attachment.pageCount = pageCount
+        // Same bytes already in this chat (any name, within the retention
+        // window)? Inherit its provider-side copy and cached text — the user
+        // re-downloaded the file, not a new document.
+        let hash = ChatAttachment.sha256Hex(data)
+        attachment.contentHash = hash
+        if let twin = chatStore.documentDuplicate(hash: hash) {
+            if attachment.pageCount == nil { attachment.pageCount = twin.pageCount }
+            attachment.ocrText = twin.ocrText
+            if twin.hasLiveRemoteFile {
+                attachment.remoteFileID = twin.remoteFileID
+                attachment.remoteProvider = twin.remoteProvider
+                attachment.remoteExpiresAt = twin.remoteExpiresAt
+            }
+            Diagnostics.log("files", "dedup \(name) = \(twin.filename) remote=\(twin.hasLiveRemoteFile ? (twin.remoteFileID ?? "-") : "expired") text=\(twin.ocrText?.count ?? 0)")
+        }
+        appendPendingAttachment(attachment)
+    }
+
+    /// "Attach again" from the chat-files popover: the document joins the
+    /// next message as a fresh row with its own local copy (rows never share
+    /// files — the retention prune deletes per row) that reuses the
+    /// provider-side id, so nothing is uploaded twice.
+    private func reattachDocument(_ source: ChatAttachment) {
+        guard !pendingAttachments.contains(where: { $0.filename.lowercased() == source.filename.lowercased() }),
+              let data = source.data else { return }
+        guard pendingAttachments.filter({ $0.isDocument }).count < DocumentPreflight.maxDocumentsPerMessage else {
+            chatStore.addMessage(
+                text: String(format: L("panel.docLimit"), DocumentPreflight.maxDocumentsPerMessage),
+                isUser: false, messageType: .system)
+            return
+        }
+        var copy = ChatAttachment.fileBacked(data: data, mimeType: source.mimeType, filename: source.filename)
+        copy.pageCount = source.pageCount
+        copy.ocrText = source.ocrText
+        copy.contentHash = source.contentHash ?? ChatAttachment.sha256Hex(data)
+        if source.hasLiveRemoteFile {
+            copy.remoteFileID = source.remoteFileID
+            copy.remoteProvider = source.remoteProvider
+            copy.remoteExpiresAt = source.remoteExpiresAt
+        }
+        appendPendingAttachment(copy)
     }
 
     /// ⌘V in the composer: an image on the pasteboard becomes the pending
@@ -3434,7 +3601,19 @@ private struct PendingAttachmentThumbnail: View {
 
     var body: some View {
         Group {
-            if let image = decodedImage ?? AttachmentImageCache.cachedImage(for: attachment) {
+            if attachment.isDocument {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.08))
+                    .overlay(
+                        VStack(spacing: 3) {
+                            Image(systemName: DocumentPreflight.iconName(forFilename: attachment.filename))
+                                .font(.system(size: 18))
+                            Text((attachment.filename as NSString).pathExtension.uppercased())
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundColor(.secondary)
+                    )
+            } else if let image = decodedImage ?? AttachmentImageCache.cachedImage(for: attachment) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -3491,11 +3670,8 @@ private struct PendingAttachmentPreview: View {
                     .overlay(ThinkingEqualizer().scaleEffect(0.8))
                     .overlay(alignment: .topTrailing) { removeBadge }
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.fill")
-                        .foregroundColor(.secondary)
-                    Text(attachment.filename)
-                        .font(.callout)
+                HStack(alignment: .top, spacing: 8) {
+                    DocumentChipView(attachment: attachment)
                     removeBadge
                 }
             }

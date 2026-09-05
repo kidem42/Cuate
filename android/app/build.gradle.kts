@@ -22,8 +22,8 @@ android {
         applicationId = "com.aispotlight.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "2.9.2"
+        versionCode = 33
+        versionName = "3.0"
     }
 
     signingConfigs {
@@ -87,6 +87,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // PDF text layer for document attachments (read_document tool, the
+    // attach turn on non-native providers). Apache 2.0; brings BouncyCastle.
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     implementation("androidx.room:room-runtime:2.7.1")
     implementation("androidx.room:room-ktx:2.7.1")

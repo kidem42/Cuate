@@ -11,6 +11,7 @@ import com.aispotlight.android.core.ProviderException
 import com.aispotlight.android.core.ProviderID
 import com.aispotlight.android.core.ReasoningMode
 import com.aispotlight.android.core.TokenUsage
+import com.aispotlight.android.core.WebCitation
 import com.aispotlight.android.core.ToolCall
 import com.aispotlight.android.core.newCallID
 import kotlinx.coroutines.flow.Flow
@@ -97,13 +98,31 @@ class OpenAICompatibleProvider(
                             })
                         }
                         if (message.text.isNotEmpty()) entry.put("content", message.text)
+                        // DeepSeek's thinking mode (on by default) requires the
+                        // reasoning of a tool-calling turn to come back with it —
+                        // a 400 otherwise. Sent only there: the other compatible
+                        // providers may reject an unknown field.
+                        if (providerID == ProviderID.DEEPSEEK && !message.reasoningContent.isNullOrEmpty()) {
+                            entry.put("reasoning_content", message.reasoningContent)
+                        }
                         apiMessages.put(entry)
                     }
                     else -> {
-                        if (message.images.isEmpty()) {
+                        if (message.images.isEmpty() && message.documents.isEmpty()) {
                             apiMessages.put(JSONObject().put("role", message.role.raw).put("content", message.text))
                         } else {
                             val parts = JSONArray()
+                            // OpenRouter file parts (the PDF itself, base64)
+                            // before the text, like the other native paths.
+                            for (document in message.documents) {
+                                val base64 = document.inlineBase64 ?: continue
+                                parts.put(JSONObject().apply {
+                                    put("type", "file")
+                                    put("file", JSONObject()
+                                        .put("filename", document.filename)
+                                        .put("file_data", "data:${document.mimeType};base64,$base64"))
+                                })
+                            }
                             if (message.text.isNotEmpty()) {
                                 parts.put(JSONObject().put("type", "text").put("text", message.text))
                             }
@@ -149,6 +168,42 @@ class OpenAICompatibleProvider(
                     put("reasoning", JSONObject()
                         .put("effort", if (options.reasoning == ReasoningMode.FAST) "low" else "high"))
                 }
+                if (providerID == ProviderID.OPENROUTER && options.serverTools.isNotEmpty()) {
+                    // Server tools ride in the same array as our function
+                    // tools; OpenRouter runs them and hands the model the result.
+                    val all = optJSONArray("tools") ?: JSONArray()
+                    for (tool in options.serverTools) {
+                        all.put(JSONObject().apply {
+                            put("type", tool.type)
+                            if (tool.parameters.length() > 0) put("parameters", tool.parameters)
+                        })
+                    }
+                    put("tools", all)
+                }
+                if (providerID == ProviderID.OPENROUTER) {
+                    // PDF parsing engine: native for models that list file
+                    // input, else OpenRouter's free text extraction — never
+                    // the paid OCR OpenRouter picks by itself otherwise.
+                    if (messages.any { m -> m.documents.any { it.inlineBase64 != null } }) {
+                        put("plugins", JSONArray().put(JSONObject()
+                            .put("id", "file-parser")
+                            .put("pdf", JSONObject().put("engine",
+                                if (options.modelSupportsNativeDocuments) "native" else "cloudflare-ai"))))
+                    }
+                    val routing = JSONObject()
+                    if (options.denyDataCollection) routing.put("data_collection", "deny")
+                    if (options.zdrOnly) routing.put("zdr", true)
+                    if (routing.length() > 0) put("provider", routing)
+                }
+                // DeepSeek V4: thinking is on by default at effort "high".
+                // Fast → "low", Deep → "max" (top-level reasoning_effort);
+                // Auto leaves the default untouched.
+                if (providerID == ProviderID.DEEPSEEK &&
+                    options.reasoning != ReasoningMode.AUTO &&
+                    ModelCapabilities.supportsReasoningControl(ProviderID.DEEPSEEK, model)
+                ) {
+                    put("reasoning_effort", if (options.reasoning == ReasoningMode.FAST) "low" else "max")
+                }
                 // Ask for the final usage chunk (cost tracking). Sent to
                 // providers that document `stream_options`: DeepSeek, OpenRouter,
                 // Kimi. Mistral is excluded until verified live — unknown
@@ -191,6 +246,21 @@ class OpenAICompatibleProvider(
                 val delta = choice.optJSONObject("delta") ?: return@collect
                 val content = delta.optString("content")
                 if (content.isNotEmpty()) emit(LLMStreamEvent.Text(content))
+                val reasoning = delta.optString("reasoning_content")
+                if (reasoning.isNotEmpty()) emit(LLMStreamEvent.Reasoning(reasoning))
+                // OpenRouter's server-side web search cites its sources as
+                // annotations on the streamed message.
+                delta.optJSONArray("annotations")?.let { annotations ->
+                    val cites = (0 until annotations.length()).mapNotNull { i ->
+                        val item = annotations.optJSONObject(i) ?: return@mapNotNull null
+                        if (item.optString("type") != "url_citation") return@mapNotNull null
+                        val cite = item.optJSONObject("url_citation") ?: return@mapNotNull null
+                        val url = cite.optString("url")
+                        if (url.isEmpty()) null
+                        else WebCitation(url, cite.optString("title"), cite.optString("content"))
+                    }
+                    if (cites.isNotEmpty()) emit(LLMStreamEvent.Citations(cites))
+                }
                 delta.optJSONArray("tool_calls")?.let { toolCalls ->
                     for (i in 0 until toolCalls.length()) {
                         val fragment = toolCalls.optJSONObject(i) ?: continue
@@ -231,7 +301,7 @@ class OpenAICompatibleProvider(
         val hit = u.optInt("prompt_cache_hit_tokens", -1)
         val miss = u.optInt("prompt_cache_miss_tokens", -1)
         val reasoning = u.optJSONObject("completion_tokens_details")?.optInt("reasoning_tokens") ?: 0
-        return if (hit >= 0 && miss >= 0) {
+        val base = if (hit >= 0 && miss >= 0) {
             TokenUsage(inputTokens = miss, outputTokens = completion,
                 cacheReadTokens = hit, reasoningTokens = reasoning)
         } else {
@@ -239,6 +309,33 @@ class OpenAICompatibleProvider(
             TokenUsage(inputTokens = (prompt - cached).coerceAtLeast(0), outputTokens = completion,
                 cacheReadTokens = cached, reasoningTokens = reasoning)
         }
+        // OpenRouter: the exact charge and the server-tool counters.
+        return base.copy(
+            exactCostUSD = if (u.has("cost")) u.optDouble("cost") else null,
+            serverSearchRequests = u.optJSONObject("server_tool_use")?.optInt("web_search_requests") ?: 0,
+        )
+    }
+
+    /**
+     * OpenRouter's `/models/user`: the models that still have an endpoint
+     * under the account's privacy settings and guardrails. Needs the key.
+     * Accepts both the `/models` shape (`data: [{id…}]`) and a bare id list.
+     */
+    suspend fun fetchUserModelIds(apiKey: String): Set<String> {
+        val request = requestBuilder("models/user", apiKey).build()
+        val data = HttpClient.json(request)
+        val items = try {
+            JSONObject(data).getJSONArray("data")
+        } catch (_: Exception) {
+            throw ProviderException.decoding("unexpected /models/user payload")
+        }
+        val ids = mutableSetOf<String>()
+        for (i in 0 until items.length()) {
+            val obj = items.optJSONObject(i)
+            val id = obj?.optString("id") ?: items.optString(i)
+            if (!id.isNullOrEmpty()) ids.add(id)
+        }
+        return ids
     }
 
     // MARK: - OpenAI Responses API
@@ -290,6 +387,18 @@ class OpenAICompatibleProvider(
                 }
                 else -> {
                     val parts = JSONArray()
+                    // Files first, then the text (the documented order); the
+                    // file lives on OpenAI's side, only its id travels.
+                    for (document in message.documents) {
+                        val fileId = document.remoteFileId ?: continue
+                        // `filename` belongs to inline `file_data` only — next
+                        // to `file_id` the API answers "Mutually exclusive
+                        // parameters" (Mac e2e 2026-09-04).
+                        parts.put(JSONObject().apply {
+                            put("type", "input_file")
+                            put("file_id", fileId)
+                        })
+                    }
                     if (message.text.isNotEmpty()) {
                         parts.put(JSONObject().put("type", "input_text").put("text", message.text))
                     }
@@ -458,9 +567,15 @@ class OpenAICompatibleProvider(
                 supportsVision = inputModalities.contains("image"),
                 supportsTools = params.contains("tools"),
                 supportsReasoning = params.contains("reasoning"),
+                supportsFiles = inputModalities.contains("file"),
                 supportedParameters = params,
                 promptPricePerToken = pricing?.optString("prompt")?.toDoubleOrNull(),
                 completionPricePerToken = pricing?.optString("completion")?.toDoubleOrNull(),
+                name = item.optString("name").ifEmpty { null },
+                summary = item.optString("description").ifEmpty { null },
+                contextLength = item.optInt("context_length", 0).takeIf { it > 0 },
+                maxCompletionTokens = item.optJSONObject("top_provider")?.optInt("max_completion_tokens", 0)?.takeIf { it > 0 },
+                createdAt = item.optLong("created", 0L).takeIf { it > 0 },
             ))
         }
         return catalog

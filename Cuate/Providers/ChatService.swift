@@ -37,6 +37,11 @@ enum ChatService {
         /// (and clears the matching banner). Dormant on Hermes 0.19.0 —
         /// wired for gateways that emit approval frames.
         case agentApproval(AgentApproval, resolve: @MainActor (AgentApprovalDecision) -> Void)
+        /// Agent turns: a mid-turn follow-up the agent never read (steered
+        /// in after its last tool batch — `AgentTurnEvent.undeliveredFollowUp`).
+        /// The window sends the text as the next turn once this one is
+        /// delivered; the user's bubble is already in the chat.
+        case agentFollowUp(String)
     }
 
 
@@ -94,13 +99,31 @@ enum ChatService {
         // whenever tools are possible at all.
         if settings.webSearchEnabled,
            settings.modelSupportsTools(provider: providerID, model: model) {
+            // OpenRouter's own web tools replace ours when the user left them
+            // on: one key, no Brave. They run on OpenRouter's side and mix
+            // with our function tools in the same request.
+            let serverSearch = providerID == .openrouter && settings.openRouterWebSearch
+            let serverFetch = providerID == .openrouter && settings.openRouterWebFetch
             var tools: [ToolSpec] = []
-            if BraveSearchService.isAvailable { tools.append(BraveSearchService.toolSpec) }
-            tools.append(WebFetchService.toolSpec)
+            if serverSearch {
+                options.serverTools.append(ServerTool(
+                    type: "openrouter:web_search", parameters: ["max_results": 5, "max_uses": 5]
+                ))
+            } else if BraveSearchService.isAvailable {
+                tools.append(BraveSearchService.toolSpec)
+            }
+            if serverFetch {
+                // "openrouter" is their free fetch engine; the others bill.
+                options.serverTools.append(ServerTool(
+                    type: "openrouter:web_fetch", parameters: ["engine": "openrouter", "max_uses": 5]
+                ))
+            } else {
+                tools.append(WebFetchService.toolSpec)
+            }
             options.tools = tools
             // Usage hint appended at request time — the user's editable prompt
             // stays clean; the tool's schema/description travels via the API.
-            if BraveSearchService.isAvailable {
+            if serverSearch || BraveSearchService.isAvailable {
                 systemPrompt += """
 
 
@@ -148,37 +171,70 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
             }
         }
 
+        // Documents attached earlier in this chat: the read_document tool
+        // lets the model open them on demand — only when there is something
+        // to open and the model can call tools (the addons' gate).
+        var documentTools: [ToolSpec] = []
+        if !store.conversation.isAgent,
+           settings.modelSupportsTools(provider: providerID, model: model) {
+            documentTools = DocumentToolService.toolSpecs(store: store)
+        }
+        if !documentTools.isEmpty {
+            options.tools += documentTools
+            systemPrompt += "\n\n" + DocumentToolService.systemPromptHint()
+        }
+        let hasDocumentTool = !documentTools.isEmpty
+        options.modelSupportsNativeDocuments = settings.modelSupportsNativeDocuments(provider: providerID, model: model)
+        // OpenRouter: every turn that involves a document goes only to
+        // providers that don't collect data — the user must be able to send
+        // a document without checking who serves the model this time.
+        let lastUserHasDocuments = history.last(where: \.isUser)?.attachments.contains(where: \.isDocument) ?? false
+        options.denyDataCollection = providerID == .openrouter && (hasDocumentTool || lastUserHasDocuments)
+        options.zdrOnly = providerID == .openrouter && settings.openRouterZDROnly
+
         // Snapshotted per turn: a mid-stream Settings change applies to the
         // NEXT reply, not the one already running its agent loop.
         let maxToolIterations = max(1, settings.maxToolIterations)
 
         let supportsVision = settings.modelSupportsVision(provider: providerID, model: model)
-        let initialMessages = try await buildMessages(
-            from: history,
-            providerID: providerID,
-            supportsVision: supportsVision,
-            store: store
-        )
         let provider = ProviderRegistry.provider(for: providerID)
         Diagnostics.log("chat", "turn.start provider=\(providerID.rawValue) model=\(model) history=\(history.count) tools=\(options.tools.count)")
 
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
-                var messages = initialMessages
+                // Built inside the stream: the attach-turn uploads and the
+                // local extraction report their status lines through it.
+                var messages: [LLMMessage] = []
                 var iteration = 0
                 var chunkCount = 0
                 var totalChars = 0
                 // Search results gathered this turn — handed to the UI at the
                 // end so they persist on the reply message as grounding.
                 var toolDigest = ""
+                var citedURLs = Set<String>()
                 // Token usage summed across the agent loop's model calls; text
                 // accumulated for the estimate fallback on interrupted streams.
                 var turnUsage = TokenUsage()
                 var receivedChars = 0
+                // One retry when the provider rejects a document reference:
+                // the same turn again with the document as local text.
+                var documentRetryDone = false
                 do {
+                    let preparedHistory = await uploadPendingDocuments(
+                        in: history, providerID: providerID, apiKey: apiKey, store: store
+                    ) { continuation.yield(.status($0)) }
+                    messages = try await buildMessages(
+                        from: preparedHistory,
+                        providerID: providerID,
+                        supportsVision: supportsVision,
+                        hasDocumentTool: hasDocumentTool,
+                        documentsAsText: false,
+                        store: store
+                    ) { continuation.yield(.status($0)) }
                     while true {
                         iteration += 1
                         var turnText = ""
+                        var turnReasoning = ""
                         var toolCalls: [ToolCall] = []
 
                         let stream = provider.streamChat(
@@ -188,18 +244,50 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                             options: options,
                             apiKey: apiKey
                         )
-                        for try await event in stream {
-                            switch event {
-                            case .text(let chunk):
-                                turnText += chunk
-                                chunkCount += 1
-                                totalChars += chunk.count
-                                continuation.yield(.text(chunk))
-                            case .toolCalls(let calls):
-                                toolCalls = calls
-                            case .usage(let usage):
-                                turnUsage = turnUsage.merged(with: usage)
+                        do {
+                            for try await event in stream {
+                                switch event {
+                                case .text(let chunk):
+                                    turnText += chunk
+                                    chunkCount += 1
+                                    totalChars += chunk.count
+                                    continuation.yield(.text(chunk))
+                                case .reasoning(let chunk):
+                                    // Kept for the tool loop only (DeepSeek
+                                    // wants it back); never rendered.
+                                    turnReasoning += chunk
+                                case .citations(let cites):
+                                    // Server-side search: the sources become
+                                    // the grounding digest, same as Brave.
+                                    for cite in cites where !citedURLs.contains(cite.url) {
+                                        citedURLs.insert(cite.url)
+                                        let heading = cite.title.isEmpty ? cite.url : "\(cite.title) — \(cite.url)"
+                                        toolDigest += (toolDigest.isEmpty ? "" : "\n\n")
+                                            + "\(heading)\n\(String(cite.content.prefix(400)))"
+                                    }
+                                case .toolCalls(let calls):
+                                    toolCalls = calls
+                                case .usage(let usage):
+                                    turnUsage = turnUsage.merged(with: usage)
+                                }
                             }
+                        } catch ProviderError.http(let status, let message)
+                            where !documentRetryDone && iteration == 1
+                                && (status == 400 || status == 200)
+                                && message.lowercased().contains("file")
+                                && messages.contains(where: { !$0.documents.isEmpty }) {
+                            documentRetryDone = true
+                            Diagnostics.log("files", "attach turn rejected (\(message.prefix(120))) — retrying with local text")
+                            messages = try await buildMessages(
+                                from: preparedHistory,
+                                providerID: providerID,
+                                supportsVision: supportsVision,
+                                hasDocumentTool: hasDocumentTool,
+                                documentsAsText: true,
+                                store: store
+                            ) { continuation.yield(.status($0)) }
+                            iteration = 0
+                            continue
                         }
                         receivedChars += turnText.count
 
@@ -215,7 +303,8 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                             // away, and run ONE final turn so the model must
                             // write its answer from what it already gathered.
                             Diagnostics.log("chat", "tool budget exhausted — forcing final answer")
-                            messages.append(LLMMessage(role: .assistant, text: turnText, toolCalls: toolCalls))
+                            messages.append(LLMMessage(role: .assistant, text: turnText, toolCalls: toolCalls,
+                                                       reasoningContent: turnReasoning.isEmpty ? nil : turnReasoning))
                             for call in toolCalls {
                                 messages.append(LLMMessage(
                                     role: .tool,
@@ -231,7 +320,8 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
 
                         // Record the assistant turn with its calls, execute the
                         // tools, and loop for the follow-up turn.
-                        messages.append(LLMMessage(role: .assistant, text: turnText, toolCalls: toolCalls))
+                        messages.append(LLMMessage(role: .assistant, text: turnText, toolCalls: toolCalls,
+                                                   reasoningContent: turnReasoning.isEmpty ? nil : turnReasoning))
                         for call in toolCalls {
                             Diagnostics.log("chat", "tool.call \(call.name)")
                             let result: String
@@ -274,6 +364,11 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                                 if !chips.isEmpty {
                                     continuation.yield(.attachments(chips))
                                 }
+                            } else if DocumentToolService.canHandle(call.name) {
+                                continuation.yield(.status(DocumentToolService.statusLine(for: call)))
+                                // Not in toolDigest: document text is big and
+                                // re-fetchable through the tool.
+                                result = await DocumentToolService.run(call, store: store)
                             } else {
                                 result = "Unknown tool: \(call.name)"
                             }
@@ -306,11 +401,24 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                     recordSpend(kind: .chat, providerID: providerID, model: model,
                                 usage: turnUsage, sentMessages: messages,
                                 receivedChars: receivedChars)
-                    continuation.finish(throwing: error)
+                    continuation.finish(throwing: Self.explainRoutingError(error, providerID: providerID))
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// OpenRouter answers a request no endpoint can serve under its routing
+    /// constraints (the account's privacy page, our `data_collection: deny`
+    /// on document turns, the ZDR toggle) with a bare 503 — say what to do.
+    static func explainRoutingError(_ error: Error, providerID: ProviderID) -> Error {
+        guard providerID == .openrouter, let providerError = error as? ProviderError,
+              case .http(let status, let message) = providerError else { return error }
+        let text = message.lowercased()
+        let routing = status == 503 || text.contains("routing requirements")
+            || text.contains("data policy") || text.contains("no endpoints")
+        guard routing else { return error }
+        return ProviderError.http(status: status, message: L("or.routingHint") + "\n" + message)
     }
 
     // MARK: - Spend recording
@@ -356,9 +464,24 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                 cacheReadPerToken: prompt, cacheWritePerToken: prompt
             )
         }
+        var costUSD = pricing?.cost(for: usage)
+        // OpenRouter reports the exact charge, server tools included: book
+        // it, with the search share moved to its own line so the provider
+        // total still equals what OpenRouter charged.
+        var searchShare = 0.0
+        if providerID == .openrouter, usage.serverSearchRequests > 0 {
+            searchShare = Double(usage.serverSearchRequests) * PricingCatalog.openRouterSearchPerRequest
+            SpendStore.shared.record(
+                kind: .search, provider: providerID.rawValue, model: "web_search",
+                units: Double(usage.serverSearchRequests), costUSD: searchShare, isEstimate: true
+            )
+        }
+        if providerID == .openrouter, let exact = usage.exactCostUSD {
+            costUSD = max(0, exact - searchShare)
+        }
         return SpendStore.shared.record(
             kind: kind, provider: providerID.rawValue, model: model,
-            usage: usage, costUSD: pricing?.cost(for: usage), isEstimate: isEstimate
+            usage: usage, costUSD: costUSD, isEstimate: isEstimate
         )
     }
 
@@ -371,13 +494,23 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
     /// extraction (computed lazily, persisted on the attachment) instead of a
     /// content-free note. When the selected model does not support vision
     /// (DeepSeek, or a text-only OpenRouter model), the image is run through
-    /// Mistral OCR and injected as text. `supportsVision` is resolved
-    /// per-model by the caller.
+    /// OCR and injected as text. `supportsVision` is resolved per-model by
+    /// the caller.
+    ///
+    /// Documents follow the same shape with a different fallback: the most
+    /// recent user message (the attach turn) carries them in full — as an
+    /// OpenAI file reference when one exists, else as locally extracted text
+    /// — and every older message keeps a one-line placeholder that points the
+    /// model at the read_document tool. `documentsAsText` forces the text
+    /// form (the retry after a provider rejected the reference).
     private static func buildMessages(
         from history: [ChatMessage],
         providerID: ProviderID,
         supportsVision: Bool,
-        store: ChatStore
+        hasDocumentTool: Bool,
+        documentsAsText: Bool,
+        store: ChatStore,
+        status: ((String) -> Void)? = nil
     ) async throws -> [LLMMessage] {
         let conversational = history.filter { $0.messageType != .system }
         let lastUserID = conversational.last(where: { $0.isUser })?.id
@@ -390,15 +523,25 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
         var lazyOCRBudget = 3
 
         var result: [LLMMessage] = []
+        // The attach turn's inline text, across all its documents: one
+        // message must never eat the context on its own (DeepSeek and the
+        // other non-native providers get the text inline).
+        var inlineBudget = DocumentPreflight.inlineTextCharacterCapPerMessage
+        var attachNative = 0
+        var attachInline = 0
+        var attachInlineChars = 0
         for message in conversational {
             let role: LLMMessage.Role = message.isUser ? .user : .assistant
             var text = message.text
             var images: [LLMImage] = []
+            var documents: [LLMDocument] = []
+            let imageAttachments = message.attachments.filter { !$0.isDocument }
+            let documentAttachments = message.attachments.filter { $0.isDocument }
 
-            if !message.attachments.isEmpty {
+            if !imageAttachments.isEmpty {
                 if message.id == lastUserID {
                     if supportsVision {
-                        images = message.attachments.map {
+                        images = imageAttachments.map {
                             // Downscaled copy for the wire; originals stay
                             // untouched for OCR / image-processing tracks.
                             LLMImage.forModel(mimeType: $0.mimeType, base64: $0.contentBase64)
@@ -408,14 +551,14 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                         guard OCRService.isAvailable else {
                             throw ProviderError.visionUnsupported(providerID)
                         }
-                        for attachment in message.attachments where attachment.mimeType.hasPrefix("image") {
+                        for attachment in imageAttachments where attachment.mimeType.hasPrefix("image") {
                             let ocrText = try await cachedOCRText(for: attachment, of: message, store: store)
                             text += "\n\n[Image content extracted via OCR]:\n\(ocrText)"
                         }
                     }
                 } else {
                     var extractedAny = false
-                    for attachment in message.attachments where attachment.mimeType.hasPrefix("image") {
+                    for attachment in imageAttachments where attachment.mimeType.hasPrefix("image") {
                         var extracted = attachment.ocrText
                         if extracted == nil, lazyOCRBudget > 0, OCRService.isAvailable {
                             lazyOCRBudget -= 1
@@ -432,14 +575,135 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                 }
             }
 
+            for attachment in documentAttachments {
+                let label = documentLabel(attachment)
+                if message.id == lastUserID {
+                    if providerID == .openai, !documentsAsText, attachment.hasLiveRemoteFile,
+                       let remote = attachment.remoteFileID {
+                        documents.append(LLMDocument(
+                            filename: attachment.filename, mimeType: attachment.mimeType, remoteFileID: remote
+                        ))
+                        attachNative += 1
+                    } else if providerID == .openrouter, !documentsAsText,
+                              DocumentPreflight.isPDF(mime: attachment.mimeType),
+                              let data = attachment.data, data.count <= DocumentPreflight.maxInlineFileBytes {
+                        // The PDF itself, base64, on this turn only; the engine
+                        // (native / cloudflare-ai) is the provider's call.
+                        documents.append(LLMDocument(
+                            filename: attachment.filename, mimeType: attachment.mimeType,
+                            inlineBase64: data.base64EncodedString()
+                        ))
+                        attachNative += 1
+                    } else if let extracted = await cachedDocumentText(for: attachment, of: message, store: store, status: status) {
+                        var body = extracted
+                        let cap = min(DocumentPreflight.inlineTextCharacterCap, max(0, inlineBudget))
+                        if body.count > cap {
+                            body = String(body.prefix(cap))
+                                + (hasDocumentTool
+                                    ? "\n[Truncated — the rest is available through read_document]"
+                                    : "\n[Truncated]")
+                        }
+                        inlineBudget -= body.count
+                        attachInline += 1
+                        attachInlineChars += body.count
+                        text += "\n\n[Document: \(label)]\n\(body)"
+                    } else {
+                        text += "\n\n[Document attached: \(label) — not readable by this provider]"
+                    }
+                } else {
+                    text += hasDocumentTool
+                        ? "\n[Attached document: \(label) — open it with read_document when needed]"
+                        : "\n[Attached document: \(label) — re-attach it to discuss its content]"
+                }
+            }
+
             if message.id == lastToolContextID, let toolContext = message.toolContext {
                 text += "\n\n[Web search results this answer was based on:]\n\(toolContext)"
             }
 
-            guard !text.isEmpty || !images.isEmpty else { continue }
-            result.append(LLMMessage(role: role, text: text, images: images))
+            guard !text.isEmpty || !images.isEmpty || !documents.isEmpty else { continue }
+            result.append(LLMMessage(role: role, text: text, images: images, documents: documents))
+        }
+        if attachNative + attachInline > 0 {
+            Diagnostics.log("files", "attach turn provider=\(providerID.rawValue) native=\(attachNative) inline=\(attachInline) inlineChars=\(attachInlineChars)")
         }
         return result
+    }
+
+    /// "contract.pdf, 12 pages" / "notes.docx" — for placeholders and the summary.
+    static func documentLabel(_ attachment: ChatAttachment) -> String {
+        if let pages = attachment.pageCount {
+            return "\(attachment.filename), \(pages) page\(pages == 1 ? "" : "s")"
+        }
+        return attachment.filename
+    }
+
+    /// Attach turn on OpenAI: the documents of the last user message get
+    /// their provider-side copy here, once; re-attached chips already carry
+    /// one. An upload failure degrades that document to the local text path
+    /// with a system note — the turn itself always goes out.
+    @MainActor
+    private static func uploadPendingDocuments(
+        in history: [ChatMessage],
+        providerID: ProviderID,
+        apiKey: String,
+        store: ChatStore,
+        status: (String) -> Void
+    ) async -> [ChatMessage] {
+        guard providerID == .openai,
+              let index = history.lastIndex(where: { $0.isUser }) else { return history }
+        var history = history
+        let message = history[index]
+        for (position, attachment) in message.attachments.enumerated()
+        where attachment.isDocument && !attachment.hasLiveRemoteFile {
+            guard let data = attachment.data else { continue }
+            status(String(format: L("panel.uploadingDoc"), attachment.filename))
+            do {
+                let uploaded = try await OpenAIFilesService.upload(
+                    data: data, filename: attachment.filename, mimeType: attachment.mimeType,
+                    expiresInSeconds: Config.mediaRetentionDays * 86_400, apiKey: apiKey
+                )
+                let expires = uploaded.expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? "none"
+                Diagnostics.log("files", "upload id=\(uploaded.id) bytes=\(data.count) pages=\(attachment.pageCount ?? 0) expires=\(expires)")
+                history[index].attachments[position].remoteFileID = uploaded.id
+                history[index].attachments[position].remoteProvider = providerID.rawValue
+                history[index].attachments[position].remoteExpiresAt = uploaded.expiresAt
+                store.updateAttachment(messageID: message.id, attachmentID: attachment.id) {
+                    $0.remoteFileID = uploaded.id
+                    $0.remoteProvider = providerID.rawValue
+                    $0.remoteExpiresAt = uploaded.expiresAt
+                }
+            } catch {
+                Diagnostics.log("files", "upload failed \(attachment.filename): \(error.localizedDescription.prefix(160))")
+                store.addMessage(
+                    text: String(format: L("panel.docSentAsText"), attachment.filename, error.localizedDescription),
+                    isUser: false, messageType: .system
+                )
+            }
+        }
+        return history
+    }
+
+    /// Local extraction with per-attachment persistence (the document twin of
+    /// `cachedOCRText`): computed once, written back onto the attachment.
+    @MainActor
+    private static func cachedDocumentText(
+        for attachment: ChatAttachment,
+        of message: ChatMessage,
+        store: ChatStore,
+        status: ((String) -> Void)?
+    ) async -> String? {
+        if let cached = attachment.ocrText, !cached.isEmpty { return cached }
+        guard let data = attachment.data else { return nil }
+        status?(String(format: L("panel.readingDoc"), attachment.filename))
+        let text = await DocumentTextService.extract(
+            data: data, mimeType: attachment.mimeType, ocrLanguages: DocumentTextService.ocrLanguages()
+        )
+        if let text {
+            store.updateAttachment(messageID: message.id, attachmentID: attachment.id) { $0.ocrText = text }
+        }
+        Diagnostics.log("files", "extract \(attachment.filename) chars=\(text?.count ?? 0)")
+        return text
     }
 
     /// OCR with per-attachment persistence: returns the cached extraction, or
@@ -530,10 +794,15 @@ You have a web_fetch tool: it downloads a web page and returns its readable text
                 var line = "\(message.isUser ? "User" : "Assistant"): \(message.text)"
                 // Image content would otherwise vanish from the conversation's
                 // memory the moment its message crosses the summary boundary.
-                for attachment in message.attachments {
+                for attachment in message.attachments where !attachment.isDocument {
                     if let ocr = attachment.ocrText, !ocr.isEmpty {
                         line += "\n[Attached image content: \(String(ocr.prefix(1000)))]"
                     }
+                }
+                // Documents keep their name (the notes must remember which
+                // files were discussed); their text lives behind the tool.
+                for attachment in message.attachments where attachment.isDocument {
+                    line += "\n[Attached document: \(documentLabel(attachment))]"
                 }
                 return line
             }

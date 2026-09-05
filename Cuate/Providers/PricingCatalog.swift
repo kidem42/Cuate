@@ -77,6 +77,11 @@ nonisolated enum PricingCatalog {
     /// Brave Search "Base AI" plan rate ($5 CPM). The free tier bills nothing —
     /// treat the figure as an upper-bound estimate, not an invoice.
     static let searchPerQuery = 0.005
+    /// OpenRouter's `openrouter:web_search` at engine "auto": Exa,
+    /// $0.007 per request (their pricing table, 2026-09-04). Native provider
+    /// search is passed through at the provider's rate instead — the figure
+    /// is an estimate, marked as such in the ledger.
+    static let openRouterSearchPerRequest = 0.007
 
     // MARK: Storage
 

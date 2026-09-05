@@ -93,12 +93,31 @@ struct OpenAICompatibleProvider: LLMProvider {
                     }
                 ]
                 if !message.text.isEmpty { entry["content"] = message.text }
+                // DeepSeek's thinking mode (on by default) requires the
+                // reasoning of a tool-calling turn to come back with it —
+                // a 400 otherwise. Sent only there: the other compatible
+                // providers may reject an unknown field.
+                if providerID == .deepseek, let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                    entry["reasoning_content"] = reasoning
+                }
                 apiMessages.append(entry)
             default:
-                if message.images.isEmpty {
+                if message.images.isEmpty && message.documents.isEmpty {
                     apiMessages.append(["role": message.role.rawValue, "content": message.text])
                 } else {
                     var parts: [[String: Any]] = []
+                    // OpenRouter file parts (the PDF itself, base64) before
+                    // the text, like the other native paths.
+                    for document in message.documents {
+                        guard let base64 = document.inlineBase64 else { continue }
+                        parts.append([
+                            "type": "file",
+                            "file": [
+                                "filename": document.filename,
+                                "file_data": "data:\(document.mimeType);base64,\(base64)"
+                            ]
+                        ])
+                    }
                     if !message.text.isEmpty {
                         parts.append(["type": "text", "text": message.text])
                     }
@@ -132,17 +151,42 @@ struct OpenAICompatibleProvider: LLMProvider {
             || providerID == .ollama {
             body["stream_options"] = ["include_usage": true]
         }
-        if !options.tools.isEmpty {
-            body["tools"] = options.tools.map { tool in
-                [
-                    "type": "function",
-                    "function": [
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters
-                    ]
+        var toolEntries: [[String: Any]] = options.tools.map { tool in
+            [
+                "type": "function",
+                "function": [
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters
                 ]
+            ]
+        }
+        if providerID == .openrouter {
+            // Server tools ride in the same array as our function tools;
+            // OpenRouter runs them itself and hands the model the result.
+            for tool in options.serverTools {
+                var entry: [String: Any] = ["type": tool.type]
+                if !tool.parameters.isEmpty { entry["parameters"] = tool.parameters }
+                toolEntries.append(entry)
             }
+        }
+        if !toolEntries.isEmpty {
+            body["tools"] = toolEntries
+        }
+        if providerID == .openrouter {
+            // PDF parsing engine: native for models that list file input,
+            // else OpenRouter's free text extraction — never the paid OCR,
+            // which OpenRouter would pick by itself when nothing is said.
+            if messages.contains(where: { $0.documents.contains { $0.inlineBase64 != nil } }) {
+                body["plugins"] = [[
+                    "id": "file-parser",
+                    "pdf": ["engine": options.modelSupportsNativeDocuments ? "native" : "cloudflare-ai"]
+                ]]
+            }
+            var routing: [String: Any] = [:]
+            if options.denyDataCollection { routing["data_collection"] = "deny" }
+            if options.zdrOnly { routing["zdr"] = true }
+            if !routing.isEmpty { body["provider"] = routing }
         }
         // OpenRouter accepts a reasoning-effort knob directly on chat/completions
         // (Mistral/DeepSeek do not). Only sent for models the catalog says
@@ -151,6 +195,19 @@ struct OpenAICompatibleProvider: LLMProvider {
            options.reasoning != .auto,
            options.modelSupportsReasoning {
             body["reasoning"] = ["effort": options.reasoning == .fast ? "low" : "high"]
+        }
+        // DeepSeek V4: thinking is on by default at effort "high". Fast →
+        // "low", Deep → "max" (top-level `reasoning_effort`); Auto leaves the
+        // default. Mechanical rewrites (dictation cleanup) switch thinking
+        // off entirely, the documented `thinking.type = disabled`.
+        if providerID == .deepseek,
+           ModelCapabilities.supportsReasoningControl(provider: .deepseek, model: model) {
+            if options.preferNoReasoning,
+               ModelCapabilities.supportsNoReasoning(provider: .deepseek, model: model) {
+                body["thinking"] = ["type": "disabled"]
+            } else if options.reasoning != .auto {
+                body["reasoning_effort"] = options.reasoning == .fast ? "low" : "max"
+            }
         }
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -164,6 +221,7 @@ struct OpenAICompatibleProvider: LLMProvider {
                 // Tool call deltas arrive fragmented — accumulate by index.
                 var pendingCalls: [Int: (id: String, name: String, args: String)] = [:]
                 var usage = TokenUsage()
+                var servedLogged = false
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
@@ -181,6 +239,12 @@ struct OpenAICompatibleProvider: LLMProvider {
                         if let u = json["usage"] as? [String: Any] {
                             usage = Self.parseChatCompletionsUsage(u)
                         }
+                        // OpenRouter names the upstream that served the request
+                        // — the answer to "where did my document go".
+                        if !servedLogged, let served = json["provider"] as? String, !served.isEmpty {
+                            servedLogged = true
+                            Diagnostics.log("chat", "served by \(served) deny_data_collection=\(options.denyDataCollection)")
+                        }
 
                         guard let choices = json["choices"] as? [[String: Any]],
                               let choice = choices.first else { continue }
@@ -188,6 +252,24 @@ struct OpenAICompatibleProvider: LLMProvider {
                         if let delta = choice["delta"] as? [String: Any] {
                             if let content = delta["content"] as? String, !content.isEmpty {
                                 continuation.yield(.text(content))
+                            }
+                            if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+                                continuation.yield(.reasoning(reasoning))
+                            }
+                            // OpenRouter's server-side web search cites its
+                            // sources as annotations on the streamed message.
+                            if let annotations = delta["annotations"] as? [[String: Any]] {
+                                let cites = annotations.compactMap { item -> WebCitation? in
+                                    guard item["type"] as? String == "url_citation",
+                                          let cite = item["url_citation"] as? [String: Any],
+                                          let url = cite["url"] as? String, !url.isEmpty else { return nil }
+                                    return WebCitation(
+                                        url: url,
+                                        title: cite["title"] as? String ?? "",
+                                        content: cite["content"] as? String ?? ""
+                                    )
+                                }
+                                if !cites.isEmpty { continuation.yield(.citations(cites)) }
                             }
                             if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
                                 for fragment in toolCalls {
@@ -249,6 +331,12 @@ struct OpenAICompatibleProvider: LLMProvider {
            let reasoning = details["reasoning_tokens"] as? Int {
             usage.reasoningTokens = reasoning
         }
+        // OpenRouter: the exact charge and the server-tool counters.
+        if let cost = (u["cost"] as? NSNumber)?.doubleValue { usage.exactCostUSD = cost }
+        if let tools = u["server_tool_use"] as? [String: Any],
+           let searches = tools["web_search_requests"] as? Int {
+            usage.serverSearchRequests = searches
+        }
         return usage
     }
 
@@ -299,6 +387,19 @@ struct OpenAICompatibleProvider: LLMProvider {
                 ])
             case .user:
                 var parts: [[String: Any]] = []
+                // Files first, then the text (the documented order); the
+                // file lives on OpenAI's side, only its id travels.
+                for document in message.documents {
+                    guard let fileID = document.remoteFileID else { continue }
+                    // `filename` belongs to inline `file_data` only — sent next
+                    // to `file_id` the API answers "Mutually exclusive
+                    // parameters" (e2e 2026-09-04); the uploaded file already
+                    // carries its name.
+                    parts.append([
+                        "type": "input_file",
+                        "file_id": fileID
+                    ])
+                }
                 if !message.text.isEmpty {
                     parts.append(["type": "input_text", "text": message.text])
                 }
@@ -453,6 +554,26 @@ struct OpenAICompatibleProvider: LLMProvider {
         return !excluded.contains { lower.contains($0) }
     }
 
+    /// OpenRouter's `/models/user`: the models that still have an endpoint
+    /// under the account's privacy settings and guardrails (ZDR toggles,
+    /// training opt-outs, ignored providers). Needs the key. Accepts both the
+    /// `/models` shape (`data: [{id…}]`) and a bare id list, defensively.
+    func fetchUserModelIDs(apiKey: String) async throws -> Set<String> {
+        var request = makeRequest(path: "models/user", apiKey: apiKey)
+        request.setValue("Cuate", forHTTPHeaderField: "X-Title")
+        let data = try await HTTPClient.json(request)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = json["data"] as? [Any] else {
+            throw ProviderError.decoding("unexpected /models/user payload")
+        }
+        var ids = Set<String>()
+        for item in items {
+            if let dict = item as? [String: Any], let id = dict["id"] as? String { ids.insert(id) }
+            else if let id = item as? String { ids.insert(id) }
+        }
+        return ids
+    }
+
     // MARK: - Model catalog (OpenRouter)
 
     /// Fetches the full model catalog with per-model capabilities, parsed from
@@ -486,9 +607,15 @@ struct OpenAICompatibleProvider: LLMProvider {
                 supportsVision: inputModalities.contains("image"),
                 supportsTools: params.contains("tools"),
                 supportsReasoning: params.contains("reasoning"),
+                supportsFiles: inputModalities.contains("file"),
                 supportedParameters: params,
                 promptPricePerToken: (pricing?["prompt"] as? String).flatMap(Double.init),
-                completionPricePerToken: (pricing?["completion"] as? String).flatMap(Double.init)
+                completionPricePerToken: (pricing?["completion"] as? String).flatMap(Double.init),
+                name: item["name"] as? String,
+                summary: item["description"] as? String,
+                contextLength: item["context_length"] as? Int,
+                maxCompletionTokens: (item["top_provider"] as? [String: Any])?["max_completion_tokens"] as? Int,
+                createdAt: (item["created"] as? NSNumber)?.doubleValue
             ))
         }
         return catalog
