@@ -115,7 +115,12 @@ enum HermesStreamEvent {
     /// `windowTokens` — the window the agent ACTUALLY operates with (OAuth
     /// caps included; `usage.context_window`, the second line of the Cuate
     /// gateway patch). Both gauge numbers ride the same frame.
-    case runCompleted(usage: TokenUsage, contextTokens: Int?, windowTokens: Int?)
+    /// `pendingSteer` — a follow-up steered into this run that the agent
+    /// never read: accepted after the last tool batch, and a steer only
+    /// rides a tool result (`pending_steer`, api_server turn finalizer —
+    /// sources of v0.20.1). The wire text as sent, frame included.
+    case runCompleted(usage: TokenUsage, contextTokens: Int?, windowTokens: Int?,
+                      pendingSteer: String?)
     case done
     /// Approval frames (feature-flagged; exact name pinned down in stage 6
     /// against the live gateway) and anything a future Hermes adds.
@@ -674,7 +679,10 @@ nonisolated struct HermesTransport {
                     windowTokens = window
                 }
             }
-            return .runCompleted(usage: usage, contextTokens: contextTokens, windowTokens: windowTokens)
+            let pendingSteer = (payload["pending_steer"] as? String)
+                .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            return .runCompleted(usage: usage, contextTokens: contextTokens, windowTokens: windowTokens,
+                                 pendingSteer: pendingSteer)
         case "done":
             return .done
         default:

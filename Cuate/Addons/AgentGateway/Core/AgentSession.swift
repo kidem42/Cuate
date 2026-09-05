@@ -103,6 +103,12 @@ enum AgentTurnEvent {
     case step(AgentStep)
     case approvalRequested(AgentApproval)
     case usage(TokenUsage)
+    /// A follow-up steered into the run that the agent never read: it was
+    /// accepted after the run's last tool batch, and a steer only rides a
+    /// tool result (Hermes `pending_steer` on `run.completed`). The user's
+    /// words, frame stripped. Emitted before the stream ends; the pipeline
+    /// sends the text as the next turn — its bubble is already in the chat.
+    case undeliveredFollowUp(String)
 }
 
 /// One conversation with an agent, bound to a gateway-side session. The

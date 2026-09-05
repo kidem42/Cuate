@@ -1,34 +1,5 @@
 import Foundation
 
-/// Mid-turn steers in the gateway transcript. Hermes injects a steered
-/// follow-up INTO a tool result's content, wrapped in the out-of-band
-/// markers from `agent/prompt_builder.py` — it never becomes a `user` row.
-/// The open marker's bracket text may evolve between versions, so matching
-/// is anchored on its stable prefix; the close marker is exact.
-/// Twin: `HermesChatService.steerTexts` on Android — keep in sync.
-enum HermesSteer {
-    static let openPrefix = "[OUT-OF-BAND USER MESSAGE"
-    static let closeMarker = "[/OUT-OF-BAND USER MESSAGE]"
-
-    /// The steered texts inside one tool row's content, in order.
-    static func extract(fromToolContent content: String) -> [String] {
-        guard content.contains(openPrefix) else { return [] }
-        var texts: [String] = []
-        var cursor = content.startIndex
-        while let open = content.range(of: openPrefix, range: cursor..<content.endIndex) {
-            // End of the open marker's bracket, then the payload up to close.
-            guard let bracket = content.range(of: "]", range: open.upperBound..<content.endIndex),
-                  let close = content.range(of: closeMarker, range: bracket.upperBound..<content.endIndex)
-            else { break }
-            let text = String(content[bracket.upperBound..<close.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { texts.append(text) }
-            cursor = close.upperBound
-        }
-        return texts
-    }
-}
-
 /// Mirror-mode synchronization of an agent conversation with its gateway
 /// session (AGENT-ADDONS-NOTES.md §6.1). The gateway is the source of truth:
 /// the same session grows through Telegram, CLI and cron while we are away.
@@ -259,9 +230,10 @@ enum HermesMirrorSync {
     /// result wrapped in `[OUT-OF-BAND USER MESSAGE …]` markers
     /// (`agent/prompt_builder.py`), so without extraction a follow-up sent
     /// from the phone was invisible on every other device (live 2026-08-24).
-    /// Each marker becomes a synthetic user row at the tool row's seq; the
-    /// claim pass then matches the SENDING device's local bubble by text,
-    /// exactly like an ordinary user send.
+    /// Each marker becomes a synthetic user row at the tool row's seq, its
+    /// addendum frame stripped (`HermesSteer`); the claim pass then matches
+    /// the SENDING device's local bubble by text, exactly like an ordinary
+    /// user send.
     private static func contentRows(_ gateway: [HermesTranscriptMessage]) -> [HermesTranscriptMessage] {
         gateway.flatMap { row -> [HermesTranscriptMessage] in
             if row.role == "tool" {

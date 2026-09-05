@@ -117,6 +117,11 @@ enum AgentChatService {
                                     try? await resolvingSession.resolveApproval(id: approval.id, decision: decision)
                                 }
                             })
+                        case .undeliveredFollowUp(let text):
+                            // The window replays it after delivery — a
+                            // second `session.send` from here would glue
+                            // the follow-up's reply into THIS bubble.
+                            continuation.yield(.agentFollowUp(text))
                         case .usage:
                             // NOT recorded into the spend ledger: the gateway
                             // pays for its own model calls (subscription), and

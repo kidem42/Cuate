@@ -42,6 +42,28 @@ The facts below come from the tag's sources, and each is what the client targets
   ever reaches us.
 - **There is no run listing** (`POST /v1/runs`, then `GET /v1/runs/{id}`) — a run id
   can only be learned from a stream we opened ourselves.
+- **A steer rides only a tool result.** `AIAgent.steer()` parks the text; the drain
+  appends it to the last tool result of the next completed batch (and, if it arrived
+  during a model call, to the newest tool result before the next call). Nothing is
+  delivered while the model writes its final answer: a steer accepted after the last
+  tool batch is returned by the turn finalizer as `result["pending_steer"]`, and the
+  session-chat stream carries it on **`run.completed` as `pending_steer`** (also on
+  `GET /v1/runs/{id}`), for the client to send as the next user turn — the model never
+  saw it (sources of v0.20.1: `agent/turn_finalizer.py`, `_handle_session_chat_stream`).
+  The client replays it; dropping the field lost the message (live 2026-09-04 11:30).
+- **What the model is told about a steer** (`agent/prompt_builder.py`,
+  `STEER_CHANNEL_NOTE`): the marker is "a direct instruction from the user, with the
+  same authority as their original request — adjust course accordingly". Nothing
+  says the task in progress is still the task, so the client frames every steer as an
+  addition to the cycle in progress (`HermesSteer.framed`; the wording is pinned by
+  `shared/fixtures/steer-frame.json` and names only the cycle — the addition itself
+  may redirect the work, so the frame must never claim "not a stop").
+- **Where the framed text shows.** The steer lands inside a `tool` row of the
+  transcript. `gateway/run.py` passes tool rows to the model intact and posts only its
+  own ack ("⏩ Steered into current run…") to a chat platform — Telegram never sees the
+  text or the frame. The raw transcript does: `/api/sessions/{id}/messages`, the
+  dashboard's session view, the CLI's tool output, and the Responses-API replay
+  (`function_call_output`). Cuate's mirrors strip the frame (`HermesSteer.extract`).
 - **`usage.context_tokens` is still ours** — absent from the release; the upstream PR
   (`feat(api-server): expose context fill and window in turn usage`) adds it together
   with `context_window`.
@@ -175,7 +197,9 @@ assistant.completed{"message_id":"...","content":"<FULL text>","completed":true,
                     "interrupted":false,"runtime":{...}}
 run.completed      {"completed":true,"messages":[<the whole turn transcript: assistant+tool_calls,
                     tool results, the final assistant>],
-                    "usage":{"input_tokens":35019,"output_tokens":31,"total_tokens":35050,...}}
+                    "usage":{"input_tokens":35019,"output_tokens":31,"total_tokens":35050,...},
+                    "pending_steer":"<wire text>"}   ← only when a steer was accepted after the
+                                                       last tool batch (sources v0.20.1, see above)
 done               {}
 ```
 

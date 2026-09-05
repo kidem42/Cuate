@@ -217,12 +217,27 @@ final class HermesAgentSession: AgentSession {
                             // "switch the model" hint so the user knows the
                             // way out (live 2026-07-29: quota cooldown).
                             continuation.yield(.finalText(Self.annotateGatewayFailure(content)))
-                        case .runCompleted(let usage, let contextTokens, let windowTokens):
+                        case .runCompleted(let usage, let contextTokens, let windowTokens, let pendingSteer):
                             // The agent's own effective window (OAuth caps
                             // included) — tier 0 of the gauge denominator.
                             if let windowTokens {
                                 self.settings.recordContextWindow(
                                     windowTokens, forSession: sessionID)
+                            }
+                            // A follow-up the model never saw: steered in
+                            // while it was already writing the final answer,
+                            // with no tool batch left to carry the text.
+                            // Dropping the field lost the message while its
+                            // bubble sat in the chat (live 2026-09-04 11:30:
+                            // a table sent 4 s into the reply, re-sent by
+                            // hand). Handed up unframed; the pipeline sends
+                            // it as the next turn.
+                            if let pendingSteer {
+                                let text = HermesSteer.unframed(pendingSteer)
+                                if !text.isEmpty {
+                                    Diagnostics.log("hermes", "steer.undelivered run=\(self.currentRunID ?? "?") chars=\(text.count)")
+                                    continuation.yield(.undeliveredFollowUp(text))
+                                }
                             }
                             if !usage.isEmpty {
                                 continuation.yield(.usage(usage))

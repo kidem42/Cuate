@@ -99,36 +99,6 @@ object HermesChatService {
         }
     }
 
-    /**
-     * Mid-turn steers in the transcript: Hermes injects a steered follow-up
-     * INTO a tool result's content, wrapped in the out-of-band markers from
-     * `agent/prompt_builder.py` — it never becomes a `user` row, so without
-     * extraction a follow-up sent from another device is invisible here.
-     * Matching anchors on the open marker's stable prefix (its bracket text
-     * may evolve); the close marker is exact.
-     * Twin: `HermesSteer.extract` on the desktop — keep in sync.
-     */
-    private const val STEER_OPEN_PREFIX = "[OUT-OF-BAND USER MESSAGE"
-    private const val STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
-
-    /** The steered texts inside one tool row's content, in order. */
-    fun steerTexts(content: String): List<String> {
-        if (!content.contains(STEER_OPEN_PREFIX)) return emptyList()
-        val texts = mutableListOf<String>()
-        var cursor = 0
-        while (true) {
-            val open = content.indexOf(STEER_OPEN_PREFIX, cursor)
-            if (open < 0) break
-            val bracket = content.indexOf(']', open + STEER_OPEN_PREFIX.length)
-            if (bracket < 0) break
-            val close = content.indexOf(STEER_CLOSE, bracket + 1)
-            if (close < 0) break
-            content.substring(bracket + 1, close).trim()
-                .takeIf { it.isNotEmpty() }?.let { texts.add(it) }
-            cursor = close + STEER_CLOSE.length
-        }
-        return texts
-    }
 
     /** Parses a persisted summary back into displayable rows. */
     fun parseSteps(summary: String): List<Triple<String, String, String?>> =
@@ -456,10 +426,11 @@ object HermesChatService {
                     command?.takeIf { it.isNotEmpty() }?.let { parts.add(it.replace("\n", " ").take(120)) }
                     pendingSteps.add(parts.joinToString(" · "))
                     // A mid-turn steer rides INSIDE this tool row's content —
-                    // surface it as the user bubble it really is (the sending
-                    // device's local copy is filtered as an echo). No step
-                    // reset: a steer is not a turn boundary.
-                    val steers = steerTexts(row.content)
+                    // surface it as the user bubble it really is, addendum
+                    // frame stripped (HermesSteer; the sending device's local
+                    // copy is filtered as an echo). No step reset: a steer is
+                    // not a turn boundary.
+                    val steers = HermesSteer.texts(row.content)
                         .filter { !isLocalEcho(it, row.timestampMs) }
                     if (steers.isNotEmpty()) {
                         val id = "${row.externalID(sessionID)}s"

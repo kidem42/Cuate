@@ -1,0 +1,126 @@
+{
+  "_comment": "Executable contract for the mid-turn follow-up (steer) frame — what a message typed while an agent turn runs looks like on the wire, and how the user's words are recovered from a Hermes tool row or a pending_steer. Consumed by BOTH platforms' tests (Swift: scripts/SteerContractTest.swift via scripts/test-attach-note.sh; Kotlin: android app unit test HermesSteerTest). `{frame}` in a case stands for the `frame` value below. Any change to HermesSteer.swift / HermesSteer.kt must keep every case green on both sides.",
+  "frame": "<cuate-addendum>\nThe user is adding to the request you are working on right now: take the addition below into account in the current cycle.\n</cuate-addendum>",
+  "framed": [
+    {
+      "name": "plain",
+      "text": "И по этим тоже интересует стендбай и прайм режим",
+      "wire": "{frame}\n\nИ по этим тоже интересует стендбай и прайм режим"
+    },
+    {
+      "name": "multiline",
+      "text": "первая строка\nвторая строка",
+      "wire": "{frame}\n\nпервая строка\nвторая строка"
+    }
+  ],
+  "pieces": [
+    {
+      "name": "framed-once",
+      "text": "{frame}\n\nдобавь таблицу",
+      "pieces": [
+        "добавь таблицу"
+      ]
+    },
+    {
+      "name": "two-framed-joined-by-hermes",
+      "text": "{frame}\n\nпервое дополнение\n{frame}\n\nвторое дополнение",
+      "pieces": [
+        "первое дополнение",
+        "второе дополнение"
+      ]
+    },
+    {
+      "name": "unframed-passes-through",
+      "text": "  просто текст  \n",
+      "pieces": [
+        "просто текст"
+      ]
+    },
+    {
+      "name": "unframed-then-framed",
+      "text": "с телефона без рамки\n{frame}\n\nс мака",
+      "pieces": [
+        "с телефона без рамки",
+        "с мака"
+      ]
+    },
+    {
+      "name": "unclosed-open-tag-is-literal",
+      "text": "<cuate-addendum>\nnot a frame",
+      "pieces": [
+        "<cuate-addendum>\nnot a frame"
+      ]
+    },
+    {
+      "name": "frame-only",
+      "text": "{frame}",
+      "pieces": []
+    },
+    {
+      "name": "empty",
+      "text": "\n  ",
+      "pieces": []
+    }
+  ],
+  "unframed": [
+    {
+      "name": "two-joined",
+      "text": "{frame}\n\nпервое\n{frame}\n\nвторое",
+      "words": "первое\n\nвторое"
+    },
+    {
+      "name": "legacy",
+      "text": "без рамки",
+      "words": "без рамки"
+    }
+  ],
+  "extract": [
+    {
+      "name": "one-marker-framed",
+      "content": "{\"output\":\"ok\",\"exit_code\":0}\n\n[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\n{frame}\n\nдобавь таблицу\n[/OUT-OF-BAND USER MESSAGE]",
+      "texts": [
+        "добавь таблицу"
+      ]
+    },
+    {
+      "name": "legacy-unframed-marker",
+      "content": "done\n\n[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\nсделай\n[/OUT-OF-BAND USER MESSAGE]",
+      "texts": [
+        "сделай"
+      ]
+    },
+    {
+      "name": "two-markers",
+      "content": "a\n\n[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\n{frame}\n\nодин\n[/OUT-OF-BAND USER MESSAGE]\n\n[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\nдва\n[/OUT-OF-BAND USER MESSAGE]",
+      "texts": [
+        "один",
+        "два"
+      ]
+    },
+    {
+      "name": "two-sends-in-one-marker",
+      "content": "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\n{frame}\n\nодин\n{frame}\n\nдва\n[/OUT-OF-BAND USER MESSAGE]",
+      "texts": [
+        "один",
+        "два"
+      ]
+    },
+    {
+      "name": "evolved-open-marker-text",
+      "content": "[OUT-OF-BAND USER MESSAGE from the user]\n{frame}\n\nучти\n[/OUT-OF-BAND USER MESSAGE]",
+      "texts": [
+        "учти"
+      ]
+    },
+    {
+      "name": "unclosed-marker",
+      "content": "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\n{frame}\n\nлост",
+      "texts": []
+    },
+    {
+      "name": "no-marker",
+      "content": "plain tool output",
+      "texts": []
+    }
+  ]
+}
