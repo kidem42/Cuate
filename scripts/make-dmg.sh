@@ -83,6 +83,105 @@ let dir = CommandLine.arguments[1]
 let version = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : ""
 let W = 600.0, H = 400.0
 
+// "Eclipse" design: a near-black sky with star dust, a warm corona behind the
+// app icon (Finder position {150, 190}), a dotted trail of growing dots toward
+// the Applications folder ({450, 190}) and the quarantine command in a
+// terminal-style chip. Colors follow the app icon and the Café theme accent.
+func hex(_ h: UInt32, _ a: Double = 1) -> NSColor {
+    NSColor(calibratedRed: Double((h >> 16) & 0xff) / 255, green: Double((h >> 8) & 0xff) / 255,
+            blue: Double(h & 0xff) / 255, alpha: a)
+}
+// Finder positions are measured from the top-left; AppKit draws from the bottom-left.
+func fy(_ finderY: Double) -> Double { H - finderY }
+
+func center(_ s: String, top: Double, h: Double, size: Double, weight: NSFont.Weight,
+            color: NSColor, mono: Bool = false) {
+    let pc = NSMutableParagraphStyle(); pc.alignment = .center
+    let font = mono ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+                    : NSFont.systemFont(ofSize: size, weight: weight)
+    s.draw(in: NSRect(x: 0, y: fy(top) - h, width: W, height: h),
+           withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: pc])
+}
+// Radial glow that fades to transparent exactly at the circle's edge. NSGradient
+// ends its radial run at the bounding box corner (r·√2), so the stops are
+// scaled by 1/√2 and a transparent stop is appended at 1.
+func radial(cx: Double, cyF: Double, r: Double, stops: [(NSColor, CGFloat)]) {
+    let cols = stops.map { $0.0 } + [stops.last!.0.withAlphaComponent(0)]
+    let locs = stops.map { $0.1 * 0.7071 } + [1]
+    let g = NSGradient(colors: cols, atLocations: locs, colorSpace: .genericRGB)!
+    let rect = NSRect(x: cx - r, y: fy(cyF) - r, width: 2 * r, height: 2 * r)
+    g.draw(in: NSBezierPath(ovalIn: rect), relativeCenterPosition: .zero)
+}
+
+let orange = hex(0xFF7A1A), gold = hex(0xFFB347), gold2 = hex(0xFFC46B)
+
+func draw() {
+    // Night sky
+    NSGradient(colors: [hex(0x121116), hex(0x1C1922)])!
+        .draw(in: NSRect(x: 0, y: 0, width: W, height: H), angle: -90)
+
+    // Star dust — a fixed seed keeps the 1x and 2x renders identical.
+    var seed: UInt64 = 0x9E3779B97F4A7C15
+    func rnd() -> Double {
+        seed = seed &* 6364136223846793005 &+ 1442695040888963407
+        return Double(seed >> 11) / Double(1 << 53)
+    }
+    for _ in 0..<70 {
+        let x = rnd() * W, y = rnd() * H, r = 0.5 + rnd() * 0.9
+        NSColor.white.withAlphaComponent(0.06 + rnd() * 0.16).setFill()
+        NSBezierPath(ovalIn: NSRect(x: x, y: y, width: r, height: r)).fill()
+    }
+
+    // Corona behind the app icon, a fainter warm haze behind the folder
+    radial(cx: 158, cyF: 198, r: 150, stops: [
+        (orange.withAlphaComponent(0.55), 0), (gold.withAlphaComponent(0.22), 0.4), (gold.withAlphaComponent(0), 1)])
+    radial(cx: 450, cyF: 195, r: 100, stops: [
+        (gold.withAlphaComponent(0.16), 0), (gold.withAlphaComponent(0), 1)])
+
+    // Vignette
+    NSGradient(colors: [NSColor.black.withAlphaComponent(0), NSColor.black.withAlphaComponent(0.45)],
+               atLocations: [0.55, 1], colorSpace: .genericRGB)!
+        .draw(in: NSRect(x: 0, y: 0, width: W, height: H), relativeCenterPosition: .zero)
+
+    // Dotted trail: dots grow and brighten from orange to gold toward the folder
+    for i in 0..<6 {
+        let t = Double(i) / 5, r = 2.0 + 2.2 * t, x = 240 + 100 * t
+        orange.blended(withFraction: CGFloat(t), of: gold2)!.withAlphaComponent(0.45 + 0.55 * t).setFill()
+        NSBezierPath(ovalIn: NSRect(x: x - r, y: fy(210) - r, width: 2 * r, height: 2 * r)).fill()
+    }
+    let chevron = NSBezierPath()
+    chevron.lineWidth = 3; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
+    chevron.move(to: NSPoint(x: 351, y: fy(210) + 12))
+    chevron.line(to: NSPoint(x: 364, y: fy(210)))
+    chevron.line(to: NSPoint(x: 351, y: fy(210) - 12))
+    gold2.setStroke(); chevron.stroke()
+
+    // Title + version
+    center("Cuate", top: 32, h: 40, size: 28, weight: .semibold, color: .white)
+    if !version.isEmpty {
+        center("Version \(version)", top: 76, h: 18, size: 13, weight: .regular, color: hex(0x9A96A3))
+    }
+
+    // Hint text
+    center("Drag Cuate to the Applications folder", top: 296, h: 22, size: 15, weight: .medium, color: hex(0xEDE8F0))
+    center("Before first launch, remove quarantine in Terminal:", top: 320, h: 16, size: 11, weight: .regular, color: hex(0x8F8A98))
+
+    // The command in a terminal-style chip
+    let cmd = "xattr -dr com.apple.quarantine /Applications/Cuate.app"
+    let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+    let w = (cmd as NSString).size(withAttributes: [.font: font]).width + 22, h = 21.0
+    let chip = NSBezierPath(roundedRect: NSRect(x: (W - w) / 2, y: fy(337) - h, width: w, height: h), xRadius: 6, yRadius: 6)
+    hex(0x26232D).setFill(); chip.fill()
+    hex(0x3B3744).setStroke(); chip.lineWidth = 1; chip.stroke()
+    center(cmd, top: 341, h: 15, size: 10, weight: .regular, color: gold2, mono: true)
+
+    // A Finder window paints a BACKGROUND IMAGE — nothing in it can be
+    // selected or copied, this line included. The one place the command can
+    // actually be copied from is the text file sitting in the window, so say
+    // so rather than leaving people to retype it by hand.
+    center("(open “How to open — read me” to copy this command)", top: 366, h: 14, size: 10, weight: .regular, color: hex(0x6F6B78))
+}
+
 // Renders the 600×400 pt design into a raster of the given scale.
 // Note: with rep.size set to points, the bitmap context draws in POINTS.
 func render(scale: Int, to path: String) {
@@ -93,73 +192,7 @@ func render(scale: Int, to path: String) {
     rep.size = NSSize(width: W, height: H)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-
-    // Soft vertical gradient backdrop
-    NSGradient(colors: [
-        NSColor(calibratedRed: 0.97, green: 0.98, blue: 1.00, alpha: 1),
-        NSColor(calibratedRed: 0.88, green: 0.91, blue: 0.97, alpha: 1)
-    ])!.draw(in: NSRect(x: 0, y: 0, width: W, height: H), angle: -90)
-
-    let accent = NSColor(calibratedRed: 0.29, green: 0.44, blue: 0.93, alpha: 1)
-    let pc = NSMutableParagraphStyle(); pc.alignment = .center
-
-    // Title + version
-    "Cuate".draw(in: NSRect(x: 0, y: H - 72, width: W, height: 40), withAttributes: [
-        .font: NSFont.systemFont(ofSize: 28, weight: .semibold),
-        .foregroundColor: NSColor(calibratedWhite: 0.15, alpha: 1),
-        .paragraphStyle: pc
-    ])
-    if !version.isEmpty {
-        "Version \(version)".draw(in: NSRect(x: 0, y: H - 94, width: W, height: 18), withAttributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor(calibratedWhite: 0.45, alpha: 1),
-            .paragraphStyle: pc
-        ])
-    }
-
-    // Arrow from app (left) to Applications (right)
-    let arrow = NSBezierPath()
-    arrow.lineWidth = 5
-    arrow.lineCapStyle = .round
-    arrow.lineJoinStyle = .round
-    arrow.move(to: NSPoint(x: 245, y: 210))
-    arrow.line(to: NSPoint(x: 355, y: 210))
-    arrow.move(to: NSPoint(x: 340, y: 223))
-    arrow.line(to: NSPoint(x: 355, y: 210))
-    arrow.line(to: NSPoint(x: 340, y: 197))
-    accent.setStroke()
-    arrow.stroke()
-
-    // Hint text
-    "Drag Cuate to the Applications folder".draw(
-        in: NSRect(x: 0, y: 82, width: W, height: 22), withAttributes: [
-        .font: NSFont.systemFont(ofSize: 15, weight: .medium),
-        .foregroundColor: NSColor(calibratedWhite: 0.30, alpha: 1),
-        .paragraphStyle: pc
-    ])
-    "Before first launch, remove quarantine in Terminal:".draw(
-        in: NSRect(x: 0, y: 58, width: W, height: 16), withAttributes: [
-        .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-        .foregroundColor: NSColor(calibratedWhite: 0.52, alpha: 1),
-        .paragraphStyle: pc
-    ])
-    "xattr -dr com.apple.quarantine /Applications/Cuate.app".draw(
-        in: NSRect(x: 0, y: 42, width: W, height: 15), withAttributes: [
-        .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
-        .foregroundColor: NSColor(calibratedWhite: 0.42, alpha: 1),
-        .paragraphStyle: pc
-    ])
-    // A Finder window paints a BACKGROUND IMAGE — nothing in it can be
-    // selected or copied, this line included. The one place the command can
-    // actually be copied from is the text file sitting in the window, so say
-    // so rather than leaving people to retype it by hand.
-    "(open “How to open — read me” to copy this command)".draw(
-        in: NSRect(x: 0, y: 24, width: W, height: 14), withAttributes: [
-        .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-        .foregroundColor: NSColor(calibratedWhite: 0.58, alpha: 1),
-        .paragraphStyle: pc
-    ])
-
+    draw()
     NSGraphicsContext.restoreGraphicsState()
     if let png = rep.representation(using: .png, properties: [:]) {
         try? png.write(to: URL(fileURLWithPath: path))
@@ -209,7 +242,7 @@ tell application "Finder"
         set background picture of theViewOptions to file ".background:background.tiff"
         set position of item "$APP_NAME.app" of container window to {150, 190}
         set position of item "Applications" of container window to {450, 190}
-        set position of item "How to open — read me.txt" of container window to {520, 300}
+        set position of item "How to open — read me.txt" of container window to {66, 300}
         close
         open
         update without registering applications
