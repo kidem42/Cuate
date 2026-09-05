@@ -30,14 +30,33 @@ ssh USER@AGENT-HOST 'export XDG_RUNTIME_DIR=/run/user/$(id -u) && \
 
 Verify with `hermes tools | grep plaud`.
 
+Then keep the session alive. The plugin renews on use, but a grant left idle
+dies on Plaud's clock (about two days, observed 2026-09-04); a timer renews it
+ahead of expiry:
+
+```bash
+scp plaud/systemd/hermes-plaud-refresh.* USER@AGENT-HOST:~/.config/systemd/user/
+ssh USER@AGENT-HOST 'export XDG_RUNTIME_DIR=/run/user/$(id -u) && \
+  systemctl --user daemon-reload && systemctl --user enable --now hermes-plaud-refresh.timer'
+```
+
 ## Connect an account
 
 ```bash
 hermes plaud login              # opens a browser, stores the grant
 hermes plaud login --no-browser # server: prints the URL, reads the code back
-hermes plaud status             # who is connected, and from where
+hermes plaud status             # who is connected, from where, and when the grant retires
+hermes plaud refresh            # renew ahead of expiry — what the timer above runs
 hermes plaud logout             # remove the grant from this host
 ```
+
+**Each host signs in on its own; a grant is never copied from another
+client.** Plaud rotates the refresh token on every renewal, so one pair cannot
+serve two refreshers, and a new sign-in of the app evicts the previous session
+of the same account (a login on the agent host cut off the desktop app within
+a minute, 2026-09-02). The grant **retires itself 60 days after the sign-in**:
+from then on every tool answers that a fresh `hermes plaud login` is needed,
+and `hermes plaud status` says when.
 
 `--no-browser` exists because a server has no browser *and* its localhost is not
 the user's: the OAuth redirect can never arrive there. The flag prints the

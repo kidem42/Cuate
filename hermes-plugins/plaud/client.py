@@ -4,10 +4,16 @@ Read-only by construction: the API exposes nothing that mutates a recording,
 and this client calls three routes — list files, get file, resolve content.
 
 Tokens come from ``$HERMES_HOME/plaud/auth.json`` — written by ``hermes plaud
-login`` or handed over by the Cuate desktop app when the user grants the agent
-access — or from the environment. The access token is refreshed on a 401 and
-the new pair written back, so a long-lived gateway keeps working without anyone
-touching the file again.
+login`` — or from the environment. This host holds its OWN grant and nothing
+is copied in from another client: Plaud rotates the refresh token on every
+renewal, so one pair cannot serve two refreshers, and a new sign-in of the
+app evicts the previous session of the same account (observed 2026-09-02 —
+a login on the agent host cut off the desktop app within a minute). The
+access token is renewed on a 401, and ahead of expiry by ``hermes plaud
+refresh`` (a timer, see the README), because a grant left idle dies on
+Plaud's own clock. After ``MAX_GRANT_AGE_DAYS`` the grant retires itself:
+a ceiling on how long stored keys to someone's recordings stay usable
+without a fresh approval.
 """
 
 from __future__ import annotations
@@ -37,6 +43,16 @@ REQUEST_TIMEOUT = 30
 PAGE_SIZE = 100
 MIN_PAGE_SIZE = 20
 
+# The grant retires itself this long after the sign-in. Every tool call and
+# `hermes plaud status` then ask for a new login instead of working on keys
+# nobody has re-approved for two months.
+MAX_GRANT_AGE_DAYS = 60
+MAX_GRANT_AGE = MAX_GRANT_AGE_DAYS * 86400
+# `hermes plaud refresh` renews the pair when the access token has less than
+# this left, or when its expiry is unknown. A grant that only renews on use
+# dies on Plaud's clock between uses (idle ~2 days → 422 on renewal, 2026-09-04).
+REFRESH_AHEAD = 24 * 3600
+
 # Plaud sits behind Cloudflare, which rejects urllib's default
 # "Python-urllib/3.x" outright (403 before the API is even reached — found on
 # the first live run). Every request identifies itself as the plugin instead.
@@ -51,19 +67,13 @@ class PlaudError(RuntimeError):
 
 def reconnect_hint() -> str:
     """How THIS host got its grant decides how to renew it."""
-    source = token_source()
-    if source == "env":
+    if token_source() == "env":
         return "Refresh PLAUD_ACCESS_TOKEN / PLAUD_REFRESH_TOKEN in the environment."
-    if source in {"file", "legacy-file"}:
-        return (
-            "Run `hermes plaud login` on this host (add --no-browser on a server). "
-            "If the grant was granted from the Cuate app, re-grant it there instead."
-        )
-    return "Run `hermes plaud login` (add --no-browser on a server)."
+    return "Run `hermes plaud login` on this host (add --no-browser on a server)."
 
 
 class PlaudSessionExpired(PlaudError):
-    """The grant is gone — only a fresh sign-in in Cuate fixes it. Retrying
+    """The grant is gone — only a fresh sign-in on this host fixes it. Retrying
     any Plaud call in the same turn is pointless, so this is its own type."""
 
 
@@ -99,16 +109,31 @@ def token_source() -> str:
     return "none"
 
 
-def _load_tokens() -> Dict[str, str]:
+def retired_message(tokens: Dict[str, Any]) -> str:
+    since = tokens.get("retired_at")
+    when = time.strftime("%Y-%m-%d", time.gmtime(since)) if isinstance(since, (int, float)) else "now"
+    return (
+        "The Plaud grant on this host retired on %s, %d days after the sign-in, as designed — "
+        "a fresh sign-in is needed. " % (when, MAX_GRANT_AGE_DAYS)
+    ) + reconnect_hint()
+
+
+def _load_tokens() -> Dict[str, Any]:
     for path in (token_file(), legacy_token_file()):
         if not path.exists():
             continue
         try:
             data = json.loads(path.read_text())
-            if isinstance(data, dict) and data.get("access_token"):
-                return data
         except (OSError, ValueError):
-            pass
+            continue
+        if not isinstance(data, dict):
+            continue
+        # The stub a retirement leaves behind: no keys, just the dates — so
+        # the tools stay registered and answer WHY instead of vanishing.
+        if data.get("retired_at") and not data.get("access_token"):
+            raise PlaudSessionExpired(retired_message(data))
+        if data.get("access_token"):
+            return data
     access = os.environ.get("PLAUD_ACCESS_TOKEN", "")
     if access:
         return {"access_token": access, "refresh_token": os.environ.get("PLAUD_REFRESH_TOKEN", "")}
@@ -118,7 +143,7 @@ def _load_tokens() -> Dict[str, str]:
     )
 
 
-def save_tokens(tokens: Dict[str, str]) -> None:
+def save_tokens(tokens: Dict[str, Any]) -> None:
     path = token_file()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +153,28 @@ def save_tokens(tokens: Dict[str, str]) -> None:
         pass
 
 
-def _refresh(tokens: Dict[str, str]) -> Dict[str, str]:
+def granted_at(tokens: Dict[str, Any]) -> Optional[int]:
+    """When this grant was signed in, if the file knows (grants written before
+    1.3.0 learn it at their first renewal — the clock starts there)."""
+    value = tokens.get("granted_at")
+    return int(value) if isinstance(value, (int, float)) and value > 0 else None
+
+
+def enforce_grant_age(tokens: Dict[str, Any]) -> None:
+    """Retires a stored grant past `MAX_GRANT_AGE`: the keys are dropped and a
+    stub with the dates stays, then `PlaudSessionExpired` says so. Tokens
+    from the environment are the operator's to rotate and are left alone."""
+    since = granted_at(tokens)
+    if since is None or time.time() - since < MAX_GRANT_AGE:
+        return
+    if token_source() not in {"file", "legacy-file"}:
+        return
+    stub = {"granted_at": since, "retired_at": int(time.time())}
+    save_tokens(stub)
+    raise PlaudSessionExpired(retired_message(stub))
+
+
+def _refresh(tokens: Dict[str, Any]) -> Dict[str, Any]:
     refresh_token = tokens.get("refresh_token") or ""
     if not refresh_token:
         raise PlaudSessionExpired(
@@ -153,19 +199,45 @@ def _refresh(tokens: Dict[str, str]) -> Dict[str, str]:
     access = payload.get("access_token") or payload.get("accessToken")
     if not access:
         raise PlaudSessionExpired("Plaud returned no access token on refresh. " + reconnect_hint())
-    fresh = {
+    now = int(time.time())
+    fresh: Dict[str, Any] = {
         "access_token": access,
         "refresh_token": payload.get("refresh_token") or payload.get("refreshToken") or refresh_token,
-        "renewed_at": int(time.time()),
+        "granted_at": granted_at(tokens) or now,
+        "renewed_at": now,
     }
+    expires_in = payload.get("expires_in")
+    if isinstance(expires_in, (int, float)) and expires_in > 0:
+        fresh["expires_at"] = now + int(expires_in)
     save_tokens(fresh)
     return fresh
+
+
+def keep_alive() -> str:
+    """`hermes plaud refresh`, meant for a timer: renews the pair ahead of
+    expiry so the grant never sits idle until Plaud's clock kills it, and
+    retires it past the age ceiling. Returns a one-line report; raises
+    `PlaudSessionExpired` when the grant is gone, so a timer's journal shows
+    it and the exit code says so."""
+    with _LOCK:
+        tokens = _load_tokens()
+        enforce_grant_age(tokens)
+        if token_source() == "env":
+            return "Plaud: tokens come from the environment — nothing to renew here."
+        expires_at = tokens.get("expires_at")
+        if isinstance(expires_at, (int, float)) and expires_at - time.time() > REFRESH_AHEAD:
+            hours = int((expires_at - time.time()) // 3600)
+            return f"Plaud: access token valid for {hours}h more — no renewal needed."
+        fresh = _refresh(tokens)
+    left_days = max(0, int((MAX_GRANT_AGE - (time.time() - (granted_at(fresh) or time.time()))) // 86400))
+    return f"Plaud: session renewed; the grant retires in {left_days} day(s) unless signed in again."
 
 
 def _api(path: str) -> Any:
     """GET a developer-API path, renewing the token once on a 401."""
     with _LOCK:
         tokens = _load_tokens()
+        enforce_grant_age(tokens)
 
     def attempt(access_token: str) -> Any:
         request = urllib.request.Request(API_BASE + path)

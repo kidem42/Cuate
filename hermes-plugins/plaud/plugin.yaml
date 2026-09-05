@@ -1,5 +1,5 @@
 name: plaud
-version: 1.2.0
+version: 1.3.0
 description: "Search and read a personal Plaud voice-recorder library (meetings, calls, memos) — recordings, AI summaries and transcripts. Read-only."
 author: "Cuate (github.com/kidem42/Cuate)"
 license: MIT

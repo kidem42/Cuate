@@ -145,10 +145,26 @@ CHAT FILES): the model's documents (HTML/MD artifacts from fences, via the
 parser cache), Plaud recordings, and the user's attachments; the actions are
 open / reveal in Finder.
 
+### The Hermes agent
+
+The agent reads Plaud through its own plugin (`hermes-plugins/plaud`, three
+read-only tools returning `plaud://<id>` markers that this app renders as
+cards) and its **own sign-in on its host** (`hermes plaud login --no-browser`).
+Nothing is handed over from this app. Two facts make sharing impossible:
+Plaud rotates the refresh token on every renewal, so one pair cannot serve two
+refreshers; and a new sign-in of the app (both clients use Plaud's public
+`client_9c50…`) evicts the previous session of the same account — a login on
+the agent host cut off this app's session within a minute (2026-09-02, the
+Mac's six-hour renewal answered 401 seconds after the browser approval). The
+"give the agent access" hand-off of 4.5–4.17 was removed for that reason.
+Each host renews its own grant — this app at launch and every 6 h, the plugin
+on use and from a timer (`hermes plaud refresh`) — and the plugin retires its
+grant 60 days after the sign-in, asking for a new one.
+
 ## Legal and brand
 
 The approach is the user's personal access to their own data through Plaud's
-public API (the same mechanism their MCP uses for Claude/Cursor); the wording is
+public API (the same mechanism their MCP server offers to desktop assistants); the wording is
 "works with Plaud", with no implied partnership. The badge is the brand "Λ·"
 glyph in the original livery (black on white); the glyph was cut out of the
 wordmark (the favicon is opaque — template rendering produced a white square).
@@ -156,10 +172,6 @@ The attribution lives in THIRD-PARTY-NOTICES.md.
 
 ## Left out / what's next
 
-- **The Hermes agent can't see Plaud**: client-side tools are not injected into
-  an agent loop on someone else's host. The options: Plaud MCP on the agent's
-  host / intercepting `/plaud` with a local model / forwarding tools through
-  `/v1` (untested).
 - **Semantic search** — the API only offers a substring match on names; a local
   summary index (NLEmbedding) is a separate phase.
 - **Mind maps** — the format has never shown up in the API; check on a real note.

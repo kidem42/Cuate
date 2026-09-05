@@ -1,0 +1,9 @@
+# Renews the Hermes Plaud grant ahead of expiry: `hermes plaud refresh`.
+# Driven by hermes-plaud-refresh.timer (user unit, same directory).
+[Unit]
+Description=Renew the Hermes Plaud session ahead of expiry
+
+[Service]
+Type=oneshot
+# A login shell, so `hermes` resolves the way it does at the prompt.
+ExecStart=/bin/sh -lc 'hermes plaud refresh'

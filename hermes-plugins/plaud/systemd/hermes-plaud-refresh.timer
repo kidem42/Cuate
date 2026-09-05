@@ -1,0 +1,13 @@
+# Every six hours (and after a reboot): the same cadence Cuate's desktop
+# client keeps its own Plaud session on. Install next to the .service:
+#   systemctl --user daemon-reload && systemctl --user enable --now hermes-plaud-refresh.timer
+[Unit]
+Description=Keep the Hermes Plaud session alive
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

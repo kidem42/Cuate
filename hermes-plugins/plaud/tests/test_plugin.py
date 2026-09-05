@@ -16,6 +16,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -321,6 +322,101 @@ class Safety(unittest.TestCase):
                 self.assertEqual(path, pathlib.Path(home) / "plaud" / "auth.json")
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(client.token_source(), "file")
+
+
+class Lifetime(unittest.TestCase):
+    """The grant's own clock: renewal ahead of expiry, retirement at the ceiling,
+    and a hint that never points at another client (each host signs in on its
+    own — Plaud rotates refresh tokens and a new sign-in evicts the previous
+    session, so a copied grant only produces two dead ones)."""
+
+    def _stored(self):
+        return json.loads(client.token_file().read_text())
+
+    def test_retires_past_the_ceiling_and_keeps_saying_so(self):
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": home}, clear=False):
+                old = int(time.time()) - (client.MAX_GRANT_AGE + 60)
+                client.save_tokens({"access_token": "a", "refresh_token": "r", "granted_at": old})
+                with self.assertRaises(client.PlaudSessionExpired) as ctx:
+                    client._api("/open/third-party/users/current")  # retires before any network
+                self.assertIn("hermes plaud login", str(ctx.exception))
+                stub = self._stored()
+                self.assertNotIn("access_token", stub)
+                self.assertNotIn("refresh_token", stub)
+                self.assertEqual(stub["granted_at"], old)
+                self.assertIn("retired_at", stub)
+                # Still registered: the tool answers with the reason instead of vanishing.
+                self.assertTrue(tools._check_plaud_available())
+                self.assertIn("retired", tools._handle_plaud_find({}))
+                self.assertNotEqual(plaud._prompt_section(None), "")
+
+    def test_a_young_grant_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": home}, clear=False):
+                fresh = {"access_token": "a", "refresh_token": "r", "granted_at": int(time.time()) - 86400}
+                client.save_tokens(fresh)
+                client.enforce_grant_age(client._load_tokens())
+                self.assertEqual(self._stored()["access_token"], "a")
+
+    def test_renewal_keeps_the_sign_in_date_and_learns_the_expiry(self):
+        class Response:
+            def __init__(self, body):
+                self.body = body
+
+            def read(self):
+                return self.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": home}, clear=False):
+                granted = int(time.time()) - 5 * 86400
+                client.save_tokens({"access_token": "a", "refresh_token": "r", "granted_at": granted})
+                payload = json.dumps({"access_token": "b", "refresh_token": "r2", "expires_in": 7200}).encode()
+                with mock.patch("urllib.request.urlopen", return_value=Response(payload)):
+                    fresh = client._refresh(client._load_tokens())
+                self.assertEqual(fresh["granted_at"], granted)
+                self.assertEqual(fresh["refresh_token"], "r2")
+                self.assertGreater(fresh["expires_at"], time.time() + 7000)
+                self.assertEqual(self._stored()["access_token"], "b")
+
+    def test_a_grant_from_before_the_clock_starts_it_at_first_renewal(self):
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": home}, clear=False):
+                client.save_tokens({"access_token": "a", "refresh_token": "r"})
+                fake = {"access_token": "b", "refresh_token": "r2", "granted_at": None, "renewed_at": 0}
+                with mock.patch.object(client, "_refresh", return_value=fake) as refresh:
+                    client.keep_alive()  # no expiry known → renews
+                    refresh.assert_called_once()
+                self.assertIsNone(client.granted_at(client._load_tokens()))
+
+    def test_keep_alive_renews_only_near_expiry(self):
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": home}, clear=False):
+                far = {"access_token": "a", "refresh_token": "r", "granted_at": int(time.time()),
+                       "expires_at": int(time.time()) + 3 * 86400}
+                client.save_tokens(far)
+                with mock.patch.object(client, "_refresh", side_effect=AssertionError("must not renew")):
+                    self.assertIn("no renewal", client.keep_alive())
+                near = dict(far, expires_at=int(time.time()) + 3600)
+                client.save_tokens(near)
+                renewed = dict(near, access_token="b", renewed_at=int(time.time()))
+                with mock.patch.object(client, "_refresh", return_value=renewed):
+                    report = client.keep_alive()
+                self.assertIn("renewed", report)
+                self.assertIn(str(client.MAX_GRANT_AGE_DAYS - 1), report)  # 59 days left, rounded down
+
+    def test_the_hint_names_this_host_only(self):
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HERMES_HOME": home}, clear=False):
+                client.save_tokens({"access_token": "a", "refresh_token": "r"})
+                self.assertIn("hermes plaud login", client.reconnect_hint())
+                self.assertNotIn("Cuate", client.reconnect_hint())
 
 
 if __name__ == "__main__":

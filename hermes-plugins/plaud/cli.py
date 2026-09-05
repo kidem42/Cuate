@@ -1,4 +1,4 @@
-"""`hermes plaud` — login, status, logout.
+"""`hermes plaud` — login, status, refresh, logout.
 
 Follows the shape Hermes uses for service auth (`hermes auth spotify`): a
 browser round-trip with PKCE, a `--no-browser` mode for machines without one,
@@ -10,6 +10,9 @@ On a server there is no browser AND its localhost is not the user's, so the
 redirect can never arrive: `--no-browser` prints the URL, the user opens it on
 their own machine and pastes back the `code` from the address bar. Same trick
 Hermes' own remote-OAuth skill uses.
+
+`refresh` is for a timer (see the README): it renews the pair before Plaud's
+clock kills an idle grant, and retires the grant after `MAX_GRANT_AGE_DAYS`.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import os
 import secrets
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -80,7 +84,11 @@ def _exchange(code: str, verifier: str, state: str) -> Dict[str, Any]:
     refresh = payload.get("refresh_token") or payload.get("refreshToken")
     if not access:
         raise SystemExit("Plaud returned no access token.")
-    return {"access_token": access, "refresh_token": refresh or ""}
+    tokens: Dict[str, Any] = {"access_token": access, "refresh_token": refresh or ""}
+    expires_in = payload.get("expires_in")
+    if isinstance(expires_in, (int, float)) and expires_in > 0:
+        tokens["expires_at"] = int(time.time() + expires_in)
+    return tokens
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -145,6 +153,8 @@ def _login(args) -> None:
             raise SystemExit("State mismatch — start the login again.")
         tokens = _exchange(result["code"], verifier, state)
 
+    # The retirement clock starts here (see client.MAX_GRANT_AGE_DAYS).
+    tokens["granted_at"] = int(time.time())
     client.save_tokens(tokens)
     try:
         user = client._api("/open/third-party/users/current")
@@ -152,6 +162,12 @@ def _login(args) -> None:
     except client.PlaudError:
         who = "connected"
     print(f"Plaud: {who}. Grant stored at {client.token_file()}")
+    print(f"  retires on {_day(tokens['granted_at'] + client.MAX_GRANT_AGE)} unless signed in again;"
+          f" `hermes plaud refresh` from a timer keeps it alive until then.")
+
+
+def _day(stamp: Any) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(stamp)) if isinstance(stamp, (int, float)) else "unknown"
 
 
 def _status(_args) -> None:
@@ -165,12 +181,29 @@ def _status(_args) -> None:
         "env": "PLAUD_ACCESS_TOKEN environment variable",
     }[source]
     try:
+        tokens = client._load_tokens()
         user = client._api("/open/third-party/users/current")
     except client.PlaudError as exc:
         print(f"Plaud: grant present ({where}) but NOT working — {exc}")
         return
     print(f"Plaud: connected as {user.get('nickname') or user.get('email') or 'unknown'}")
     print(f"  grant: {where}")
+    since = client.granted_at(tokens)
+    if since is not None:
+        print(f"  signed in {_day(since)}, retires {_day(since + client.MAX_GRANT_AGE)}"
+              f" ({client.MAX_GRANT_AGE_DAYS}-day ceiling)")
+    if isinstance(tokens.get("renewed_at"), (int, float)):
+        print(f"  last renewed {_day(tokens['renewed_at'])}")
+
+
+def _refresh(_args) -> None:
+    """For a timer: exit 0 when the grant is fine (renewed or not yet due),
+    1 when it is gone — the journal then carries the reason."""
+    try:
+        print(client.keep_alive())
+    except client.PlaudError as exc:
+        print(f"Plaud: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def _logout(_args) -> None:
@@ -199,6 +232,11 @@ def register_cli(subparser) -> None:
         help="Print the URL and read the code back — for servers without a browser",
     )
     actions.add_parser("status", help="Show whether this host has a working Plaud grant")
+    actions.add_parser(
+        "refresh",
+        help="Renew the session ahead of expiry (run from a timer); "
+             f"retires the grant {client.MAX_GRANT_AGE_DAYS} days after the sign-in",
+    )
     actions.add_parser("logout", help="Remove the stored Plaud grant from this host")
 
 
@@ -210,6 +248,8 @@ def handle(args) -> None:
         _logout(args)
     elif action == "status":
         _status(args)
+    elif action == "refresh":
+        _refresh(args)
     else:
-        print(f"Unknown action: {action}. Use login, status or logout.", file=sys.stderr)
+        print(f"Unknown action: {action}. Use login, status, refresh or logout.", file=sys.stderr)
         raise SystemExit(2)

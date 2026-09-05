@@ -19,9 +19,13 @@ is the reference client for the format.
 
 **Auth.** ``hermes plaud login`` (``--no-browser`` on a server), or the
 ``PLAUD_ACCESS_TOKEN`` / ``PLAUD_REFRESH_TOKEN`` environment variables. The
-grant is stored under ``$HERMES_HOME/plaud/auth.json``, chmod 600, and the
-plugin refreshes it by itself. Hermes' shared ``auth.json`` is core-only — its
-writers are private and its provider list is fixed — so this follows the
+grant is stored under ``$HERMES_HOME/plaud/auth.json``, chmod 600. Each host
+signs in on its own — a grant is never copied from another client, because
+Plaud rotates refresh tokens and a new sign-in evicts the previous session.
+The plugin renews the pair on use and, from a timer, ahead of expiry
+(``hermes plaud refresh``); the grant retires itself 60 days after the
+sign-in and asks for a new one. Hermes' shared ``auth.json`` is core-only —
+its writers are private and its provider list is fixed — so this follows the
 convention other credential-holding plugins use.
 
 Install: copy this directory to ``~/.hermes/plugins/plaud`` and enable it

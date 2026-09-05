@@ -14,26 +14,12 @@ struct PlaudSettingsView: View {
 
     @State private var connectState = ConnectState.idle
 
-    /// Outcome of the last grant action (see `agentGrantSection`).
-    private enum GrantState: Equatable {
-        case idle
-        /// Asking the agent host what it holds.
-        case checking
-        case working
-        case done
-        case failed(String)
-    }
-    @State private var grantState = GrantState.idle
-    /// What the agent host holds, as of the last check.
-    @State private var grantStatus = PlaudAgentGrant.Status.absent
-
     var body: some View {
         Form {
             introSection
             connectionSection
             if settings.isConnected {
                 exposureSection
-                agentGrantSection
             }
         }
         .formStyle(.grouped)
@@ -199,129 +185,6 @@ struct PlaudSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-        }
-    }
-
-    /// Hands the connected Hermes agent its own copy of the grant, so it can
-    /// read the library on every surface it has — not just inside this app.
-    /// Only shown once both accounts are connected: without an agent there is
-    /// nowhere to send it, and without Plaud there is nothing to send.
-    @ViewBuilder
-    private var agentGrantSection: some View {
-        if PlaudAddon.shared.isAvailable, HermesSettings.shared.enabled {
-            Section {
-                // What the agent host holds right now — asked on appearance
-                // and after every action, so the row is never a guess.
-                HStack(spacing: 8) {
-                    Image(systemName: grantStatusIcon)
-                        .foregroundColor(grantStatusColor)
-                    Text(grantStatusText)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if grantState == .checking { ProgressView().controlSize(.small) }
-                    Spacer()
-                    Button(PLL("plaud.grant.recheck")) {
-                        Task { await refreshGrantStatus() }
-                    }
-                    .disabled(grantState == .working || grantState == .checking)
-                }
-
-                HStack(spacing: 10) {
-                    Button(PLL("plaud.grant.action")) {
-                        Task { await grantAgentAccess() }
-                    }
-                    .disabled(grantState == .working || grantState == .checking)
-                    if grantStatus != .absent {
-                        Button(PLL("plaud.grant.revoke"), role: .destructive) {
-                            Task { await revokeAgentAccess() }
-                        }
-                        .disabled(grantState == .working || grantState == .checking)
-                    }
-                    switch grantState {
-                    case .idle, .checking:
-                        EmptyView()
-                    case .working:
-                        ProgressView().controlSize(.small)
-                    case .done:
-                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    case .failed(let message):
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
-                        Text(message)
-                            .font(.callout).foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            } header: {
-                Text(PLL("plaud.grant.header"))
-            } footer: {
-                Text(PLL("plaud.grant.caption"))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            // Asked when the section appears: the row otherwise shows whatever
-            // the last visit left in @State, which reads as a stale "granted"
-            // long after the grant is gone.
-            .task { await refreshGrantStatus() }
-        }
-    }
-
-    private func grantAgentAccess() async {
-        grantState = .working
-        do {
-            try await PlaudAgentGrant.grant()
-            grantState = .done
-        } catch {
-            grantState = .failed(error.localizedDescription)
-        }
-        await refreshGrantStatus()
-    }
-
-    private func revokeAgentAccess() async {
-        grantState = .working
-        do {
-            try await PlaudAgentGrant.revoke()
-            grantState = .done
-        } catch {
-            grantState = .failed(error.localizedDescription)
-        }
-        await refreshGrantStatus()
-    }
-
-    private func refreshGrantStatus() async {
-        let previous = grantState
-        grantState = .checking
-        grantStatus = await PlaudAgentGrant.status()
-        // A finished action keeps its checkmark; a plain re-check goes quiet.
-        grantState = (previous == .working) ? .done : .idle
-    }
-
-    private var grantStatusText: String {
-        switch grantStatus {
-        case .absent: return PLL("plaud.grant.status.absent")
-        case .current: return PLL("plaud.grant.status.current")
-        case .stale: return PLL("plaud.grant.status.stale")
-        case .present: return PLL("plaud.grant.status.present")
-        case .unknown(let detail): return PLL("plaud.grant.status.unknown") + " " + detail
-        }
-    }
-
-    private var grantStatusIcon: String {
-        switch grantStatus {
-        case .absent: return "lock.fill"
-        case .current: return "checkmark.seal.fill"
-        case .stale: return "exclamationmark.triangle.fill"
-        case .present: return "questionmark.circle.fill"
-        case .unknown: return "wifi.exclamationmark"
-        }
-    }
-
-    private var grantStatusColor: Color {
-        switch grantStatus {
-        case .absent: return .secondary
-        case .current: return .green
-        case .stale: return .orange
-        case .present, .unknown: return .secondary
         }
     }
 

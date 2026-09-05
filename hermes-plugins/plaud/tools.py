@@ -152,6 +152,11 @@ def _check_plaud_available() -> bool:
     try:
         client._load_tokens()
         return True
+    except client.PlaudSessionExpired:
+        # A retired grant is still "this host has Plaud": the tools stay
+        # callable and answer with the reason, so the agent asks for a new
+        # sign-in instead of reporting a tool it does not have.
+        return True
     except client.PlaudError:
         return False
 
