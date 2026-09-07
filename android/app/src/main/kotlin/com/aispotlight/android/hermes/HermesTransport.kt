@@ -152,6 +152,13 @@ sealed class HermesStreamEvent {
 class HermesTransportException(val status: Int, body: String) :
     Exception("Hermes API error (HTTP $status): ${body.take(200)}")
 
+/** `GET /v1/runs/{id}` as the client reads it: the status and the steer the run never read. */
+data class HermesRunState(val status: String, val pendingSteer: String?) {
+    val isTerminal: Boolean get() = status == "completed" || status == "failed" || status == "cancelled"
+    val isLive: Boolean get() = status == "queued" || status == "running" ||
+        status == "waiting_for_approval" || status == "stopping"
+}
+
 // MARK: - Transport
 
 /**
@@ -465,9 +472,21 @@ class HermesTransport(
      * cancelled. 404 (`run_not_found`) = the gateway restarted since — the
      * map is in-memory over there.
      */
-    suspend fun runStatus(runID: String): String {
+    suspend fun runStatus(runID: String): String = runState(runID).status
+
+    /**
+     * The same `GET /v1/runs/{id}`, with the field the status alone hid: a
+     * follow-up the run accepted after its last tool batch and never read
+     * (`pending_steer` — the run object carries it exactly like the
+     * `run.completed` frame does). A client that was off the stream when the
+     * run ended has no other way to learn the agent never saw that message.
+     */
+    suspend fun runState(runID: String): HermesRunState {
         val obj = json("GET", "v1/runs/$runID")
-        return obj.optString("status", "")
+        return HermesRunState(
+            status = obj.optString("status", ""),
+            pendingSteer = obj.optString("pending_steer", "").ifEmpty { null },
+        )
     }
 
     // MARK: File upload (dashboard server)

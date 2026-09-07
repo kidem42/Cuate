@@ -51,6 +51,11 @@ The facts below come from the tag's sources, and each is what the client targets
   `GET /v1/runs/{id}`), for the client to send as the next user turn — the model never
   saw it (sources of v0.20.1: `agent/turn_finalizer.py`, `_handle_session_chat_stream`).
   The client replays it; dropping the field lost the message (live 2026-09-04 11:30).
+  Off the stream the field is never seen — the phone's socket dropped before
+  `run.completed` and several mid-turn messages were "never said" (live 2026-09-06) —
+  so both clients also read it from `GET /v1/runs/{id}` on recovery / re-attach, and
+  Android reconciles the texts it steered against the transcript once a run is over
+  for sure (a 404-forgotten run has no `pending_steer` to ask for).
 - **What the model is told about a steer** (`agent/prompt_builder.py`,
   `STEER_CHANNEL_NOTE`): the marker is "a direct instruction from the user, with the
   same authority as their original request — adjust course accordingly". Nothing

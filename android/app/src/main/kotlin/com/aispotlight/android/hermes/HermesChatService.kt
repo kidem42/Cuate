@@ -542,6 +542,15 @@ object HermesChatService {
         userText: String,
         runID: String? = null,
         anchorOverride: Int? = null,
+        /**
+         * Called once when the run is over FOR SURE: with the run state at a
+         * terminal status (its `pending_steer` included), or with null when a
+         * restarted gateway forgot the run (404) and the transcript tail then
+         * settled. Never called on the pure quiet-window conclusion — that one
+         * is a guess, and what rides on this hook (re-sending steers the agent
+         * never read) must not fire while the agent may still read them.
+         */
+        onRunOver: suspend (HermesRunState?) -> Unit = {},
         onPartial: suspend (RecoveredTurn) -> Unit,
     ): RecoveredTurn? {
         val settings = AppSettings.current
@@ -551,6 +560,7 @@ object HermesChatService {
         var anchorSeq: Int? = anchorOverride
         var best: RecoveredTurn? = null
         var statusRoute: String? = runID
+        var forgotten = false
 
         while (true) {
             kotlinx.coroutines.delay(POLL_MS)
@@ -559,10 +569,17 @@ object HermesChatService {
             var terminal: String? = null
             statusRoute?.let { id ->
                 try {
-                    val status = transport(settings).runStatus(id)
-                    when (status) {
-                        "completed", "failed", "cancelled" -> terminal = status
-                        "" -> statusRoute = null // unrecognized shape — heuristics
+                    val state = transport(settings).runState(id)
+                    when {
+                        state.isTerminal -> {
+                            terminal = state.status
+                            // Over for sure: hand up what the run still
+                            // holds (a steer accepted after its last tool
+                            // batch — `pending_steer`) before the transcript
+                            // read below concludes the turn.
+                            onRunOver(state)
+                        }
+                        state.status.isEmpty() -> statusRoute = null // unrecognized shape — heuristics
                         else -> { } // queued / running / waiting_for_approval
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -570,7 +587,10 @@ object HermesChatService {
                 } catch (e: Exception) {
                     // 404 = the gateway restarted and forgot the run (the map
                     // is in-memory); transient errors just skip one check.
-                    if ((e as? HermesTransportException)?.status == 404) statusRoute = null
+                    if ((e as? HermesTransportException)?.status == 404) {
+                        statusRoute = null
+                        forgotten = true
+                    }
                 }
             }
 
@@ -640,6 +660,8 @@ object HermesChatService {
             val quietFor = System.currentTimeMillis() - lastChangeAt
             if (hasText && statusRoute == null && quietFor > QUIET_MS && !tailLive) {
                 dao.advanceHermesSyncedSeq(conversationId, current!!.tailSeq)
+                // A forgotten run whose tail settled is over for sure.
+                if (forgotten) onRunOver(null)
                 return current
             }
             if (!hasText && statusRoute == null && quietFor > DEAD_MS && !tailLive) {
@@ -649,6 +671,7 @@ object HermesChatService {
                 // re-imports the user row (or stray tool rows) as duplicates;
                 // an answer that lands later still syncs — it sits above this.
                 dao.advanceHermesSyncedSeq(conversationId, maxOf(anchor, lastTail))
+                if (forgotten) onRunOver(null)
                 return null
             }
             if (System.currentTimeMillis() - startedAt > MAX_RECOVERY_MS) {
@@ -657,6 +680,35 @@ object HermesChatService {
             }
         }
     }
+
+    /**
+     * Steers the agent never read, once the run is over: of the texts
+     * steered into it ([AppSettings.hermesSteered]), those the transcript
+     * does not show. A delivered steer rides a tool row's content verbatim
+     * (Hermes appends the wire text inside its out-of-band markers), so a
+     * steered text absent from every row written after it was sent was
+     * never read — a `pending_steer` nobody collected, or a run the gateway
+     * forgot on restart. Containment, not marker parsing: the marker text
+     * may evolve between Hermes versions, the user's words do not. The
+     * timestamp guard keeps an earlier identical message from vouching for
+     * a later one (slack for the phone's clock against the gateway's).
+     */
+    suspend fun undeliveredSteers(
+        sessionID: String, steered: List<Pair<Long, String>>,
+    ): List<String> {
+        if (steered.isEmpty()) return emptyList()
+        return undeliveredSteers(transport(AppSettings.current).messages(sessionID), steered)
+    }
+
+    /** The pure half of [undeliveredSteers] (unit-tested): rows in, unread texts out. */
+    fun undeliveredSteers(
+        rows: List<HermesTranscriptMessage>, steered: List<Pair<Long, String>>,
+    ): List<String> = steered.filter { (sentAt, text) ->
+        rows.none { row ->
+            (row.timestampMs == null || row.timestampMs >= sentAt - STEER_MATCH_SLACK_MS) &&
+                row.content.contains(text)
+        }
+    }.map { it.second }.distinct()
 
     /**
      * The delivery/attach gate: "live" (a run is executing), "idle"
@@ -710,6 +762,8 @@ object HermesChatService {
 
     /** How far apart a mirror row and its local echo may sit and still match. */
     private const val ECHO_WINDOW_MS = 15 * 60_000L
+    /** Clock slack when matching a steer's send time against gateway row times. */
+    private const val STEER_MATCH_SLACK_MS = 10 * 60_000L
     private const val POLL_MS = 4_000L
     /** Reply text present + this much silence = the turn is finished. */
     private const val QUIET_MS = 30_000L

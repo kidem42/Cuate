@@ -388,6 +388,60 @@ class AppSettings private constructor(context: Context) {
     }
 
     /**
+     * Runs whose `pending_steer` already went to the follow-up queue. The
+     * live stream's `run.completed` and the polled run status both carry the
+     * field; whichever road reports first owns the replay, the other must
+     * not send the same words twice. Newest last, capped.
+     */
+    private val _hermesSteerReplayed = MutableStateFlow(readStringList("hermesSteerReplayed"))
+
+    /** True when [runId] was not marked yet — the caller owns the replay. */
+    fun markHermesSteerReplayed(runId: String): Boolean {
+        if (runId in _hermesSteerReplayed.value) return false
+        val next = (_hermesSteerReplayed.value + runId).takeLast(40)
+        _hermesSteerReplayed.value = next
+        writeStringList("hermesSteerReplayed", next)
+        return true
+    }
+
+    /**
+     * Texts steered into a run — run key → "millis<TAB>text" — until the run
+     * is reconciled against the transcript. A delivered steer shows up
+     * verbatim in a tool row; one that never does was never read by the
+     * agent. This is the only road for a run a restarted gateway forgot,
+     * where there is no `pending_steer` left to ask for. Persisted: the
+     * process that sent the steer is often not the one that sees the run end.
+     */
+    private val _hermesSteered = MutableStateFlow(readStringListMap("hermesSteered"))
+
+    fun recordHermesSteer(runKey: String, text: String, atMs: Long) {
+        val entries = ((_hermesSteered.value[runKey] ?: emptyList()) + "$atMs\t$text").takeLast(20)
+        // Bounded: a run that never reconciles (offline for good) must not
+        // grow the map forever — the oldest keys go first.
+        val trimmed = if (_hermesSteered.value.size >= 20 && runKey !in _hermesSteered.value)
+            _hermesSteered.value.entries.drop(1).associate { it.key to it.value }
+        else _hermesSteered.value
+        val next = trimmed + (runKey to entries)
+        _hermesSteered.value = next
+        writeStringListMap("hermesSteered", next)
+    }
+
+    /** (sentAtMillis, text) pairs steered into [runKey], oldest first. */
+    fun hermesSteered(runKey: String): List<Pair<Long, String>> =
+        (_hermesSteered.value[runKey] ?: emptyList()).mapNotNull { entry ->
+            val tab = entry.indexOf('\t')
+            if (tab <= 0) null
+            else entry.substring(0, tab).toLongOrNull()?.let { it to entry.substring(tab + 1) }
+        }
+
+    fun clearHermesSteered(runKey: String) {
+        if (runKey !in _hermesSteered.value) return
+        val next = _hermesSteered.value - runKey
+        _hermesSteered.value = next
+        writeStringListMap("hermesSteered", next)
+    }
+
+    /**
      * Follow-up texts typed mid-turn that could NOT be steered into the
      * running agent, conversationId → JSON array of texts. Persisted so a
      * process death doesn't swallow them: the bubbles are already in Room,
@@ -889,6 +943,20 @@ class AppSettings private constructor(context: Context) {
         val json = JSONObject()
         map.forEach { (k, v) -> json.put(k, v) }
         prefs.edit().putString(key, json.toString()).apply()
+    }
+
+    private fun readStringList(key: String): List<String> {
+        val raw = prefs.getString(key, null) ?: return emptyList()
+        return try {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun writeStringList(key: String, list: List<String>) {
+        prefs.edit().putString(key, org.json.JSONArray(list).toString()).apply()
     }
 
     private fun readStringListMap(key: String): Map<String, List<String>> {

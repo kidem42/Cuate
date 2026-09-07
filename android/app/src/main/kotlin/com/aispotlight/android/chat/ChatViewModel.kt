@@ -15,6 +15,7 @@ import com.aispotlight.android.data.MessageEntity
 import com.aispotlight.android.data.toDomain
 import com.aispotlight.android.data.toEntity
 import com.aispotlight.android.hermes.HermesChatService
+import com.aispotlight.android.hermes.HermesRunState
 import com.aispotlight.android.hermes.HermesSteer
 import com.aispotlight.android.hermes.HermesTransport
 import com.aispotlight.android.providers.TranscriptionService
@@ -1292,6 +1293,67 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         settings.setHermesActiveRun(sessionId, null)
     }
 
+    /** Where a steer's record lives: the run it went into, or the session when no run id was known. */
+    private fun hermesSteerKey(runId: String?, sessionId: String) = runId ?: "session:$sessionId"
+
+    /**
+     * A follow-up the run accepted but never read (`pending_steer`) reaching
+     * us OFF the live stream: the run status polled after a dropped socket,
+     * or the re-attach on open. Same destination as the stream's
+     * [HermesChatService.AgentEvent.UndeliveredSteer] — the persisted
+     * follow-up queue, whose next delivery sends the words as a turn — and a
+     * run is replayed once, whichever road reports first. Before this, a
+     * message steered while the phone was off the stream (screen off, Doze,
+     * a network flap) stayed in the chat as sent and never reached the
+     * agent; the next message then read as a non sequitur (live 2026-09-06:
+     * "what are you talking about?").
+     */
+    private fun queueRecoveredSteer(conversationId: String, runId: String, wire: String, via: String) {
+        if (!settings.markHermesSteerReplayed(runId)) return
+        val words = HermesSteer.unframed(wire)
+        if (words.isEmpty()) return
+        com.aispotlight.android.core.Diagnostics.log(
+            "hermes", "steer.recovered via=$via run=$runId chars=${words.length}")
+        settings.setHermesPendingFollowUps(
+            conversationId, settings.hermesPendingFollowUpTexts(conversationId) + words)
+    }
+
+    /**
+     * Once a run is over FOR SURE (terminal status, or forgotten by a
+     * restarted gateway), the texts steered into it are checked against the
+     * transcript; those it never shows go back into the follow-up queue —
+     * the road for a run whose `pending_steer` nobody can ask for any more.
+     * The run's records are dropped either way; offline, they wait for the
+     * next terminal check.
+     */
+    private suspend fun reconcileSteers(conversationId: String, sessionId: String, runId: String?) {
+        val keys = listOfNotNull(runId, "session:$sessionId")
+        val steered = keys.flatMap { settings.hermesSteered(it) }
+        if (steered.isEmpty()) return
+        val lost = try {
+            withContext(Dispatchers.IO) { HermesChatService.undeliveredSteers(sessionId, steered) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        keys.forEach { settings.clearHermesSteered(it) }
+        if (lost.isEmpty()) return
+        com.aispotlight.android.core.Diagnostics.log(
+            "hermes", "steer.lost run=${runId ?: "-"} count=${lost.size}")
+        val held = settings.hermesPendingFollowUpTexts(conversationId)
+        settings.setHermesPendingFollowUps(conversationId, held + lost.filter { it !in held })
+    }
+
+    /** The run is over: collect its unread steer, then reconcile what was steered into it. */
+    private suspend fun onHermesRunOver(
+        conversationId: String, sessionId: String, runId: String?,
+        state: HermesRunState?, via: String,
+    ) {
+        if (runId != null) state?.pendingSteer?.let { queueRecoveredSteer(conversationId, runId, it, via) }
+        reconcileSteers(conversationId, sessionId, runId)
+    }
+
     /** Files of the chat (agent-side paths + attachments the user sent). */
     data class ChatFiles(val agentPaths: List<String>, val sentByYou: List<String>)
     private val _chatFiles = MutableStateFlow<ChatFiles?>(null)
@@ -1798,7 +1860,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     "hermes", "steer.fallback ${e.message?.take(120)}")
                 false
             }
-            if (!queued) {
+            if (queued) {
+                // Remembered until the run is reconciled against the
+                // transcript: the only proof the agent read it is the text
+                // showing up in a tool row.
+                settings.recordHermesSteer(
+                    hermesSteerKey(runId, sessionId), userMessage.text, System.currentTimeMillis())
+            } else {
                 // Not steerable: hold the text; the stream-end hook (or the
                 // next open of this conversation, if the process dies first)
                 // sends it as its own turn.
@@ -1864,7 +1932,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             "hermes", "deliver.steer.fail ${e.message?.take(120)}")
                         false
                     }
-                    if (queued) settings.setHermesPendingFollowUps(conversationId, emptyList())
+                    if (queued) {
+                        settings.setHermesPendingFollowUps(conversationId, emptyList())
+                        settings.recordHermesSteer(
+                            hermesSteerKey(runId, sessionId), joined, System.currentTimeMillis())
+                    }
                     // Not steerable: keep the queue — the run's end brings
                     // the next delivery opportunity.
                 }
@@ -1901,27 +1973,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.IO) {
                     val transport = HermesChatService.transport(settings)
                     val storedRun = settings.hermesActiveRuns.value[sessionId]
+                    var forgotten = false
                     if (storedRun != null) {
-                        val status = try {
-                            transport.runStatus(storedRun)
+                        val state = try {
+                            transport.runState(storedRun)
                         } catch (e: Exception) {
                             // 404 = the gateway restarted and forgot the run
                             // map — fall through to the transcript tail. Any
                             // other failure: offline, try again next open.
                             val http = e as? com.aispotlight.android.hermes.HermesTransportException
-                            if (http?.status == 404) "" else return@withContext
+                            if (http?.status == 404) { forgotten = true; null } else return@withContext
                         }
-                        when (status) {
-                            "queued", "running", "waiting_for_approval", "stopping" -> {
+                        when {
+                            state == null -> { } // forgotten — the tail decides below
+                            state.isLive -> {
                                 attachRun = storedRun
                                 live = true
                             }
                             // Finished while we were away — the mirror sync
-                            // has, or will get, the reply.
-                            "completed", "failed", "cancelled" ->
+                            // has, or will get, the reply; a follow-up the
+                            // run never read goes back into the queue.
+                            state.isTerminal -> {
+                                onHermesRunOver(conversationId, sessionId, storedRun, state, via = "resume")
                                 settings.setHermesActiveRun(sessionId, null)
-                            // Unknown/forgotten: KEEP the id (clearing it on
-                            // a transient oddity lost the re-attach route) —
+                            }
+                            // Unknown: KEEP the id (clearing it on a
+                            // transient oddity lost the re-attach route) —
                             // the transcript tail decides below.
                             else -> { }
                         }
@@ -1933,6 +2010,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             return@withContext
                         }
                         live = HermesChatService.detectLiveTail(rows)
+                        // A forgotten run, over by the tail too: reconcile
+                        // what was steered into it against the transcript
+                        // (no `pending_steer` left to ask for).
+                        if (!live && forgotten) {
+                            onHermesRunOver(conversationId, sessionId, storedRun, null, via = "resume")
+                        }
                     }
                 }
             } finally {
@@ -2001,6 +2084,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     HermesChatService.recoverTurn(
                         dao, conversationId, sessionId, userText = "",
                         runID = runId, anchorOverride = watermark,
+                        onRunOver = { state ->
+                            onHermesRunOver(conversationId, sessionId, runId, state, via = "attach")
+                        },
                     ) { partial ->
                         replyText.setLength(0)
                         replyText.append(partial.text)
@@ -2203,8 +2289,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             // addendum frame stripped (the queue re-frames
                             // when it steers, sends plain when it posts a
                             // turn); the stream-end hook delivers it.
+                            // Once per run: the polled run status carries the
+                            // same field, and a re-attach may have queued it.
+                            val runId = hermesRunIds[conversationId]
                             val words = HermesSteer.unframed(event.text)
-                            if (words.isNotEmpty()) {
+                            if (words.isNotEmpty() &&
+                                (runId == null || settings.markHermesSteerReplayed(runId))
+                            ) {
                                 settings.setHermesPendingFollowUps(
                                     conversationId,
                                     settings.hermesPendingFollowUpTexts(conversationId) + words,
@@ -2227,6 +2318,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     HermesChatService.advanceWatermark(dao, conversationId, sessionId)
                 }
+                // `run.completed` is authoritative: steers this run never
+                // showed in its transcript were never read (a session-route
+                // steer has no run id and no `pending_steer` to collect).
+                reconcileSteers(conversationId, sessionId, hermesRunIds[conversationId])
                 clearHermesRun(conversationId, sessionId)
                 markStreaming(conversationId, false)
                 // A reply that landed out of sight: unread badge + banner.
@@ -2257,9 +2352,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             .getString(com.aispotlight.android.R.string.hermes_reconnecting)
                     }
                     recovered = try {
+                        val runId = hermesRunIds[conversationId]
                         HermesChatService.recoverTurn(
                             dao, conversationId, sessionId, userMessage.text,
-                            runID = hermesRunIds[conversationId],
+                            runID = runId,
+                            onRunOver = { state ->
+                                onHermesRunOver(conversationId, sessionId, runId, state, via = "recover")
+                            },
                         ) { partial ->
                             replyText.setLength(0)
                             replyText.append(partial.text)

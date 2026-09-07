@@ -383,7 +383,14 @@ same `ChatEvent` stream; the window's loop is unchanged. What differs:
   `run.completed` — accepted after the last tool batch) travels up as
   `AgentTurnEvent.undeliveredFollowUp` → `ChatEvent.agentFollowUp` and the
   window sends it again as the next turn, frame removed, moving the bubble
-  below the reply it missed;
+  below the reply it missed. Off the stream (a dropped socket, the phone in
+  Doze, a re-attach on open) the same field is read from `GET /v1/runs/{id}`:
+  Android in `recoverTurn`/`maybeResumeHermesTurn` (replayed once per run,
+  `hermesSteerReplayed`), the desktop in the orphan-run check after a broken
+  stream. Android also remembers what it steered (`hermesSteered`) and, once
+  a run is over for sure, re-sends the texts no transcript row carries — the
+  road for a run a restarted gateway forgot, which has no `pending_steer`
+  left to ask for;
 - `HermesMirrorSync` reconciles the local store with the gateway transcript
   (`ChatMessage.externalID`/`seq`), `HermesLiveTurn` detects turns started
   elsewhere, `HermesCompaction` renders the gateway's context summaries,

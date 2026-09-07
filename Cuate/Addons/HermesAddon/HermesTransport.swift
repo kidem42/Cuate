@@ -524,9 +524,27 @@ nonisolated struct HermesTransport {
     /// than some deployments, so a 404 from an older gateway lands on the
     /// same answer and merely restores the old timeout behaviour.
     func runIsRunning(runID: String) async -> Bool {
+        await runState(runID: runID)?.isRunning ?? false
+    }
+
+    /// `GET /v1/runs/{id}` as the client reads it: the status, and the
+    /// follow-up the run accepted after its last tool batch and never read
+    /// (`pending_steer` — the run object carries it exactly like the
+    /// `run.completed` frame). A client that was off the stream when the run
+    /// ended has no other way to learn the agent never saw that message.
+    /// nil on 404 (forgotten run), on an unknown shape and on any transport
+    /// failure.
+    struct RunState {
+        let status: String
+        let pendingSteer: String?
+        var isRunning: Bool { status == "running" || status == "queued" || status == "stopping" }
+    }
+
+    func runState(runID: String) async -> RunState? {
         guard let object = try? await json("GET", "v1/runs/\(runID)"),
-              let status = object["status"] as? String else { return false }
-        return status == "running" || status == "queued" || status == "stopping"
+              let status = object["status"] as? String else { return nil }
+        let pending = (object["pending_steer"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return RunState(status: status, pendingSteer: pending)
     }
 
     /// Body shape to be pinned against the live gateway in stage 6 (the

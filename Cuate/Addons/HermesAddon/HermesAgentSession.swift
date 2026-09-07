@@ -290,9 +290,22 @@ final class HermesAgentSession: AgentSession {
                     // unfinished forever and would read as "still working"
                     // for the whole staleness window — retire it now instead.
                     if let orphaned, let sessionID = self.boundSessionID {
-                        Task { @MainActor [addon = self.addon] in
-                            guard !(await addon.transport().runIsRunning(runID: orphaned)) else { return }
-                            addon.markTailDead(sessionID: sessionID)
+                        // One awaited round-trip (15 s cap): the run object
+                        // also carries the follow-up the run accepted after
+                        // its last tool batch and never read (`pending_steer`).
+                        // Off the stream we never saw its `run.completed`,
+                        // and this is the last place to collect it — the
+                        // phone lost messages exactly this way (2026-09-06).
+                        let state = await self.addon.transport().runState(runID: orphaned)
+                        if !(state?.isRunning ?? false) {
+                            self.addon.markTailDead(sessionID: sessionID)
+                        }
+                        if let pending = state?.pendingSteer {
+                            let text = HermesSteer.unframed(pending)
+                            if !text.isEmpty {
+                                Diagnostics.log("hermes", "steer.recovered run=\(orphaned) chars=\(text.count)")
+                                continuation.yield(.undeliveredFollowUp(text))
+                            }
                         }
                     }
                     let diagnostic = AgentDiagnostic(
