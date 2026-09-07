@@ -6,7 +6,6 @@ import SwiftUI
 struct RecordingStatusView: View {
     @Binding var isRecording: Bool
     @State private var recordingStart = Date()
-    @State private var isPulsing = false
     @Environment(\.themePalette) private var palette
 
     /// Recording accent: red for Current, the theme's recording color otherwise
@@ -18,15 +17,24 @@ struct RecordingStatusView: View {
     var body: some View {
         if isRecording {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(isPulsing ? 1.0 : 0.6)
-                    .opacity(isPulsing ? 1.0 : 0.45)
-                    .animation(
-                        .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
-                        value: isPulsing
-                    )
+                // The pulse is clocked by a TimelineView, not by a
+                // repeatForever animation on a @State flag: that flag was
+                // flipped in `onAppear`, inside the pill's insertion
+                // transaction, and the repeating curve then also drove the
+                // dot's layout position — it slid left↔right between its
+                // small and large states instead of breathing in place
+                // (and only sometimes, depending on what else was animating
+                // at insertion). Same approach as the dictation pill's dots.
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    let time = context.date.timeIntervalSinceReferenceDate
+                    // 0.8 s up, 0.8 s down, sine-shaped like the old ease-in-out.
+                    let pulse = 0.5 + 0.5 * sin(time * (.pi / 0.8))
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(0.6 + 0.4 * pulse)
+                        .opacity(0.45 + 0.55 * pulse)
+                }
 
                 // Timer driven by TimelineView — no manual Timer bookkeeping
                 TimelineView(.periodic(from: .now, by: 0.1)) { context in
@@ -60,10 +68,6 @@ struct RecordingStatusView: View {
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
             .onAppear {
                 recordingStart = Date()
-                isPulsing = true
-            }
-            .onDisappear {
-                isPulsing = false
             }
         }
     }

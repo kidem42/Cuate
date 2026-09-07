@@ -50,6 +50,16 @@ final class DictationService: NSObject, ObservableObject {
     /// `recoverFromMidRecordingDeath`).
     private var engineDeaths = 0
     private static let maxEngineDeaths = 5
+    /// The one pending warm-up retry (see `retryCaptureDuringWarmup`):
+    /// cancelled when the session ends or a new one starts, so a stale
+    /// timer never fires a capture start into the next session (field log
+    /// 2026-09-07: leftover retries from one session hammered the next
+    /// one faster than the backoff allows).
+    private var pendingCaptureRetry: Task<Void, Never>?
+    /// Bumped on every session start and cancel. A `stopAndProcess` that
+    /// resumes after an await compares against it and keeps its hands off
+    /// a session that has since replaced the one it was finishing.
+    private var sessionGeneration = 0
     /// Normalized 0…1 magnitudes of `MicCapture.bandCount` log-spaced voice
     /// bands — the pill's equalizer renders the REAL input spectrum.
     @Published private(set) var spectrum: [Float] = Array(repeating: 0, count: MicCapture.bandCount)
@@ -109,6 +119,7 @@ final class DictationService: NSObject, ObservableObject {
             guard let self else { return }
             self.micReady = true
             self.captureRetries = 0
+            self.cancelPendingCaptureRetry()
             // The phrase timer starts when audio actually flows — hardware
             // spin-up must not eat into the minimum segment length.
             self.segmentStart = Date()
@@ -194,7 +205,14 @@ final class DictationService: NSObject, ObservableObject {
         case .recording:
             Task { await stopAndProcess() }
         case .processing:
-            break
+            // A second press while the pill is still spinning abandons the
+            // session: nothing that hasn't been typed yet will be, and the
+            // pill goes away. The way out of a wedged stop (field log
+            // 2026-09-07: the capture queue sat inside CoreAudio for six
+            // minutes while a Bluetooth aggregate was rebuilt) and of a
+            // slow cleanup model.
+            Diagnostics.log("dictation", "cancel.processing")
+            cancel()
         }
     }
 
@@ -238,6 +256,8 @@ final class DictationService: NSObject, ObservableObject {
 
             chunkedMode = AppSettings.shared.dictationChunked
             sessionCancelled = false
+            sessionGeneration += 1
+            cancelPendingCaptureRetry()
             captureRetries = 0
             engineDeaths = 0
             processingChain = nil
@@ -279,12 +299,20 @@ final class DictationService: NSObject, ObservableObject {
         // 1.7 s, 2.5 s, then 3 s steps; ~15 s in total before giving up.
         let delay = min(3, 0.5 * pow(1.5, Double(captureRetries - 1)))
         Diagnostics.log("dictation", "capture.retry #\(captureRetries) after \(reason)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.phase == .recording, !self.micReady,
+        cancelPendingCaptureRetry()
+        pendingCaptureRetry = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.phase == .recording, !self.micReady,
                   let url = self.fileURL else { return }
+            self.pendingCaptureRetry = nil
             self.capture.beginRecording(to: url, deviceUID: AppSettings.shared.dictationMicUID)
         }
         return true
+    }
+
+    private func cancelPendingCaptureRetry() {
+        pendingCaptureRetry?.cancel()
+        pendingCaptureRetry = nil
     }
 
     /// Engine death after real audio arrived = the device flap outlived the
@@ -331,6 +359,7 @@ final class DictationService: NSObject, ObservableObject {
         // (fresh budget) handles it with backoff.
         micReady = false
         captureRetries = 0
+        cancelPendingCaptureRetry()
 
         let url = Self.segmentURL()
         fileURL = url
@@ -587,6 +616,8 @@ final class DictationService: NSObject, ObservableObject {
 
     func cancel() {
         sessionCancelled = true // pending segments will skip insertion
+        sessionGeneration += 1  // a stop in flight must not touch the pill again
+        cancelPendingCaptureRetry()
         processingChain = nil
         teardownStreaming()
         let keepWarm = TimeInterval(AppSettings.shared.dictationWarmMinutes) * 60
@@ -608,6 +639,7 @@ final class DictationService: NSObject, ObservableObject {
 
     func stopAndProcess() async {
         guard phase == .recording else { return }
+        cancelPendingCaptureRetry()
         guard let finishedURL = fileURL else {
             // Stop arrived before the mic even spun up (the pill shows
             // optimistically) — nothing was captured, treat as cancel.
@@ -616,13 +648,29 @@ final class DictationService: NSObject, ObservableObject {
         }
         fileURL = nil
         phase = .processing
+        let generation = sessionGeneration
 
         // The segment file is finalized on the capture queue — wait for that
-        // before handing it to the transcriber. The engine itself either
-        // keeps running warm (Settings → keep mic ready) or releases the mic.
+        // before handing it to the transcriber. The unit itself either keeps
+        // running warm (Settings → keep mic ready) or releases the mic.
         let keepWarm = TimeInterval(AppSettings.shared.dictationWarmMinutes) * 60
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            capture.endRecording(keepWarmSeconds: keepWarm) { continuation.resume() }
+        let finalized = await releaseCapture(finishedURL, keepWarmSeconds: keepWarm)
+        guard generation == sessionGeneration else {
+            // Cancelled from the hotkey while waiting: the session is over,
+            // only the finalized file is left to clean up.
+            if finalized { try? FileManager.default.removeItem(at: finishedURL) }
+            return
+        }
+        guard finalized else {
+            // The capture queue is wedged inside CoreAudio (a device mid-
+            // reconfiguration): there is no file to transcribe and no telling
+            // when there will be. Abandon the session rather than hold the
+            // pill hostage; the late completion deletes the file.
+            Diagnostics.log("dictation", "capture.stop.abandoned — capture queue did not release the file")
+            teardownStreaming()
+            NSSound.beep()
+            finishSession(generation)
+            return
         }
 
         // Dead-input guard: a session whose RAW peak never left digital
@@ -641,9 +689,7 @@ final class DictationService: NSObject, ObservableObject {
             NSSound.beep()
             NotificationService.shared.postDictationSilentInput()
             try? FileManager.default.removeItem(at: finishedURL)
-            processingChain = nil
-            phase = .idle
-            hideWidget()
+            finishSession(generation)
             return
         }
 
@@ -659,6 +705,10 @@ final class DictationService: NSObject, ObservableObject {
             let audioSeconds = live.audioSeconds
             recordStreamingSpend(model: AppSettings.shared.sttModel(for: .deepgram),
                                  seconds: audioSeconds)
+            guard generation == sessionGeneration else {
+                try? FileManager.default.removeItem(at: finishedURL)
+                return
+            }
             if let tail, !tail.isEmpty {
                 enqueueStreamText(tail)
             }
@@ -666,9 +716,7 @@ final class DictationService: NSObject, ObservableObject {
                 Diagnostics.log("dictation", "stream.final spans=\(streamEnqueuedCount) audio_s=\(String(format: "%.1f", audioSeconds))")
                 try? FileManager.default.removeItem(at: finishedURL)
                 await processingChain?.value
-                processingChain = nil
-                phase = .idle
-                hideWidget()
+                finishSession(generation)
                 return
             }
             Diagnostics.log("dictation", "stream.empty — batch fallback")
@@ -678,20 +726,18 @@ final class DictationService: NSObject, ObservableObject {
             // Queue the final segment and wait for the ordered pipeline to drain.
             enqueueSegment(finishedURL)
             await processingChain?.value
-            processingChain = nil
-            phase = .idle
-            hideWidget()
+            finishSession(generation)
             return
         }
 
         defer {
             try? FileManager.default.removeItem(at: finishedURL)
-            phase = .idle
-            hideWidget()
+            finishSession(generation)
         }
 
         do {
             let transcript = try await TranscriptionService.transcribe(audioURL: finishedURL)
+            guard generation == sessionGeneration else { return }
             guard !transcript.isEmpty else { NSSound.beep(); return }
 
             var text = transcript
@@ -701,11 +747,46 @@ final class DictationService: NSObject, ObservableObject {
                     text = processed
                 }
                 // Post-processing is best-effort: on failure the raw transcript is used.
+                guard generation == sessionGeneration else { return }
             }
 
             TextInserter.insert(text)
         } catch {
             NSSound.beep()
+        }
+    }
+
+    /// Ends the session's UI state — unless the session was already replaced
+    /// (cancelled from the hotkey, or a new one started): then the pill
+    /// belongs to that session and stays untouched.
+    private func finishSession(_ generation: Int) {
+        guard generation == sessionGeneration else { return }
+        processingChain = nil
+        phase = .idle
+        hideWidget()
+    }
+
+    /// Ends the capture and waits for the segment file to be finalized on
+    /// the capture queue — but not forever: a device mid-reconfiguration can
+    /// hold that queue inside CoreAudio for minutes (field log 2026-09-07:
+    /// six minutes, pill spinning, hotkey dead). After `timeout` the wait is
+    /// given up (returns false); the completion that eventually arrives then
+    /// only deletes the file nobody is going to transcribe.
+    private func releaseCapture(_ url: URL, keepWarmSeconds: TimeInterval,
+                                timeout: TimeInterval = 3) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let gate = StopGate(continuation)
+            capture.endRecording(keepWarmSeconds: keepWarmSeconds) {
+                if !gate.resume(true) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if gate.resume(false) {
+                    Diagnostics.log("dictation", "capture.stop.timeout ms=\(Int(timeout * 1000))")
+                }
+            }
         }
     }
 
@@ -819,6 +900,24 @@ final class DictationService: NSObject, ObservableObject {
     private func hideWidget() {
         panel?.orderOut(nil)
         level = 0
+    }
+}
+
+/// Resumes a continuation exactly once, from whichever of two main-thread
+/// paths gets there first, and tells the caller whether it was the one.
+@MainActor
+private final class StopGate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: Bool) -> Bool {
+        guard let continuation else { return false }
+        self.continuation = nil
+        continuation.resume(returning: value)
+        return true
     }
 }
 
@@ -1017,30 +1116,56 @@ private struct RunningLine: View {
 
 // MARK: - Microphone capture engine
 
-/// AVAudioEngine-backed microphone capture. Replaces AVAudioRecorder for
-/// dictation because it can do what the recorder can't:
+/// Microphone capture on an input-only HAL output unit (AUHAL) bound to
+/// the chosen device. Replaces the `AVAudioEngine` input node — and before
+/// that AVAudioRecorder — because it can do what those can't:
 /// - record from a CHOSEN input device (Settings → Voice → Microphone),
-///   silently falling back to the system default when that device is gone;
+///   silently falling back to the system default when that device is gone.
+///   The engine's input node is born on an automatic aggregate of the
+///   default input and the default output and keeps that aggregate's
+///   stream format: switching the unit underneath it to another device
+///   left the tap at the aggregate's format, and with a Bluetooth headset
+///   (16 kHz mono) as the default input every start on a 48 kHz USB mic
+///   failed with -10868 "formats don't match" (field log 2026-09-07). The
+///   aggregate's output half was also what pulled the headset's A2DP↔HFP
+///   flip into the capture (see `BluetoothInputHold`). A unit bound to one
+///   input device has neither problem: it takes the device's own format
+///   and never sees the output side;
 /// - keep the input running after a session ("warm window") so the next
 ///   dictation starts with zero hardware spin-up — CoreAudio power-up costs
 ///   ~100–300 ms on the built-in mic and SECONDS on Bluetooth (HFP switch),
 ///   which is exactly where the first dictated words were being lost;
-/// - rotate segment files under the running tap (gapless phrase chunking);
+/// - rotate segment files under the running capture (gapless phrase chunking);
 /// - expose raw buffers, so the pill's equalizer can show the REAL voice
 ///   spectrum (log-spaced bands via vDSP FFT) instead of a synthetic wobble.
 ///
 /// Threading: control methods hop onto a private serial queue and never
 /// block the caller — a cold Bluetooth start takes seconds and must not
-/// freeze the warm-up animation. The tap callback runs on the audio thread
-/// and only touches lock-guarded state. UI callbacks fire on the main thread.
+/// freeze the warm-up animation. The HAL IO thread only renders into
+/// buffers allocated for the unit's lifetime and accumulates 2048-frame
+/// chunks; each full chunk is copied and handed to a serial processing
+/// queue where the file write, the FFT and the streaming side-tap run
+/// (`handle`) — off the realtime thread, as the engine's tap used to be.
+/// Device listeners are delivered on the control queue. UI callbacks fire
+/// on the main thread.
 /// Recoverable capture failures — thrown (and caught) instead of letting
-/// AVFAudio abort the process.
-enum MicCaptureError: Error {
-    /// The input node reported an empty format (device switching / not ready).
+/// CoreAudio abort the process.
+enum MicCaptureError: LocalizedError {
+    /// No usable input device, or the bound device reports an empty format
+    /// (device switching / not ready).
     case deviceNotReady
+    /// A HAL unit setup step failed (the step's name and its OSStatus).
+    case unit(String, OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .deviceNotReady: return "input device not ready"
+        case .unit(let step, let status): return "HAL unit \(step) status=\(status)"
+        }
+    }
 }
 
-nonisolated final class MicCapture {
+nonisolated final class MicCapture: @unchecked Sendable {
 
     /// Fired once per recording session when the first buffer actually
     /// arrives — the mic is REALLY hearing now (pill flips dots → bars).
@@ -1052,99 +1177,149 @@ nonisolated final class MicCapture {
     var onAudio: (@MainActor (_ dbExcess: Float, _ spectrum: [Float]) -> Void)?
     /// A recording session failed to start (device trouble) — main thread.
     var onError: (@MainActor () -> Void)?
-    /// The engine STOPPED for real mid-session (device vanished and a
-    /// restart failed) — main thread. Spurious configuration-change
-    /// notifications never reach this.
+    /// The capture STOPPED for real mid-session (the bound device vanished
+    /// or changed its format) — main thread. Listener chatter that leaves
+    /// the bound input unchanged never reaches this.
     var onEngineDied: (@MainActor () -> Void)?
 
     /// Equalizer resolution; matches the pill's bar count.
     static let bandCount = 14
     private static let fftSize = 1024
+    /// Frames per chunk handed to `handle`: the FFT window with headroom,
+    /// and the ~45 ms cadence (at 48 kHz) the VAD, the level meter and the
+    /// gapless file rotation were tuned on. The HAL delivers whatever the
+    /// device's IO buffer size is (typically 512 frames), so callbacks are
+    /// accumulated up to this size.
+    private static let chunkFrames: AVAudioFrameCount = 2048
+    /// Upper bound on frames per HAL callback; anything larger is dropped.
+    private static let maxRenderFrames: AVAudioFrameCount = 8192
     /// Voice band edges: 80 Hz … 8 kHz, log-spaced.
     private static let bandLowHz: Float = 80
     private static let bandHighHz: Float = 8000
 
-    /// Recreated on every cold start (`ensureRunning`) — see the comment
-    /// there. Mutated only on `queue` after init.
-    private var engine = AVAudioEngine()
     private let queue = DispatchQueue(label: "cuate.mic.capture")
+    /// Serial and off the realtime thread: file writes, the FFT and the
+    /// streaming side-tap run here.
+    private let processingQueue = DispatchQueue(label: "cuate.mic.process", qos: .userInteractive)
     private let state = State()
     /// Queue-confined: pending warm-window expiry.
     private var cooldown: DispatchWorkItem?
-    private var configObserver: NSObjectProtocol?
     /// Queue-confined: keeps a Bluetooth headset's hands-free link up across
-    /// engine restarts (see `BluetoothInputHold` for the field diagnosis).
+    /// unit restarts (see `BluetoothInputHold` for the field diagnosis).
     private let hold = BluetoothInputHold()
     /// Queue-confined: the mic choice of the last start, so an idle recovery
     /// re-arms on the SAME device instead of silently reverting to the
     /// system default.
     private var lastDeviceUID = ""
+    /// Queue-confined: the live unit and everything the IO thread touches;
+    /// nil while no unit exists.
+    private var io: IOContext?
+    /// Queue-confined: what the unit is bound to — compared against the
+    /// device on every listener callback to tell a real change from chatter.
+    private var boundDevice: AudioDeviceID = kAudioObjectUnknown
+    private var boundToDefault = false
+    private var boundRate: Double = 0
+    private var boundChannels = 0
+    /// Queue-confined: the property listeners registered for the live unit.
+    private var listeners: [DeviceListener] = []
 
-    init() {
-        observeConfigurationChanges()
+    private struct DeviceListener {
+        let object: AudioObjectID
+        let address: AudioObjectPropertyAddress
+        let block: AudioObjectPropertyListenerBlock
     }
 
-    /// OUR engine only (object:) — a global observer used to catch every
-    /// engine's configuration chatter, including the benign one posted
-    /// when the engine starts on a user-selected device, and killed the
-    /// dictation right after the warm-up animation. Re-registered every
-    /// time the engine is recreated, so the observer always tracks the
-    /// live instance.
-    private func observeConfigurationChanges() {
-        if let configObserver {
-            NotificationCenter.default.removeObserver(configObserver)
-        }
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
-            self?.handleConfigurationChange()
-        }
-    }
+    /// The HAL IO thread's world: allocated once per unit and never mutated
+    /// by the control queue after `AudioOutputUnitStart`. `AudioOutputUnitStop`
+    /// is synchronous with the IO cycle, so once it returns no callback is
+    /// running and the context can be dropped.
+    private final class IOContext: @unchecked Sendable {
+        let unit: AudioUnit
+        /// Client format: Float32 deinterleaved at the device's own rate
+        /// (AUHAL does not resample on input), the device's channels capped
+        /// at two.
+        let format: AVAudioFormat
+        /// One callback's frames land here before being accumulated.
+        private let landing: AVAudioPCMBuffer
+        /// Accumulates callbacks up to `chunkFrames`; IO thread only.
+        private let chunk: AVAudioPCMBuffer
+        private var chunkFill: AVAudioFrameCount = 0
+        private var consecutiveRenderErrors = 0
+        private var renderFailureReported = false
+        /// Full chunks go here — a fresh copy per chunk, so the accumulator
+        /// is reused while the copy travels to the processing queue.
+        private let onChunk: (AVAudioPCMBuffer) -> Void
+        /// Repeated render failures: the device is gone or reconfigured.
+        private let onRenderFailure: (OSStatus) -> Void
 
-    deinit {
-        if let configObserver {
-            NotificationCenter.default.removeObserver(configObserver)
+        init?(unit: AudioUnit, format: AVAudioFormat,
+              chunkFrames: AVAudioFrameCount, maxRenderFrames: AVAudioFrameCount,
+              onChunk: @escaping (AVAudioPCMBuffer) -> Void,
+              onRenderFailure: @escaping (OSStatus) -> Void) {
+            guard let landing = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: maxRenderFrames),
+                  let chunk = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrames) else { return nil }
+            self.unit = unit
+            self.format = format
+            self.landing = landing
+            self.chunk = chunk
+            self.onChunk = onChunk
+            self.onRenderFailure = onRenderFailure
         }
-    }
 
-    /// A configuration change is only fatal when the engine actually stopped
-    /// (input device disappeared). A warm idle engine restarts silently on
-    /// whatever input is now current; a live RECORDING can't continue (the
-    /// open file carries the old device's format), so it's surfaced as dead
-    /// and the service salvages what was captured so far.
-    private func handleConfigurationChange() {
-        queue.async { [self] in
-            state.lock.lock()
-            let running = state.engineRunning
-            let recording = state.file != nil
-            state.lock.unlock()
-            guard running, !engine.isRunning else { return }
-            if recording {
-                Diagnostics.log("dictation", "capture.engine.died mid-recording")
-                // The hold stays up: the service restarts capture at once,
-                // and a restart on a link that is still up is what settles.
-                shutdownEngine(releaseHold: false)
-                DispatchQueue.main.async { self.onEngineDied?() }
-                return
+        static let inputProc: AURenderCallback = { refCon, flags, timestamp, bus, frames, _ in
+            Unmanaged<IOContext>.fromOpaque(refCon).takeUnretainedValue()
+                .render(flags: flags, timestamp: timestamp, bus: bus, frames: frames)
+        }
+
+        private func render(flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
+                            timestamp: UnsafePointer<AudioTimeStamp>,
+                            bus: UInt32, frames: UInt32) -> OSStatus {
+            guard frames > 0, frames <= landing.frameCapacity else { return noErr }
+            landing.frameLength = frames
+            let status = AudioUnitRender(unit, flags, timestamp, bus, frames, landing.mutableAudioBufferList)
+            guard status == noErr else {
+                consecutiveRenderErrors += 1
+                // One glitch is not a dead device; ten in a row is.
+                if consecutiveRenderErrors >= 10, !renderFailureReported {
+                    renderFailureReported = true
+                    onRenderFailure(status)
+                }
+                return noErr
             }
-            do {
-                // Warm idle: rebuild the tap for the new device's format.
-                state.lock.lock()
-                state.engineRunning = false
-                state.bandFloors = []
-                state.levelFloor = nil
-                state.lock.unlock()
-                engine.inputNode.removeTap(onBus: 0)
-                try ensureRunning(deviceUID: lastDeviceUID)
-                Diagnostics.log("dictation", "capture.engine.recovered")
-            } catch {
-                Diagnostics.log("dictation", "capture.engine.died \(String(error.localizedDescription.prefix(120)))")
-                shutdownEngine()
+            consecutiveRenderErrors = 0
+            append(frames)
+            return noErr
+        }
+
+        /// Copies the landed frames into the accumulator, emitting a copy of
+        /// every full chunk (a callback may straddle a chunk boundary).
+        private func append(_ frames: AVAudioFrameCount) {
+            guard let source = landing.floatChannelData, let target = chunk.floatChannelData else { return }
+            let channels = Int(format.channelCount)
+            var consumed: AVAudioFrameCount = 0
+            while consumed < frames {
+                let count = min(chunk.frameCapacity - chunkFill, frames - consumed)
+                for channel in 0..<channels {
+                    (target[channel] + Int(chunkFill)).update(from: source[channel] + Int(consumed), count: Int(count))
+                }
+                chunkFill += count
+                consumed += count
+                guard chunkFill == chunk.frameCapacity else { continue }
+                chunk.frameLength = chunkFill
+                if let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFill),
+                   let into = copy.floatChannelData {
+                    copy.frameLength = chunkFill
+                    for channel in 0..<channels {
+                        into[channel].update(from: target[channel], count: Int(chunkFill))
+                    }
+                    onChunk(copy)
+                }
+                chunkFill = 0
             }
         }
     }
 
-    /// Lock-guarded state shared with the audio-thread tap.
+    /// Lock-guarded state shared with the processing queue.
     private final class State: @unchecked Sendable {
         let lock = NSLock()
         var file: AVAudioFile?
@@ -1188,7 +1363,7 @@ nonisolated final class MicCapture {
         return state.rawPeakDB
     }
 
-    /// Starts (or reuses, when warm) the engine and begins writing to `url`.
+    /// Starts (or reuses, when warm) the unit and begins writing to `url`.
     func beginRecording(to url: URL, deviceUID: String) {
         queue.async { [self] in
             cooldown?.cancel()
@@ -1210,7 +1385,7 @@ nonisolated final class MicCapture {
     }
 
     /// Closes the current segment file and opens a fresh one at `url` WITHOUT
-    /// stopping the engine — buffers keep flowing into the new file, so no
+    /// stopping the unit — buffers keep flowing into the new file, so no
     /// audio is lost at phrase boundaries. `completion` runs on the main
     /// thread after the old file is finalized (safe to upload).
     func rotate(to url: URL, completion: @escaping @MainActor () -> Void) {
@@ -1223,12 +1398,12 @@ nonisolated final class MicCapture {
         }
     }
 
-    /// Stops writing. With `keepWarmSeconds > 0` the engine keeps running and
+    /// Stops writing. With `keepWarmSeconds > 0` the unit keeps running and
     /// discards samples (the orange mic indicator stays on) so the next start
     /// is instant; a cooldown then releases the mic. `completion` (main
     /// thread) runs after the recording file is finalized.
-    /// `releaseHold: false` keeps a Bluetooth hands-free link up through an
-    /// engine-death recovery — the restart that follows must land on a link
+    /// `releaseHold: false` keeps a Bluetooth hands-free link up through a
+    /// capture-death recovery — the restart that follows must land on a link
     /// that is still up (see `BluetoothInputHold`).
     func endRecording(keepWarmSeconds: TimeInterval, releaseHold: Bool = true,
                       completion: (@MainActor () -> Void)? = nil) {
@@ -1253,7 +1428,7 @@ nonisolated final class MicCapture {
         queue.async { [self] in shutdownEngine() }
     }
 
-    // MARK: Engine lifecycle (queue-confined)
+    // MARK: Unit lifecycle (queue-confined)
 
     private func ensureRunning(deviceUID: String) throws {
         state.lock.lock()
@@ -1261,49 +1436,24 @@ nonisolated final class MicCapture {
         state.lock.unlock()
         guard !running else { return }
 
-        // Cold start: ALWAYS on a fresh engine. AVAudioEngine's input node
-        // binds to the device that was current when the engine was FIRST
-        // touched and keeps that binding — device AND cached stream format —
-        // across stop(); it is never renegotiated. Unplugging/plugging
-        // headphones while idle therefore left the old engine permanently
-        // wedged: every start failed with -10868 (FormatNotSupported) until
-        // the app was relaunched. (Setting kAudioOutputUnitProperty_-
-        // CurrentDevice on the initialized unit does NOT refresh the cached
-        // format — the 3.17 attempt, disproven by the field log.) A fresh
-        // engine binds cleanly to whatever input is live right now, and its
-        // cost is trivial next to the mic hardware spin-up a cold start
-        // already pays. The warm window is untouched — a running engine
-        // never reaches this path.
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        // Cold start: ALWAYS on a fresh unit, bound to the input that is live
+        // right now — a unit left over from a device that has since gone is
+        // dropped first. The warm window is untouched: a running unit never
+        // reaches this path.
+        stopUnit()
         lastDeviceUID = deviceUID
         // Bluetooth input: raise and hold the hands-free link BEFORE the
-        // engine builds its aggregate, so the aggregate is born settled.
+        // unit binds, so the unit is born on a settled link.
         armBluetoothHold(deviceUID: deviceUID)
-        engine = AVAudioEngine()
-        observeConfigurationChanges()
 
-        let input = engine.inputNode
         // Selected mic; an unresolved UID (device unplugged) falls through
         // to the system default input.
-        if !deviceUID.isEmpty,
-           let deviceID = AudioInputDevices.deviceID(forUID: deviceUID),
-           let unit = input.audioUnit {
-            var id = deviceID
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-                                 kAudioUnitScope_Global, 0, &id,
-                                 UInt32(MemoryLayout<AudioDeviceID>.size))
-        }
-
-        // The format the node reports right after a device switch (or before a
-        // just-selected mic is ready) can be empty. Installing a tap with a
-        // 0-channel / 0 Hz format aborts the whole process inside AVFAudio, so
-        // bail cleanly instead — the configuration-change observer rebuilds the
-        // tap once the device settles.
-        let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0, format.sampleRate > 0 else {
+        let chosen = deviceUID.isEmpty ? nil : AudioInputDevices.deviceID(forUID: deviceUID)
+        guard let device = chosen ?? AudioInputDevices.defaultInputDeviceID() else {
             throw MicCaptureError.deviceNotReady
         }
+        let context = try makeUnit(device: device)
+        let format = context.format
         state.lock.lock()
         state.sampleRate = Float(format.sampleRate)
         if state.fft == nil {
@@ -1314,35 +1464,208 @@ nonisolated final class MicCapture {
         }
         state.lock.unlock()
 
-        input.removeTap(onBus: 0) // stale tap from a previous device/format
-        let st = state
-        // Pass nil, not `format`: switching the input device reconfigures the
-        // node asynchronously, so an explicit format read a moment earlier can
-        // be stale by the time the tap is installed — AVFAudio then aborts with
-        // "Failed to create tap due to format mismatch". nil binds the tap to
-        // the node's live format atomically, immune to that race. (The buffer
-        // carries its own format; `handle` reads the rate from it.)
-        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-            guard let self else { return }
-            Self.handle(buffer: buffer, state: st) { db, spectrum, isFirst in
-                DispatchQueue.main.async {
-                    if isFirst { self.onCaptureStarted?() }
-                    self.onAudio?(db, spectrum)
-                }
-            }
+        io = context
+        boundDevice = device
+        boundToDefault = chosen == nil
+        boundRate = AudioInputDevices.nominalSampleRate(device) ?? format.sampleRate
+        boundChannels = AudioInputDevices.inputChannelCount(device)
+        let status = AudioOutputUnitStart(context.unit)
+        guard status == noErr else {
+            stopUnit()
+            throw MicCaptureError.unit("start", status)
         }
-        engine.prepare()
-        try engine.start()
+        installListeners(device: device, watchDefault: chosen == nil)
         state.lock.lock()
         state.engineRunning = true
         state.lock.unlock()
-        Diagnostics.log("dictation", "capture.engine.start device=\(deviceUID.isEmpty ? "auto" : "custom") rate=\(Int(format.sampleRate))")
+        Diagnostics.log("dictation", "capture.engine.start device=\(deviceUID.isEmpty ? "auto" : "custom") rate=\(Int(format.sampleRate)) ch=\(format.channelCount) frames=\(AudioInputDevices.bufferFrameSize(device))")
     }
 
-    /// Resolves the input the engine is about to bind (the chosen mic, else
+    /// Creates, configures and initializes — but does not start — an
+    /// input-only HAL output unit on `device`, in TN2091's order: enable and
+    /// disable IO, bind the device, read the device format, set the client
+    /// format and the input callback, initialize.
+    private func makeUnit(device: AudioDeviceID) throws -> IOContext {
+        var description = AudioComponentDescription(
+            componentType: kAudioUnitType_Output,
+            componentSubType: kAudioUnitSubType_HALOutput,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0, componentFlagsMask: 0
+        )
+        guard let component = AudioComponentFindNext(nil, &description) else {
+            throw MicCaptureError.unit("component", -1)
+        }
+        var instance: AudioUnit?
+        let created = AudioComponentInstanceNew(component, &instance)
+        guard created == noErr, let unit = instance else {
+            throw MicCaptureError.unit("instance", created)
+        }
+        func discard() {
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+        }
+        func step(_ name: String, _ status: OSStatus) throws {
+            guard status == noErr else {
+                discard()
+                throw MicCaptureError.unit(name, status)
+            }
+        }
+
+        var enable: UInt32 = 1
+        var disable: UInt32 = 0
+        var target = device
+        let flagSize = UInt32(MemoryLayout<UInt32>.size)
+        try step("enableInput", AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &enable, flagSize))
+        try step("disableOutput", AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &disable, flagSize))
+        try step("device", AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &target,
+            UInt32(MemoryLayout<AudioDeviceID>.size)))
+
+        var deviceFormat = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        try step("deviceFormat", AudioUnitGetProperty(
+            unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1, &deviceFormat, &formatSize))
+        // The format a device reports mid-switch (or before a just-selected
+        // mic is ready) can be empty: bail cleanly and let the warm-up retry
+        // ladder come back once it settles.
+        guard deviceFormat.mSampleRate > 0, deviceFormat.mChannelsPerFrame > 0,
+              let format = AVAudioFormat(standardFormatWithSampleRate: deviceFormat.mSampleRate,
+                                         channels: min(2, deviceFormat.mChannelsPerFrame)) else {
+            discard()
+            throw MicCaptureError.deviceNotReady
+        }
+        var clientFormat = format.streamDescription.pointee
+        try step("clientFormat", AudioUnitSetProperty(
+            unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &clientFormat, formatSize))
+
+        let processing = processingQueue
+        let shared = state
+        guard let context = IOContext(
+            unit: unit, format: format,
+            chunkFrames: Self.chunkFrames, maxRenderFrames: Self.maxRenderFrames,
+            onChunk: { [weak self] buffer in
+                processing.async {
+                    Self.handle(buffer: buffer, state: shared) { db, spectrum, isFirst in
+                        DispatchQueue.main.async {
+                            guard let self else { return }
+                            if isFirst { self.onCaptureStarted?() }
+                            self.onAudio?(db, spectrum)
+                        }
+                    }
+                }
+            },
+            onRenderFailure: { [weak self] status in
+                guard let self else { return }
+                self.queue.async {
+                    Diagnostics.log("dictation", "capture.render.error status=\(status)")
+                    self.handleDeviceChange("render", force: true)
+                }
+            }
+        ) else {
+            discard()
+            throw MicCaptureError.deviceNotReady
+        }
+        var callback = AURenderCallbackStruct(
+            inputProc: IOContext.inputProc,
+            inputProcRefCon: Unmanaged.passUnretained(context).toOpaque()
+        )
+        try step("callback", AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback,
+            UInt32(MemoryLayout<AURenderCallbackStruct>.size)))
+        try step("initialize", AudioUnitInitialize(unit))
+        return context
+    }
+
+    /// Stops and disposes the unit (idempotent). Listeners go first, so the
+    /// teardown's own property chatter cannot re-enter.
+    private func stopUnit() {
+        removeListeners()
+        guard let context = io else { return }
+        // Stop is synchronous with the IO cycle: no callback runs after it.
+        AudioOutputUnitStop(context.unit)
+        AudioUnitUninitialize(context.unit)
+        AudioComponentInstanceDispose(context.unit)
+        io = nil
+        boundDevice = kAudioObjectUnknown
+    }
+
+    /// Watches the bound device (alive, nominal rate, input streams) and —
+    /// when the unit follows the system default — the default input itself.
+    /// Blocks are delivered on the control queue.
+    private func installListeners(device: AudioDeviceID, watchDefault: Bool) {
+        var watched: [(AudioObjectID, AudioObjectPropertyAddress, String)] = [
+            (device, AudioInputDevices.address(kAudioDevicePropertyDeviceIsAlive), "alive"),
+            (device, AudioInputDevices.address(kAudioDevicePropertyNominalSampleRate), "rate"),
+            (device, AudioInputDevices.address(kAudioDevicePropertyStreamConfiguration,
+                                               scope: kAudioDevicePropertyScopeInput), "streams"),
+        ]
+        if watchDefault {
+            watched.append((AudioObjectID(kAudioObjectSystemObject),
+                            AudioInputDevices.address(kAudioHardwarePropertyDefaultInputDevice), "default"))
+        }
+        for (object, address, reason) in watched {
+            var mutable = address
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                self?.handleDeviceChange(reason)
+            }
+            guard AudioObjectAddPropertyListenerBlock(object, &mutable, queue, block) == noErr else { continue }
+            listeners.append(DeviceListener(object: object, address: address, block: block))
+        }
+    }
+
+    private func removeListeners() {
+        for listener in listeners {
+            var address = listener.address
+            AudioObjectRemovePropertyListenerBlock(listener.object, &address, queue, listener.block)
+        }
+        listeners = []
+    }
+
+    /// A device change is only fatal when the bound input really changed:
+    /// it is gone, its format moved, or (following the default) the default
+    /// input is now another device. Listener chatter that leaves the bound
+    /// input as it was is ignored — that kind of notification used to kill
+    /// the dictation right after the warm-up animation. A warm idle unit
+    /// re-binds silently to whatever input is now current; a live RECORDING
+    /// can't continue (the open file carries the old format), so it's
+    /// surfaced as dead and the service salvages what was captured so far.
+    private func handleDeviceChange(_ reason: String, force: Bool = false) {
+        state.lock.lock()
+        let running = state.engineRunning
+        let recording = state.file != nil
+        state.lock.unlock()
+        guard running, io != nil else { return }
+        let device = boundDevice
+        let alive = AudioInputDevices.isAlive(device)
+        let rate = AudioInputDevices.nominalSampleRate(device) ?? 0
+        let channels = AudioInputDevices.inputChannelCount(device)
+        let defaultMoved = boundToDefault && AudioInputDevices.defaultInputDeviceID() != device
+        guard force || !alive || defaultMoved || rate != boundRate || channels != boundChannels else { return }
+        Diagnostics.log("dictation", "capture.device.change \(reason) alive=\(alive) rate=\(Int(rate)) ch=\(channels) defaultMoved=\(defaultMoved)")
+        if recording {
+            Diagnostics.log("dictation", "capture.engine.died mid-recording")
+            // The hold stays up: the service restarts capture at once,
+            // and a restart on a link that is still up is what settles.
+            shutdownEngine(releaseHold: false)
+            DispatchQueue.main.async { self.onEngineDied?() }
+            return
+        }
+        shutdownEngine(releaseHold: false)
+        do {
+            try ensureRunning(deviceUID: lastDeviceUID)
+            Diagnostics.log("dictation", "capture.engine.recovered")
+        } catch {
+            Diagnostics.log("dictation", "capture.engine.died \(String(error.localizedDescription.prefix(120)))")
+            shutdownEngine()
+        }
+    }
+
+    /// Resolves the input the unit is about to bind (the chosen mic, else
     /// the system default). For a Bluetooth device the hold is started
     /// first and given up to 1.5 s to actually hear the mic — the moment
-    /// after which a fresh engine no longer sees a configuration change.
+    /// after which a fresh unit no longer sees the device reconfigure.
     /// Anything else releases a stale hold.
     private func armBluetoothHold(deviceUID: String) {
         let chosen = deviceUID.isEmpty ? nil : AudioInputDevices.deviceID(forUID: deviceUID)
@@ -1396,7 +1719,7 @@ nonisolated final class MicCapture {
     }
 
     private func makeFile(at url: URL) throws -> AVAudioFile {
-        let format = engine.inputNode.outputFormat(forBus: 0)
+        guard let format = io?.format else { throw MicCaptureError.deviceNotReady }
         // AAC's maximum bitrate scales with sample rate × channels. A fixed
         // 64 kbps is fine at 44.1/48 kHz but the encoder rejects it (error
         // '!dat') at the 16 kHz — or 8 kHz — mono that a Bluetooth headset mic
@@ -1446,10 +1769,10 @@ nonisolated final class MicCapture {
         state.bandFloors = []
         state.levelFloor = nil
         state.lock.unlock()
-        guard wasRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        Diagnostics.log("dictation", "capture.engine.stop")
+        stopUnit()
+        if wasRunning {
+            Diagnostics.log("dictation", "capture.engine.stop")
+        }
     }
 
     // MARK: Audio thread
@@ -1462,9 +1785,9 @@ nonisolated final class MicCapture {
             state.awaitingFirstBuffer = false
             isFirst = true
         }
-        // The tap is installed with a nil format, so the true rate is whatever
-        // the node settled on — take it from the buffer, keeping the FFT bins
-        // honest regardless of what was read at install time.
+        // The chunk carries the unit's client format — take the rate from
+        // it, keeping the FFT bins honest regardless of what was read at
+        // bind time.
         let bufRate = Float(buffer.format.sampleRate)
         if bufRate > 0 { state.sampleRate = bufRate }
         if let file = state.file {
@@ -1650,6 +1973,25 @@ nonisolated enum AudioInputDevices {
         return value == kAudioDeviceTransportTypeBluetooth || value == kAudioDeviceTransportTypeBluetoothLE
     }
 
+    /// False once the device has been unplugged (or asked about after it
+    /// went away — the property read fails).
+    static func isAlive(_ id: AudioDeviceID) -> Bool {
+        var addr = address(kAudioDevicePropertyDeviceIsAlive)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return false }
+        return value != 0
+    }
+
+    /// The device's IO buffer size in frames — what one HAL callback carries.
+    static func bufferFrameSize(_ id: AudioDeviceID) -> Int {
+        var addr = address(kAudioDevicePropertyBufferFrameSize)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return 0 }
+        return Int(value)
+    }
+
     static func nominalSampleRate(_ id: AudioDeviceID) -> Double? {
         var addr = address(kAudioDevicePropertyNominalSampleRate)
         var value: Float64 = 0
@@ -1667,8 +2009,8 @@ nonisolated enum AudioInputDevices {
         return id
     }
 
-    private static func address(_ selector: AudioObjectPropertySelector,
-                                scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+    static func address(_ selector: AudioObjectPropertySelector,
+                        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
                                    mElement: kAudioObjectPropertyElementMain)
     }
@@ -1683,7 +2025,7 @@ nonisolated enum AudioInputDevices {
         return ids
     }
 
-    private static func inputChannelCount(_ id: AudioDeviceID) -> Int {
+    static func inputChannelCount(_ id: AudioDeviceID) -> Int {
         var addr = address(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeInput)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }

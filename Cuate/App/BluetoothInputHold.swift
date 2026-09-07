@@ -5,30 +5,32 @@ import Foundation
 import os
 
 /// Keeps a Bluetooth headset's hands-free (HFP/SCO) link up for the whole
-/// capture session, independently of `AVAudioEngine`, and reports when the
-/// link is REALLY up (the mic is heard).
+/// capture session, independently of the capture unit, and reports when
+/// the link is REALLY up (the mic is heard).
 ///
 /// Why this exists (field log 2026-09-04, Sony WH-1000XM5 as the default
-/// input AND output): on macOS `AVAudioEngine` binds its I/O unit to an
-/// automatic aggregate of the default input and the default output — even
-/// for an input-only graph, and regardless of `kAudioOutputUnitProperty_-
-/// CurrentDevice`. Starting input flips the headset from A2DP to HFP; the
-/// aggregate's OUTPUT half changes format (48 kHz stereo → 16 kHz mono),
-/// the aggregate reconfigures, the engine stops itself, and the moment it
-/// stops the system drops the SCO link and restores A2DP. Every restart then
-/// re-triggers the same flip: a self-sustained loop with a ~1 s period,
-/// visible as `capture.engine.died` storms on nearly every cold start.
+/// input AND output): the capture then ran on `AVAudioEngine`, whose I/O
+/// unit binds to an automatic aggregate of the default input and the
+/// default output — even for an input-only graph, and regardless of
+/// `kAudioOutputUnitProperty_CurrentDevice`. Starting input flips the
+/// headset from A2DP to HFP; the aggregate's OUTPUT half changes format
+/// (48 kHz stereo → 16 kHz mono), the aggregate reconfigures, the engine
+/// stops itself, and the moment it stops the system drops the SCO link and
+/// restores A2DP. Every restart then re-triggers the same flip: a
+/// self-sustained loop with a ~1 s period, visible as `capture.engine.died`
+/// storms on nearly every cold start.
 ///
 /// A plain HAL output unit bound to the headset's INPUT device alone is
 /// immune to that: its device is 16 kHz mono before and after the profile
-/// switch. Starting it first raises the SCO link and holds it, so the
-/// engine's aggregate is built in its settled (16 kHz / 16 kHz) shape and
-/// survives, and any restart the engine still needs lands on a link that is
-/// already up.
+/// switch. `MicCapture` now captures on exactly such a unit (since the
+/// 2026-09-07 rewrite), and this hold still runs ahead of it: starting the
+/// hold first raises the SCO link before the capture unit binds, so the
+/// unit is born on a settled link, and the link stays up across the
+/// restarts a capture death still needs.
 ///
 /// Readiness: the output device's nominal rate flips the moment the link is
 /// REQUESTED, ~0.9 s before the voice channel actually connects (bluetoothd:
-/// "Sco route reason … AudioIO" → "voice audio connected"); an engine
+/// "Sco route reason … AudioIO" → "voice audio connected"); a capture unit
 /// started in between still dies once. The only honest signal is audio:
 /// the unit renders its input buffers and flags `linkHeard` on the first
 /// non-zero sample — the BT HAL delivers exact zeros (or nothing) until the

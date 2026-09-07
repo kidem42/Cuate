@@ -332,10 +332,21 @@ General).
   user turn, and the reply is shaped mechanically before insertion (lead-ins,
   labels, quotes, Markdown, code fences, em dashes) — pure Foundation,
   covered by `scripts/DictationShapingContractTest.swift`.
+  `MicCapture` (in `DictationService.swift`) captures on an input-only HAL
+  output unit bound to the chosen microphone — not on `AVAudioEngine`, whose
+  input node is born on the default-input/default-output aggregate and keeps
+  that aggregate's format (a Bluetooth headset as the default input made
+  every start on a 48 kHz USB mic fail with -10868). The HAL IO thread only
+  accumulates 2048-frame chunks; file writes, FFT and the streaming side-tap
+  run on a serial processing queue. Device listeners (alive, rate, streams,
+  default input) drive the died/recovered semantics.
   `App/BluetoothInputHold.swift` raises and holds a Bluetooth headset's
-  hands-free link BEFORE `MicCapture` starts its `AVAudioEngine`, so the
-  A2DP→HFP profile switch cannot restart the capture in a loop; restarts use
-  a backoff and re-arm on the same microphone.
+  hands-free link BEFORE the unit binds, so the A2DP→HFP profile switch
+  cannot restart the capture in a loop; restarts use a backoff with a single
+  pending retry per session and re-arm on the same microphone. A stop waits
+  at most 3 s for the capture queue to release the segment file (a device
+  mid-reconfiguration can hold it inside CoreAudio for minutes), and the
+  hotkey cancels a session that is still processing.
 - **Costs:** `Views/CostsSettingsView.swift` (session/today/month, charts by
   provider or model, soft monthly budget `SpendStore.monthlyBudgetUSD`).
 - **Provider glyphs:** `Views/ProviderBadge.swift`, assets `Provider-<name>`.
