@@ -7,6 +7,7 @@
 #   - the mid-turn follow-up frame (steer), Swift + Kotlin, against
 #     shared/fixtures/steer-frame.json;
 #   - markdown lists (numbering, nesting, continuations);
+#   - the conference link of a calendar event (which hosts, which field wins);
 #   - the Hermes Plaud plugin, including the seam with the Hermes runtime.
 # Run after touching any of those implementations or their fixtures.
 set -euo pipefail
@@ -59,6 +60,14 @@ xcrun swiftc -o "$tmp/dictation-shaping-test" \
     Cuate/App/DictationTextShaping.swift \
     scripts/DictationShapingContractTest.swift
 "$tmp/dictation-shaping-test"
+
+echo "== Swift contract: conference link =="
+# Which link in an event counts as the call (Zoom, Meet, Teams… by host) and
+# which field wins — shared by the calendar tool and the World Time popover.
+xcrun swiftc -o "$tmp/conference-link-test" \
+    Cuate/Addons/CalendarAddon/ConferenceLinkDetector.swift \
+    scripts/ConferenceLinkContractTest.swift
+"$tmp/conference-link-test"
 
 echo "== Python contract: Hermes Plaud plugin =="
 # The seam with Hermes (how it calls a handler, what it does with check_fn)

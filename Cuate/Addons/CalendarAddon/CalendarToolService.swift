@@ -286,7 +286,13 @@ You have calendar and reminder tools backed by the user's own macOS Calendar. To
 
         // Detail sub-lines, indented under the event line.
         var details: [String] = []
-        if let url = event.url?.absoluteString, !url.isEmpty {
+        // The call link first (fished out of url/location/notes by the
+        // shared detector), the URL field only when it is something else.
+        let conference = CalendarEventSnapshot.conferenceLink(of: event)
+        if let conference {
+            details.append("join: \(conference.url.absoluteString) (\(conference.serviceName))")
+        }
+        if let url = event.url?.absoluteString, !url.isEmpty, url != conference?.url.absoluteString {
             details.append("url: \(url)")
         }
         if let attendees = event.attendees, !attendees.isEmpty {

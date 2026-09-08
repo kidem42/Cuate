@@ -49,6 +49,8 @@ struct WorldTimeView: View {
     @State private var showDatePicker = false
     @State private var busyBlocks: [BusyBlock] = []
     @State private var hoveredBusyID: String? = nil
+    /// The block whose details popover is open.
+    @State private var selectedBusyID: String? = nil
 
     /// A half-hour slot inside the selected column: which row's cell shows
     /// the split, and which half (:00 / :30) is hovered or being composed.
@@ -248,9 +250,7 @@ struct WorldTimeView: View {
             // Jump to the Apple Calendar app — the created slots live there.
             // A text link, not an icon.
             Button {
-                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.iCal") {
-                    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-                }
+                openCalendarApp()
             } label: {
                 Text(WTL("wt.openCalendar"))
                     .font(.system(size: 11, weight: .medium))
@@ -420,13 +420,55 @@ struct WorldTimeView: View {
 
     // MARK: - Busy lane (CalendarAddon integration)
 
-    /// One event from the user's visible calendars, clipped to the shown day.
+    /// One event from the user's visible calendars, clipped to the shown
+    /// day. Carries a value snapshot of the event: the store invalidates
+    /// `EKEvent`s behind our back, and the popover reads its block after
+    /// the next refresh.
     private struct BusyBlock: Identifiable {
-        let id: String
-        let title: String
+        let event: CalendarEventSnapshot
         let start: Date
         let end: Date
         let color: Color
+        var id: String { event.id }
+        var title: String { event.title }
+    }
+
+    /// Blocks that touch on the lane — overlapping meetings, or short ones
+    /// minutes apart — drawn as ONE capsule over their union, split into
+    /// equal segments in start order (earliest leftmost). Each segment is
+    /// the hover and click target of its block; the label lists them all.
+    private struct BusyCluster: Identifiable {
+        let blocks: [BusyBlock]
+        var id: String { blocks[0].id }
+        var start: Date { blocks[0].start }
+        var end: Date { blocks.map(\.end).max() ?? blocks[0].end }
+    }
+
+    /// For clustering a block counts as at least this long: a five-minute
+    /// event is still a 6-pt pill, and two of them minutes apart would
+    /// otherwise paint over each other.
+    private static let busyClusterMinimumSpan: TimeInterval = 15 * 60
+
+    /// The day's blocks grouped by contact — one sweep over the
+    /// start-sorted list: a block joins the open cluster while it starts
+    /// before the cluster's visible end.
+    private var busyClusters: [BusyCluster] {
+        var clusters: [[BusyBlock]] = []
+        var visibleEnd = Date.distantPast
+        for block in busyBlocks {
+            if block.start < visibleEnd, !clusters.isEmpty {
+                clusters[clusters.count - 1].append(block)
+            } else {
+                clusters.append([block])
+            }
+            visibleEnd = max(visibleEnd, block.end, block.start.addingTimeInterval(Self.busyClusterMinimumSpan))
+        }
+        return clusters.map { BusyCluster(blocks: $0) }
+    }
+
+    private func busyCluster(containing id: String?) -> BusyCluster? {
+        guard let id else { return nil }
+        return busyClusters.first { $0.blocks.contains { $0.id == id } }
     }
 
     /// Reads the selected day's events from the calendars the CalendarAddon
@@ -436,39 +478,44 @@ struct WorldTimeView: View {
     private func refreshBusy() {
         guard CalendarSettings.shared.enabled, CalendarAddon.shared.hasEventAccess else {
             if !busyBlocks.isEmpty { busyBlocks = [] }
+            if selectedBusyID != nil { selectedBusyID = nil }
             return
         }
         let dayEnd = instant(forColumn: 24)
         let calendars = CalendarAddon.shared.visibleEventCalendars()
         guard !calendars.isEmpty else {
             if !busyBlocks.isEmpty { busyBlocks = [] }
+            if selectedBusyID != nil { selectedBusyID = nil }
             return
         }
         let store = CalendarAddon.shared.store
         let predicate = store.predicateForEvents(withStart: dayStart, end: dayEnd, calendars: calendars)
-        busyBlocks = store.events(matching: predicate)
+        let blocks = store.events(matching: predicate)
             .filter { !$0.isAllDay }
             .compactMap { event -> BusyBlock? in
                 guard let start = event.startDate, let end = event.endDate, end > start,
                       end > dayStart, start < dayEnd else { return nil }
-                // Recurring events share an identifier — the occurrence date
-                // keeps ForEach ids unique.
-                let id = (event.eventIdentifier ?? UUID().uuidString) + "@\(start.timeIntervalSince1970)"
-                let color = event.calendar.flatMap { cal in
-                    cal.cgColor.map { Color(cgColor: $0) }
-                } ?? Color.red
-                return BusyBlock(id: id,
-                                 title: event.title ?? "",
+                let snapshot = CalendarEventSnapshot(event: event)
+                let color = snapshot.calendarColor.map { Color(cgColor: $0) } ?? Color.red
+                return BusyBlock(event: snapshot,
                                  start: max(start, dayStart),
                                  end: min(end, dayEnd),
                                  color: color)
             }
             .sorted { $0.start < $1.start }
+        busyBlocks = blocks
+        // The open popover's event left the day (deleted, moved): close it.
+        if let selected = selectedBusyID, !blocks.contains(where: { $0.id == selected }) {
+            selectedBusyID = nil
+        }
     }
 
     /// The thin busy track above the grid, aligned with the hour columns.
     /// Blocks are exact intervals (not snapped to hours), tinted with the
-    /// calendar's own color. Hover grows the block and reveals the title.
+    /// calendar's own color; blocks that touch share one capsule (see
+    /// `BusyCluster`), so the lane stays one line. Hover grows the capsule
+    /// and reveals the title(s); a click opens the details popover of the
+    /// segment under the cursor.
     private var busyLane: some View {
         HStack(spacing: 0) {
             Text(WTL("wt.busy.caption"))
@@ -478,53 +525,20 @@ struct WorldTimeView: View {
                 .padding(.trailing, 12)
             GeometryReader { geo in
                 let total = instant(forColumn: 24).timeIntervalSince(dayStart)
+                let clusters = busyClusters
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(wt.rail)
                         .frame(height: 3)
-                    ForEach(busyBlocks) { block in
-                        let x = geo.size.width * block.start.timeIntervalSince(dayStart) / total
-                        let width = max(6, geo.size.width * block.end.timeIntervalSince(block.start) / total)
-                        let hovered = hoveredBusyID == block.id
-                        Capsule()
-                            .fill(block.color)
-                            .frame(width: width, height: hovered ? 12 : 8)
-                            // Halo ring in the theme's text color: the block's
-                            // fill is the CALENDAR's color (data — never
-                            // re-tinted), so on same-hued themes (blue on
-                            // Blueprint, green on Terminal) the ring is what
-                            // keeps it visible.
-                            .overlay {
-                                if !wt.isGlass {
-                                    Capsule().stroke(wt.text.opacity(0.55), lineWidth: 1)
-                                }
-                            }
-                            .shadow(color: .black.opacity(hovered ? 0.3 : 0.15), radius: hovered ? 3 : 1, y: 1)
-                            .offset(x: x)
-                            .onHover { hoveredBusyID = $0 ? block.id : (hoveredBusyID == block.id ? nil : hoveredBusyID) }
+                    ForEach(clusters) { cluster in
+                        let x = geo.size.width * cluster.start.timeIntervalSince(dayStart) / total
+                        let width = max(6, geo.size.width * cluster.end.timeIntervalSince(cluster.start) / total)
+                        busyCapsule(cluster, width: width)
+                            .position(x: x + width / 2, y: geo.size.height / 2)
                     }
-                    // Floating label of the hovered block — its own capsule,
-                    // NOT clipped to the block's width (a 30-minute meeting
-                    // is a sliver, its name is not). Clamped into the lane.
-                    if let block = busyBlocks.first(where: { $0.id == hoveredBusyID }) {
-                        let startX = geo.size.width * block.start.timeIntervalSince(dayStart) / total
-                        let width = max(6, geo.size.width * block.end.timeIntervalSince(block.start) / total)
-                        let center = min(max(startX + width / 2, 90), geo.size.width - 90)
-                        // Title capped in code (SwiftUI can't hug-and-cap in
-                        // one frame): ~40 chars covers a lane-sized capsule.
-                        let title = block.title.isEmpty ? "•" : String(block.title.prefix(40))
-                            + (block.title.count > 40 ? "…" : "")
-                        Text("\(title) · \(timeRangeLabel(block))")
-                            .font(.system(size: 10, weight: .semibold))
-                            .lineLimit(1)
-                            .fixedSize()
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.regularMaterial, in: Capsule())
-                            .overlay(Capsule().stroke(block.color, lineWidth: 1))
-                            .position(x: center, y: -13)
-                            .zIndex(2)
-                            .allowsHitTesting(false)
+                    if let hovered = busyBlocks.first(where: { $0.id == hoveredBusyID }),
+                       let cluster = clusters.first(where: { $0.blocks.contains { $0.id == hovered.id } }) {
+                        busyLabel(cluster, hovered: hovered, laneWidth: geo.size.width, total: total)
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .center)
@@ -532,6 +546,181 @@ struct WorldTimeView: View {
         }
         .frame(height: 18)
         .animation(.easeOut(duration: 0.12), value: hoveredBusyID)
+    }
+
+    /// A cluster's capsule: a lone block paints it plainly, several split
+    /// it into equal segments in start order with a count badge at the end.
+    /// The whole capsule is one control; the segment under the cursor
+    /// decides which block the label, the projection and a click go to.
+    private func busyCapsule(_ cluster: BusyCluster, width: CGFloat) -> some View {
+        let blocks = cluster.blocks
+        let active = blocks.contains { $0.id == hoveredBusyID || $0.id == selectedBusyID }
+        let seam = wt.isGlass ? Color.white.opacity(0.7) : wt.text.opacity(0.55)
+        return HStack(spacing: 0) {
+            ForEach(blocks) { block in
+                Rectangle()
+                    .fill(block.color)
+                    .frame(width: width / CGFloat(blocks.count))
+                    // Hairline between segments: two meetings from one
+                    // calendar share a color, the seam tells them apart.
+                    .overlay(alignment: .leading) {
+                        if block.id != blocks[0].id {
+                            Rectangle().fill(seam).frame(width: 1)
+                        }
+                    }
+            }
+        }
+        .frame(width: width, height: active ? 12 : 8)
+        .clipShape(Capsule())
+        // Halo ring in the theme's text color: the fill is the CALENDAR's
+        // color (data — never re-tinted), so on same-hued themes (blue on
+        // Blueprint, green on Terminal) the ring is what keeps it visible.
+        .overlay {
+            if !wt.isGlass {
+                Capsule().stroke(wt.text.opacity(0.55), lineWidth: 1)
+            }
+        }
+        .shadow(color: .black.opacity(active ? 0.3 : 0.15), radius: active ? 3 : 1, y: 1)
+        .overlay(alignment: .trailing) {
+            if blocks.count > 1 {
+                Text("\(blocks.count)")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .monospacedDigit()
+                    .padding(.horizontal, 3)
+                    .frame(minWidth: 12, minHeight: 12)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(seam, lineWidth: 1))
+                    .offset(x: 5)
+            }
+        }
+        // The click target: a 30-minute meeting is a 15-pt sliver — the
+        // slab around it is what makes the capsule a control.
+        .frame(width: width + 8, height: 14)
+        .contentShape(Rectangle())
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point):
+                hoveredBusyID = block(in: cluster, atX: point.x - 4, width: width).id
+            case .ended:
+                if blocks.contains(where: { $0.id == hoveredBusyID }) { hoveredBusyID = nil }
+            }
+        }
+        .onTapGesture(coordinateSpace: .local) { point in
+            toggleBusyPopover(for: block(in: cluster, atX: point.x - 4, width: width))
+        }
+        .help(WTL("wt.busy.pill.help"))
+        // Anchored to the capsule itself — before the caller's `.position`,
+        // which would hand the popover the whole lane as its anchor. One
+        // popover per capsule: switching between its meetings swaps the
+        // content in place.
+        .popover(isPresented: Binding(
+            get: { blocks.contains { $0.id == selectedBusyID } },
+            set: { if !$0, blocks.contains(where: { $0.id == selectedBusyID }) { selectedBusyID = nil } }
+        ), arrowEdge: .bottom) {
+            if let block = blocks.first(where: { $0.id == selectedBusyID }) {
+                busyPopover(for: block, in: cluster)
+            }
+        }
+        .zIndex(active ? 1 : 0)
+    }
+
+    /// The block whose segment sits under `x` (capsule-local; equal
+    /// segments, earliest block leftmost).
+    private func block(in cluster: BusyCluster, atX x: CGFloat, width: CGFloat) -> BusyBlock {
+        let blocks = cluster.blocks
+        let index = Int((x / width * CGFloat(blocks.count)).rounded(.down))
+        return blocks[max(0, min(blocks.count - 1, index))]
+    }
+
+    /// Floating label of the hovered capsule — its own capsule, NOT
+    /// clipped to the block's width (a 30-minute meeting is a sliver, its
+    /// name is not). A lone block gets one line; a cluster lists its
+    /// blocks, the one under the cursor bold. Clamped into the lane.
+    private func busyLabel(_ cluster: BusyCluster, hovered: BusyBlock,
+                           laneWidth: CGFloat, total: TimeInterval) -> some View {
+        let startX = laneWidth * cluster.start.timeIntervalSince(dayStart) / total
+        let width = max(6, laneWidth * cluster.end.timeIntervalSince(cluster.start) / total)
+        let center = min(max(startX + width / 2, 90), laneWidth - 90)
+        let rows = cluster.blocks
+        let isList = rows.count > 1
+        // Bottom edge 4 pt above the lane, so a list grows upward (rough
+        // line metrics — the label is not measured).
+        let height = CGFloat(rows.count) * 14 + 6
+        let shape = RoundedRectangle(cornerRadius: isList ? 9 : 999)
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(rows) { block in
+                HStack(spacing: 5) {
+                    if isList {
+                        Circle().fill(block.color).frame(width: 6, height: 6)
+                    }
+                    Text("\(busyTitle(block)) · \(timeRangeLabel(block))")
+                        .font(.system(size: 10, weight: !isList ? .semibold : (block.id == hovered.id ? .bold : .medium)))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, isList ? 4 : 3)
+        .background(.regularMaterial, in: shape)
+        .overlay(shape.stroke(hovered.color, lineWidth: 1))
+        .position(x: center, y: -4 - height / 2)
+        .zIndex(2)
+        .allowsHitTesting(false)
+    }
+
+    /// Title capped in code (SwiftUI can't hug-and-cap in one frame): ~40
+    /// chars covers a lane-sized capsule.
+    private func busyTitle(_ block: BusyBlock) -> String {
+        block.title.isEmpty ? "•" : String(block.title.prefix(40)) + (block.title.count > 40 ? "…" : "")
+    }
+
+    // MARK: - Busy block popover
+
+    private func toggleBusyPopover(for block: BusyBlock) {
+        if selectedBusyID == block.id {
+            selectedBusyID = nil
+            return
+        }
+        let clusterSize = busyCluster(containing: block.id)?.blocks.count ?? 1
+        Diagnostics.log("worldtime", "busy.popover.open cluster=\(clusterSize) join=\(block.event.conference?.service.rawValue ?? "none")")
+        selectedBusyID = block.id
+    }
+
+    private func busyPopover(for block: BusyBlock, in cluster: BusyCluster) -> some View {
+        WorldTimeEventPopover(
+            event: block.event,
+            color: block.color,
+            zones: busyPopoverZones,
+            homeZoneID: settings.homeZoneID,
+            siblings: cluster.blocks.count > 1 ? cluster.blocks.map {
+                WorldTimeEventPopover.Sibling(id: $0.id, title: $0.title, color: $0.color)
+            } : [],
+            onSelectSibling: { selectedBusyID = $0 },
+            onOpenCalendar: openCalendarApp
+        )
+    }
+
+    /// The grid rows as the popover lists them: home first, one entry per
+    /// zone (two rows on one zone would say the same time twice), each
+    /// with the label its row shows.
+    private var busyPopoverZones: [WorldTimeEventPopover.Zone] {
+        let home = settings.rows.filter { $0.id == settings.homeRowID }
+        let rest = settings.rows.filter { $0.id != settings.homeRowID }
+        var seen: Set<String> = []
+        return (home + rest).compactMap { row in
+            guard seen.insert(row.zoneID).inserted else { return nil }
+            let label = row.alias.map { WorldTimeCatalog.aliasDisplayName($0) }
+                ?? WorldTimeCatalog.city(for: row.zoneID).name
+            return WorldTimeEventPopover.Zone(id: row.id, label: label, zoneID: row.zoneID)
+        }
+    }
+
+    /// Jump to the Apple Calendar app (the created slots live there).
+    private func openCalendarApp() {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.iCal") {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        }
     }
 
     /// "14:30–15:30" in home-zone wall time (the lane lives on the home axis).
@@ -643,6 +832,7 @@ struct WorldTimeView: View {
         hoverSlot = nil
         composerSlot = nil
         showDatePicker = false
+        selectedBusyID = nil
         searchText = ""
         searchResults = []
         refreshBusy()
@@ -687,12 +877,14 @@ struct WorldTimeView: View {
     /// Hover + selection frames spanning the full grid height (the black
     /// column outline). Drawn once over the rows so the gaps between
     /// bands are framed too. Hovering a busy block projects its exact
-    /// interval down through every row the same way.
+    /// interval down through every row the same way; while a block's
+    /// popover is open the projection stays on that block (the cursor has
+    /// left the pill for the popover).
     private var columnFrames: some View {
         GeometryReader { geo in
             let bandWidth = geo.size.width - Self.headerWidth
             let cellWidth = bandWidth / 24
-            if let block = busyBlocks.first(where: { $0.id == hoveredBusyID }) {
+            if let block = busyBlocks.first(where: { $0.id == (selectedBusyID ?? hoveredBusyID) }) {
                 let total = instant(forColumn: 24).timeIntervalSince(dayStart)
                 let x = Self.headerWidth + bandWidth * block.start.timeIntervalSince(dayStart) / total
                 let width = max(4, bandWidth * block.end.timeIntervalSince(block.start) / total)

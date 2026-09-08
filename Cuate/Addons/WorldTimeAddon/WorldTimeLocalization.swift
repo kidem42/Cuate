@@ -56,6 +56,60 @@ enum WorldTimeStrings {
 
         // Busy lane (CalendarAddon integration)
         "wt.busy.caption": [.english: "Busy", .spanish: "Ocupado", .russian: "Занятость"],
+        "wt.busy.pill.help": [
+            .english: "Details and the call link",
+            .spanish: "Detalles y enlace de la llamada",
+            .russian: "Детали и ссылка на звонок"
+        ],
+
+        // Event popover (click on a busy block)
+        "wt.event.untitled": [.english: "(untitled)", .spanish: "(sin título)", .russian: "(без названия)"],
+        "wt.event.repeats": [.english: "Repeats", .spanish: "Se repite", .russian: "Повторяется"],
+        "wt.event.status.help": [
+            .english: "Your reply to the invitation",
+            .spanish: "Tu respuesta a la invitación",
+            .russian: "Ваш ответ на приглашение"
+        ],
+        "wt.event.status.accepted": [.english: "Accepted", .spanish: "Aceptado", .russian: "Принято"],
+        "wt.event.status.declined": [.english: "Declined", .spanish: "Rechazado", .russian: "Отклонено"],
+        "wt.event.status.tentative": [.english: "Tentative", .spanish: "Provisional", .russian: "Под вопросом"],
+        "wt.event.status.pending": [.english: "Not answered", .spanish: "Sin respuesta", .russian: "Без ответа"],
+        "wt.event.join": [.english: "Join", .spanish: "Unirse", .russian: "Подключиться"],
+        "wt.event.join.help": [
+            .english: "Open the call link in its app or the browser",
+            .spanish: "Abrir el enlace de la llamada en su app o en el navegador",
+            .russian: "Открыть ссылку на звонок в приложении или браузере"
+        ],
+        "wt.event.copyLink": [
+            .english: "Copy the call link",
+            .spanish: "Copiar el enlace de la llamada",
+            .russian: "Скопировать ссылку на звонок"
+        ],
+        "wt.event.copied": [.english: "Copied", .spanish: "Copiado", .russian: "Скопировано"],
+        "wt.event.openLink": [
+            .english: "Open the event's link",
+            .spanish: "Abrir el enlace del evento",
+            .russian: "Открыть ссылку события"
+        ],
+        "wt.event.attendees": [.english: "Attendees", .spanish: "Asistentes", .russian: "Участники"],
+        "wt.event.more": [.english: "+%d more", .spanish: "+%d más", .russian: "ещё %d"],
+        "wt.event.organizer": [.english: "organizer", .spanish: "organizador", .russian: "организатор"],
+        "wt.event.you": [.english: "you", .spanish: "tú", .russian: "вы"],
+        "wt.event.sameTime.help": [
+            .english: "Show this meeting instead",
+            .spanish: "Mostrar esta reunión",
+            .russian: "Показать эту встречу"
+        ],
+        "wt.event.openCalendar": [
+            .english: "Open in Calendar",
+            .spanish: "Abrir en Calendario",
+            .russian: "Открыть в Календаре"
+        ],
+        "wt.event.openCalendar.help": [
+            .english: "Show the day in the Calendar app",
+            .spanish: "Mostrar el día en la app Calendario",
+            .russian: "Показать день в приложении Календарь"
+        ],
         "wt.escHint": [.english: "esc closes", .spanish: "esc cierra", .russian: "esc — закрыть"],
 
         // Slot composer (half-hour click → create event/reminder)
