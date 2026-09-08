@@ -255,6 +255,96 @@ private struct FloatingMarigold: View {
     }
 }
 
+// MARK: - Dictation island ornaments
+
+/// Five pennants from the banner hanging from the dictation island's bottom
+/// edge — the edge is the string — 13×9 each, in the banner's first five
+/// colors, swaying ±2° at the top half a second apart. Clocked by a
+/// TimelineView, not a repeatForever animation: the island's content comes
+/// and goes inside transactions of its own (see `RecordingStatusView`).
+struct DiaIslandPennants: View {
+    /// False under Reduce Motion: the pennants hang straight.
+    let swaying: Bool
+    private static let colors: [UInt] = [0xEC407A, 0xFFB300, 0x26A69A, 0xAB47BC, 0xFF7043]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !swaying)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 0) {
+                ForEach(0..<Self.colors.count, id: \.self) { i in
+                    PapelPicadoPennant()
+                        .fill(dhex(Self.colors[i]), style: FillStyle(eoFill: true))
+                        .frame(width: 13, height: 9)
+                        // SwayingPennant's 2 s ease-in-out autoreverse = a 4 s sine.
+                        .rotationEffect(.degrees(swaying ? 2 * sin((t - Double(i) * 0.5) * .pi / 2) : 0),
+                                        anchor: .top)
+                    if i < Self.colors.count - 1 { Spacer(minLength: 0) }
+                }
+            }
+            .padding(.horizontal, 22)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// The island's warm-up in Día: three marigolds blooming in turn — scale
+/// 0.8 → 1.15 with a slight turn — on the dots' own clock and stagger, so
+/// "not hearing yet" speaks the theme's language.
+struct DiaIslandMarigolds: View {
+    /// False under Reduce Motion: the flowers hold a middle bloom.
+    let blooming: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !blooming)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { i in
+                    let pulse = blooming ? 0.5 + 0.5 * sin(t * 5.2 - Double(i) * 1.9) : 0.6
+                    MarigoldFlower(dark: true, withInner: true, centerRadius: 4.2)
+                        .frame(width: 9, height: 9)
+                        .scaleEffect(0.8 + 0.35 * pulse)
+                        .rotationEffect(.degrees(20 * pulse))
+                        .opacity(0.5 + 0.5 * pulse)
+                }
+            }
+        }
+    }
+}
+
+/// While the mic hears: four small marigolds rising from below the island's
+/// edge through the glow and fading — the chat's floating marigolds as an
+/// offering. Lives in the panel's room under the tab; off under Reduce
+/// Motion (the caller does not show it).
+struct DiaIslandPetals: View {
+    /// The panel's width and the height the petals travel.
+    let width: CGFloat
+    let rise: CGFloat
+    private static let petals: [(x: CGFloat, size: CGFloat, duration: Double, phase: Double)] = [
+        (0.14, 7, 3.2, 0), (0.28, 5, 4.0, 1.4), (0.68, 6, 3.6, 0.7), (0.84, 5, 4.4, 2.3),
+    ]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            ZStack(alignment: .bottomLeading) {
+                ForEach(0..<Self.petals.count, id: \.self) { i in
+                    let p = Self.petals[i]
+                    let u = ((t + p.phase) / p.duration).truncatingRemainder(dividingBy: 1)
+                    let eased = 1 - (1 - u) * (1 - u)
+                    let opacity = u < 0.15 ? u / 0.15 * 0.9 : 0.9 * (1 - (u - 0.15) / 0.85)
+                    MarigoldFlower(dark: true, withInner: true, centerRadius: 3, centerColor: dhex(0xE65100))
+                        .frame(width: p.size, height: p.size)
+                        .rotationEffect(.degrees(90 * eased))
+                        .opacity(opacity)
+                        .offset(x: width * p.x, y: -rise * eased)
+                }
+            }
+            .frame(width: width, alignment: .bottomLeading)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Full decoration overlay
 
 /// Papel picado banner (top), two floating marigolds, two candles (bottom-

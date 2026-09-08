@@ -332,7 +332,10 @@ General).
   from the screen's top edge through the housing's column and out of the
   seam on show, as opaque as its edge is far down the column and fully so at
   the seam, and retracts the same way on hide, the content fading in only once the tab has
-  landed; floating it appears in place; the theme's DARK palette in both appearances, a glow in the
+  landed; floating it appears in place; theme ornaments by `themeID` — Yule's
+  processing line is the candy cane, Día hangs the banner's pennants from
+  the edge, warms up with marigolds, runs a tricolor line and floats petals
+  through the glow (`DiaIsland*` in `DiaDeMuertosTheme.swift`); the theme's DARK palette in both appearances, a glow in the
   recording color that breathes on a 1.6 s clock as the recording indicator
   and never crosses the seam with the housing or the menu bar — design study
   `design/dictation/pill-studies.html`; phrase-by-phrase insertion via

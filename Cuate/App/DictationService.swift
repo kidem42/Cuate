@@ -1111,6 +1111,22 @@ private struct DictationWidgetView: View {
                               seamInset: service.seamInset, tabInset: tabInset)
             }
             island(docked: docked, tab: tab, tabInset: tabInset, shape: shape, recording: recording)
+            if palette.themeID == .diaDeMuertos {
+                // Día's ornaments live in the panel's room under the tab and
+                // come and go with the content: the banner's pennants hang
+                // from the edge; petals rise through the glow while the mic
+                // hears (not under Reduce Motion).
+                DiaIslandPennants(swaying: !reduceMotion)
+                    .frame(width: tab.width)
+                    .padding(.top, tabInset + tab.height)
+                    .opacity(service.widgetContentShown ? 1 : 0)
+                    .animation(docked && !reduceMotion ? .easeOut(duration: DictationService.contentFadeDuration) : nil,
+                               value: service.widgetContentShown)
+                if glowing && !reduceMotion {
+                    DiaIslandPetals(width: panel.width, rise: DictationService.glowMargin + 8)
+                        .frame(width: panel.width, height: panel.height, alignment: .bottom)
+                }
+            }
         }
         .frame(width: panel.width, height: panel.height, alignment: .top)
         .clipped()
@@ -1131,12 +1147,22 @@ private struct DictationWidgetView: View {
                         shape: AnyShape, recording: Color) -> some View {
             HStack(spacing: 8) {
                 if service.phase == .processing {
-                    // Transcription/cleanup in flight: indeterminate running line.
-                    RunningLine(palette: palette)
+                    // Transcription/cleanup in flight: indeterminate running
+                    // line — Yule's is the candy cane the chat's spinner uses.
+                    if palette.themeID == .yule {
+                        CandyCaneSpinner(paused: reduceMotion, size: CGSize(width: 74, height: 4))
+                    } else {
+                        RunningLine(palette: palette)
+                    }
                 } else if !service.micReady {
                     // Mic hardware still spinning up: pulsing dots say "not
-                    // hearing yet" — they flip to live bars on the first buffer.
-                    WarmupDots(palette: palette)
+                    // hearing yet" — they flip to live bars on the first
+                    // buffer. Día's dots are marigolds.
+                    if palette.themeID == .diaDeMuertos {
+                        DiaIslandMarigolds(blooming: !reduceMotion)
+                    } else {
+                        WarmupDots(palette: palette)
+                    }
                 } else {
                     EqualizerBars(level: service.level, spectrum: service.spectrum, palette: palette)
                 }
@@ -1400,22 +1426,29 @@ private struct WarmupDots: View {
 }
 
 /// Processing state: a thin indeterminate track with a running segment
-/// (replaces the system spinner — same semantics, island-native look).
+/// (replaces the system spinner — same semantics, island-native look). In
+/// Día the runner carries the banner's three colors on a marigold track.
 private struct RunningLine: View {
     let palette: ThemePalette
 
     private let trackWidth: CGFloat = 74
-    private let runnerWidth: CGFloat = 26
+    private var tricolor: Bool { palette.themeID == .diaDeMuertos }
+    private var runnerWidth: CGFloat { tricolor ? 30 : 26 }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
             let phase = time.truncatingRemainder(dividingBy: 1.3) / 1.3
             let color = palette.isGlass ? Color.white : dictationBarColor(0, palette: palette)
+            let runner: AnyShapeStyle = tricolor
+                ? AnyShapeStyle(LinearGradient(
+                    colors: [Color(rgb: 0xFFB300), Color(rgb: 0xEC407A), Color(rgb: 0x26A69A)],
+                    startPoint: .leading, endPoint: .trailing))
+                : AnyShapeStyle(color)
             ZStack(alignment: .leading) {
                 Capsule().fill(color.opacity(0.22))
                 Capsule()
-                    .fill(color)
+                    .fill(runner)
                     .frame(width: runnerWidth)
                     .offset(x: -runnerWidth + (trackWidth + runnerWidth) * phase)
             }

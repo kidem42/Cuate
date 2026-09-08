@@ -71,8 +71,10 @@ struct ThinkingEqualizer: View {
 /// stripes so the shine stays put while the spiral moves.
 struct CandyCaneSpinner: View {
     var paused: Bool = false
+    /// The "Thinking…" cylinder by default; the dictation island's
+    /// processing line passes 74×4.
+    var size = CGSize(width: 44, height: 11)
 
-    private let size = CGSize(width: 44, height: 11)
     private let turnPeriod: Double = 0.8
     /// Horizontal travel per turn: perpendicular stripe period 12px at 45°.
     private let travel: CGFloat = 16.9706
