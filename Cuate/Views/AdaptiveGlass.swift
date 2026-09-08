@@ -33,18 +33,6 @@ extension View {
                 )
         }
     }
-
-    /// Glass capsule (dictation pill); material fallback pre-26.
-    @ViewBuilder
-    func adaptiveGlassCapsule() -> some View {
-        if #available(macOS 26.0, *) {
-            glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-            background(.ultraThinMaterial)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
-        }
-    }
 }
 
 /// Behind-window blur (the desktop faintly shows through). Used as the

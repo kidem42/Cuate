@@ -53,7 +53,7 @@ this file too.
 | ChatWindow | the panel surface, the header, the status pill (+ the `inputStroke` outline), the pinned bar, the "down" button, retry, the attachment card, the whole composer |
 | MessageRow | bubbles, timestamps, the glyph, inline code, links |
 | MarkdownBlocksView | headings, lists (the bullet glyph!), the code block + ANSI + copy, inline code, quotes (including inside a user bubble — `isInUserBubble`), tables, dividers |
-| VoiceMessagePlayer / EnhancedVoiceButton / RecordingStatusView / DictationService | voice, the mic, the recording pill, the dictation capsules (148/182×34, 14 bars) |
+| VoiceMessagePlayer / EnhancedVoiceButton / RecordingStatusView / DictationService | voice, the mic, the recording pill, the dictation island (a black tab 34 tall, 14 bars in `dictationColors`, the glow and the chip from the DARK palette only — `recordingAccent` → `quoteColor` → `accent`) |
 | ThinkingIndicator | the spinner everywhere (status, backfill, image decode placeholders) |
 | ArtifactView / MermaidBlockView / AgentInlineImageView | the artifact card, mermaid, inline images |
 | AttachmentActionsBar / ImageResultActionsBar | the pills under an attachment and under a result |

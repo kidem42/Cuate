@@ -9,11 +9,12 @@ import Combine
 import Carbon
 
 /// System-wide dictation (Superwhisper-style): a global hotkey starts
-/// recording, a tiny Liquid Glass pill under the camera notch shows live mic
-/// levels, and the transcript (optionally cleaned up or translated by a fast
-/// LLM) is pasted into whatever text field currently has focus — phrase by
-/// phrase while speaking (chunked mode, default) or all at once on stop. In
-/// translate mode the pill shows the target language's ISO badge; clicking it
+/// recording, a black island flush with the camera housing shows the live
+/// spectrum and glows in the theme's recording color, and the transcript
+/// (optionally cleaned up or translated by a fast LLM) is pasted into
+/// whatever text field currently has focus — phrase by phrase while speaking
+/// (chunked mode, default) or all at once on stop. In translate mode the
+/// island shows a chip with the target language's ISO code; clicking it
 /// switches the language mid-dictation.
 @MainActor
 final class DictationService: NSObject, ObservableObject {
@@ -840,17 +841,109 @@ final class DictationService: NSObject, ObservableObject {
         return DictationTextShaping.shape(result, fallback: transcript)
     }
 
-    // MARK: - Widget (Liquid Glass pill under the camera notch)
+    // MARK: - Widget (the island under the camera housing)
 
-    /// Wider in translate mode to fit the language badge.
-    var widgetSize: NSSize {
-        NSSize(width: mode == .translate ? 182 : 148, height: 34)
+    /// The tab is 34 pt tall like the old capsule was.
+    static let tabHeight: CGFloat = 34
+    /// Room the recording glow needs beyond the tab's sides and bottom.
+    static let glowMargin: CGFloat = 24
+    /// On a display without a camera housing the island floats: this far
+    /// below the menu bar, as a capsule with the glow all around.
+    static let floatingGap: CGFloat = 4
+    /// The docked island's growth from the screen's top edge through the
+    /// housing's column and out of the seam, and the retraction back.
+    static let revealDuration: TimeInterval = 0.4
+
+    /// The content's fade once the tab has landed (and before it leaves).
+    static let contentFadeDuration: TimeInterval = 0.15
+    /// Extra width over the API's gap, 1.5 pt a side. The gap is not
+    /// symmetric about the physical cutout (a 14" ran ~2 px wide on one side
+    /// and short on the other); black over black is invisible, a sliver of
+    /// menu bar beside the housing is not, so err wide — boring.notch adds 4.
+    static let notchOvershoot: CGFloat = 3
+
+    /// Width of the camera housing on the screen the widget shows on; nil on
+    /// displays without one. Apple publishes no table of housing sizes; the
+    /// API is the only source, and it is the one the notch utilities
+    /// (DynamicNotchKit, boring.notch) use — the gap between the two
+    /// auxiliary areas. It runs a hair wide of the physical cutout, which is
+    /// why the docked island's black starts at the screen's top edge and
+    /// covers the housing's whole column (see `seamInset`): an overshoot then
+    /// only makes the housing look a pixel wider, never a step at the seam.
+    private var notchWidth: CGFloat? {
+        guard let gap = notchGap else { return nil }
+        return gap.maxX - gap.minX + Self.notchOvershoot
+    }
+
+    /// The housing's column between the two auxiliary areas, in screen
+    /// coordinates; nil on displays without a housing.
+    private var notchGap: (minX: CGFloat, maxX: CGFloat)? {
+        guard let screen = NSScreen.main,
+              let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea,
+              right.minX > left.maxX else { return nil }
+        return (left.maxX, right.minX)
+    }
+
+    /// Height of the housing's column (the safe-area inset: the housing plus
+    /// the menu bar band under it) on the current screen.
+    private var notchHeight: CGFloat { NSScreen.main?.safeAreaInsets.top ?? 0 }
+
+    /// Docked when the screen has a camera housing: the tab takes the
+    /// housing's width and sits flush under it, so the housing visibly grows
+    /// by 34 pt while you speak. Elsewhere (external displays) a black tab
+    /// hanging from a light menu bar reads as a foreign block, so the island
+    /// floats there instead: a capsule `floatingGap` below the menu bar.
+    var isDocked: Bool { notchWidth != nil }
+
+    /// The tab: the housing's width when docked, the old capsule widths when
+    /// floating (wider in translate mode to fit the language chip).
+    var tabSize: NSSize {
+        NSSize(width: notchWidth ?? (mode == .translate ? 182 : 148), height: Self.tabHeight)
+    }
+
+    /// Distance from the panel's top edge down to the seam. Docked, the
+    /// panel starts at the screen's top edge and the seam is the housing's
+    /// bottom: the black above it fills the column — no pixels there except
+    /// the ears beside the cutout's rounded corners, which is the point.
+    /// Floating, the panel's top IS the menu bar line. The glow is zero
+    /// above the seam either way.
+    var seamInset: CGFloat { isDocked ? notchHeight : 0 }
+
+    /// Where the visible tab starts below the panel's top edge.
+    var tabInset: CGFloat { isDocked ? notchHeight : Self.floatingGap }
+
+    /// False until the panel is on screen and again before it leaves: the
+    /// docked island's black grows from the screen's top edge through the
+    /// housing's column and out of the seam, and retracts the same way,
+    /// `revealDuration` each way. The floating capsule has nothing to grow
+    /// out of and appears at once, as the old pill did.
+    @Published private(set) var widgetRevealed = false {
+        didSet { if oldValue != widgetRevealed { widgetRevealFlipped = Date() } }
+    }
+    /// When `widgetRevealed` last flipped — the clock the docked island's
+    /// growth and retraction run on (see `DockedIslandBlack`).
+    @Published private(set) var widgetRevealFlipped = Date.distantPast
+    /// The content (bars, dots, chip) is shown only once the docked tab has
+    /// landed and hidden before it leaves, so nothing ever sits outside the
+    /// outline: parts of it (the language menu) are AppKit-hosted and would
+    /// not follow the slide.
+    @Published private(set) var widgetContentShown = false
+    /// Bumped by every show and hide; a delayed step of an older transition
+    /// finds it changed and does nothing.
+    private var widgetTransition = 0
+
+    /// The panel: the tab plus the glow's room at the sides and below, plus
+    /// the overlap or the floating gap above the tab.
+    var panelSize: NSSize {
+        NSSize(width: tabSize.width + 2 * Self.glowMargin,
+               height: tabInset + Self.tabHeight + Self.glowMargin)
     }
 
     private func showWidget() {
         if panel == nil {
             let panel = NonKeyPanel(
-                contentRect: NSRect(origin: .zero, size: widgetSize),
+                contentRect: NSRect(origin: .zero, size: panelSize),
                 // .nonactivatingPanel + a canBecomeKey=false subclass guarantee
                 // the widget never steals focus from the field being dictated
                 // into (borderless panels can otherwise become key).
@@ -861,7 +954,10 @@ final class DictationService: NSObject, ObservableObject {
             panel.isOpaque = false
             panel.backgroundColor = .clear
             panel.level = .statusBar
-            panel.hasShadow = true
+            // The tab draws its own shadow and glow, both confined to its
+            // sides and bottom; a window shadow would wrap the whole panel
+            // including the glow's transparent room.
+            panel.hasShadow = false
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -873,33 +969,75 @@ final class DictationService: NSObject, ObservableObject {
             self.panel = panel
         }
 
-        // Follow the app's theme override (Auto/Light/Dark). Non-activating
-        // panels don't reliably inherit NSApp.appearance, so sync explicitly
-        // on every show.
+        // Follow the app's theme override (Auto/Light/Dark) for the language
+        // menu; the island itself is always black. Non-activating panels
+        // don't reliably inherit NSApp.appearance, so sync explicitly on
+        // every show.
         panel?.appearance = NSApp.appearance
 
-        // The panel is reused across sessions; the width depends on the mode.
-        panel?.setContentSize(widgetSize)
+        // The panel is reused across sessions; the size depends on the mode
+        // and on the screen's housing.
+        panel?.setContentSize(panelSize)
         positionUnderNotch()
         panel?.orderFrontRegardless()
+        widgetTransition += 1
+        let transition = widgetTransition
+        if isDocked {
+            // The first frame renders with nothing below the seam; the flip
+            // on the next turn of the loop is what animates the growth, and
+            // the content follows once the tab has landed.
+            widgetRevealed = false
+            widgetContentShown = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.widgetTransition == transition else { return }
+                self.widgetRevealed = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.revealDuration) { [weak self] in
+                guard let self, self.widgetTransition == transition else { return }
+                self.widgetContentShown = true
+            }
+        } else {
+            widgetRevealed = true
+            widgetContentShown = true
+        }
     }
 
     private func positionUnderNotch() {
         guard let panel, let screen = NSScreen.main else { return }
         let size = panel.frame.size
-        // Directly under the camera housing (safe area) on notched Macs;
-        // just under the menu bar on external displays.
-        let topInset = screen.safeAreaInsets.top > 0
-            ? screen.safeAreaInsets.top
-            : (screen.frame.maxY - screen.visibleFrame.maxY)
-        let x = screen.frame.midX - size.width / 2
-        let y = screen.frame.maxY - topInset - size.height - 4
+        // Docked, the panel starts at the screen's top edge (the seam is
+        // `seamInset` below it) and is centered on the housing's column as
+        // the API reports it, not on the screen; floating, it hangs from
+        // the menu bar's bottom line at the screen's center.
+        let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
+        let centerX = notchGap.map { ($0.minX + $0.maxX) / 2 } ?? screen.frame.midX
+        let x = centerX - size.width / 2
+        let y = screen.frame.maxY - (isDocked ? 0 : menuBar) - size.height
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     private func hideWidget() {
-        panel?.orderOut(nil)
         level = 0
+        widgetTransition += 1
+        let transition = widgetTransition
+        guard isDocked else {
+            widgetRevealed = false
+            widgetContentShown = false
+            panel?.orderOut(nil)
+            return
+        }
+        // Content out, then the tab retracts into the seam, then the panel
+        // leaves — unless a new session started the island again meanwhile.
+        widgetContentShown = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.contentFadeDuration) { [weak self] in
+            guard let self, self.widgetTransition == transition else { return }
+            self.widgetRevealed = false
+        }
+        let leave = Self.contentFadeDuration + Self.revealDuration + 0.05
+        DispatchQueue.main.asyncAfter(deadline: .now() + leave) { [weak self] in
+            guard let self, self.widgetTransition == transition else { return }
+            self.panel?.orderOut(nil)
+        }
     }
 }
 
@@ -930,46 +1068,88 @@ private final class NonKeyPanel: NSPanel {
 
 // MARK: - Widget view
 
-/// Minimal Liquid Glass pill: live equalizer while recording (click = stop),
-/// tiny spinner while processing. In translate mode also shows the target
-/// language's ISO code; right-click switches the language mid-dictation.
+/// The island under the camera: a black tab flush with the housing, so the
+/// two read as one object that grows while you speak (design study
+/// `design/dictation/pill-studies.html`, 1b·B); on a display without a
+/// housing, a dark floating capsule 4 pt under the menu bar with a hairline
+/// that takes the recording color (study 1). Live spectrum bars while
+/// recording (click = stop), warm-up dots before the mic hears, a running
+/// line while the transcript is processed. In translate mode a chip with the
+/// translate glyph and the target's ISO code; clicking it (or right-clicking
+/// the tab) switches the language mid-dictation.
+///
+/// The recording marker is light, not a dot: a glow in the theme's recording
+/// color breathes on its own clock (the bars already show the audio) —
+/// around the docked tab's sides and bottom, fading in below the seam so
+/// nothing reaches the housing; all around the floating capsule. Because
+/// the ground is always dark, the island colors itself from the theme's
+/// DARK palette in both appearances.
 private struct DictationWidgetView: View {
     @ObservedObject var service: DictationService
     @ObservedObject private var settings = AppSettings.shared
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The dictation panel is a separate window; it reads the selected theme
-    /// straight from settings (the panel's appearance drives `colorScheme`).
-    private var palette: ThemePalette { ThemePalette.palette(for: settings.theme, scheme: scheme) }
+    /// straight from settings, always in its dark variant.
+    private var palette: ThemePalette { ThemePalette.palette(for: settings.theme, scheme: .dark) }
+
+    /// The glow comes and goes with the content, so it never rings a tab
+    /// that is still growing out of the seam.
+    private var glowing: Bool { service.phase == .recording && service.micReady && service.widgetContentShown }
 
     var body: some View {
-        AdaptiveGlassContainer {
+        let docked = service.isDocked
+        let tab = service.tabSize
+        let panel = service.panelSize
+        let tabInset = service.tabInset
+        let shape = dictationIslandShape(docked: docked)
+        let recording = dictationRecordingColor(palette)
+        ZStack(alignment: .top) {
+            if glowing {
+                RecordingGlow(color: recording, breathing: !reduceMotion, docked: docked,
+                              tabSize: tab, panelSize: panel,
+                              seamInset: service.seamInset, tabInset: tabInset)
+            }
+            island(docked: docked, tab: tab, tabInset: tabInset, shape: shape, recording: recording)
+        }
+        .frame(width: panel.width, height: panel.height, alignment: .top)
+        .clipped()
+        // Outside the animated tree on purpose: on macOS a context menu
+        // hosts its view in AppKit, which does not follow SwiftUI's
+        // animations — inside, the bars would jump to their final place
+        // while the outline was still moving.
+        .contextMenu {
+            if service.mode == .translate {
+                languagePicker
+            }
+        }
+        .help(L("tooltip.dictation.stop"))
+    }
+
+    /// The tab with its content, shadow and (floating) hairline.
+    private func island(docked: Bool, tab: NSSize, tabInset: CGFloat,
+                        shape: AnyShape, recording: Color) -> some View {
             HStack(spacing: 8) {
                 if service.phase == .processing {
                     // Transcription/cleanup in flight: indeterminate running line.
-                    RunningLine()
+                    RunningLine(palette: palette)
                 } else if !service.micReady {
                     // Mic hardware still spinning up: pulsing dots say "not
                     // hearing yet" — they flip to live bars on the first buffer.
-                    WarmupDots()
+                    WarmupDots(palette: palette)
                 } else {
-                    EqualizerBars(level: service.level, spectrum: service.spectrum)
+                    EqualizerBars(level: service.level, spectrum: service.spectrum, palette: palette)
                 }
                 if service.mode == .translate {
-                    // Left-clicking the badge opens the language menu (the
-                    // rest of the pill still stops on click).
+                    // Left-clicking the chip opens the language menu (the
+                    // rest of the tab still stops on click).
                     Menu {
                         languagePicker
                     } label: {
-                        Text(AppSettings.dictationISOCode(for: settings.dictationTargetLanguage))
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(palette.isGlass ? AnyShapeStyle(.secondary) : AnyShapeStyle(palette.ink))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2.5)
-                            .background(Capsule().fill(palette.isGlass ? Color.primary.opacity(0.08) : palette.accent.opacity(0.15)))
-                            .overlay(
-                                Capsule().stroke(palette.isGlass ? Color.clear : palette.accent.opacity(0.4), lineWidth: 1)
-                            )
+                        TranslateChip(
+                            palette: palette,
+                            code: AppSettings.dictationISOCode(for: settings.dictationTargetLanguage)
+                        )
                     }
                     .menuStyle(.button)
                     .buttonStyle(.plain)
@@ -978,38 +1158,57 @@ private struct DictationWidgetView: View {
                     .help(L("tooltip.dictation.language"))
                 }
             }
-            .frame(width: service.widgetSize.width, height: service.widgetSize.height)
-            .contentShape(Capsule())
+            // Docked: in only after the tab has landed, out before it leaves.
+            .opacity(service.widgetContentShown ? 1 : 0)
+            .animation(docked && !reduceMotion ? .easeOut(duration: DictationService.contentFadeDuration) : nil,
+                       value: service.widgetContentShown)
+            .frame(width: tab.width, height: tab.height)
+            // The content sits below the seam (docked) or the gap (floating).
+            .padding(.top, tabInset)
+            .background(alignment: .top) {
+                // The island's own shadow: the panel has no window shadow.
+                // Docked: the housing's black, `notchOvershoot` wider than
+                // the API's gap, grows from the screen's top edge through
+                // the column and out of the seam. Floating: the tour's dark
+                // tint over the material, below the gap, at once.
+                if docked {
+                    // One shape, grown from the screen's top edge: it runs
+                    // down the housing's column first (only the overshoot
+                    // beside the housing and the ears at its corners are
+                    // real pixels there), then out of the seam. Hide is the
+                    // exact reverse.
+                    DockedIslandBlack(
+                        shape: shape, width: tab.width, fullHeight: tabInset + tab.height, seam: tabInset,
+                        revealed: service.widgetRevealed, since: service.widgetRevealFlipped,
+                        animated: !reduceMotion
+                    )
+                } else {
+                    ZStack {
+                        shape.fill(.ultraThinMaterial)
+                        shape.fill(Color(red: 0.078, green: 0.086, blue: 0.11).opacity(0.86))
+                    }
+                    .padding(.top, tabInset)
+                    .shadow(color: .black.opacity(0.45), radius: 10, y: 8)
+                }
+            }
+            .overlay {
+                // The floating capsule's hairline: white at rest, the
+                // recording color while the mic hears (the docked tab has
+                // no edge of its own — it is the housing's).
+                if !docked {
+                    shape.stroke(glowing ? recording.opacity(0.55) : Color.white.opacity(0.16), lineWidth: 1)
+                        .padding(.top, tabInset)
+                }
+            }
+            .contentShape(shape)
             .onTapGesture {
                 if service.phase == .recording {
                     Task { await service.stopAndProcess() }
                 }
             }
-            .contextMenu {
-                if service.mode == .translate {
-                    languagePicker
-                }
-            }
-            // Themed tint sits between the glass material and the content, so the
-            // pill picks up the theme's color (same panelTint the chat panel uses);
-            // glass themes stay untinted.
-            .background {
-                if !palette.isGlass {
-                    Capsule().fill(palette.panelTint)
-                }
-            }
-            .adaptiveGlassCapsule()
-            // Themed pill border over the glass (Día: marigold hairline).
-            .overlay {
-                if !palette.isGlass {
-                    Capsule().stroke(palette.ink.opacity(0.4), lineWidth: 1)
-                }
-            }
-        }
-        .help(L("tooltip.dictation.stop"))
     }
 
-    /// Shared between the badge's click menu and the pill's right-click menu.
+    /// Shared between the chip's click menu and the tab's right-click menu.
     /// Takes effect immediately: postProcess reads the setting per segment,
     /// so upcoming phrases use the new language.
     private var languagePicker: some View {
@@ -1022,33 +1221,147 @@ private struct DictationWidgetView: View {
     }
 }
 
-/// Shared color logic for the pill's indicators: the dictation panel is a
-/// separate window, so the theme is read straight from settings (the panel's
-/// appearance drives `colorScheme`). Themes with a multi-color dictation
-/// palette cycle their colors per element (Día: marigold/magenta/teal).
-private func dictationBarColor(_ index: Int, theme: AppTheme, scheme: ColorScheme) -> Color {
-    let palette = ThemePalette.palette(for: theme, scheme: scheme)
-    if palette.isGlass { return Color.primary.opacity(0.75) }
+/// The island's silhouette: docked — square on top where it meets the
+/// housing, a capsule's round ends below; floating — a capsule.
+private func dictationIslandShape(docked: Bool) -> AnyShape {
+    docked
+        ? AnyShape(UnevenRoundedRectangle(
+            bottomLeadingRadius: DictationService.tabHeight / 2,
+            bottomTrailingRadius: DictationService.tabHeight / 2))
+        : AnyShape(Capsule())
+}
+
+/// The docked island's black, grown and retracted on its own clock rather
+/// than an implicit animation, so that opacity can follow the geometry
+/// exactly: one progress value per frame gives the height, and the opacity
+/// is that height over the column's, capped at 1. The black is transparent
+/// while its edge is inside the housing's column, fully opaque from the
+/// moment the edge reaches the seam; the tab comes out, sits and retracts
+/// opaque, fading only on its way back up the column. Growth eases out
+/// (fast through the column, slow landing); retraction is its mirror.
+private struct DockedIslandBlack: View {
+    let shape: AnyShape
+    let width: CGFloat
+    let fullHeight: CGFloat
+    let seam: CGFloat
+    let revealed: Bool
+    let since: Date
+    /// False under Reduce Motion: the black is simply there or not.
+    let animated: Bool
+
+    var body: some View {
+        // The ticker pauses once the move has settled; any re-evaluation
+        // after a flip (the flip itself re-renders) starts it again.
+        let settled = !animated || Date().timeIntervalSince(since) >= DictationService.revealDuration
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: settled)) { context in
+            let height = progress(at: context.date) * fullHeight
+            shape.fill(Color.black)
+                .frame(width: width, height: height)
+                .shadow(color: .black.opacity(0.45), radius: 10, y: 8)
+                .opacity(min(1, height / max(1, seam)))
+        }
+    }
+
+    /// 0 = fully inside the housing, 1 = fully out.
+    private func progress(at date: Date) -> Double {
+        guard animated else { return revealed ? 1 : 0 }
+        let u = min(1, max(0, date.timeIntervalSince(since) / DictationService.revealDuration))
+        return revealed ? 1 - (1 - u) * (1 - u) : 1 - u * u
+    }
+}
+
+/// The theme's recording color — the chat's rule (`RecordingStatusView`):
+/// red on Current, else `recordingAccent` → `quoteColor` → `accent`.
+private func dictationRecordingColor(_ palette: ThemePalette) -> Color {
+    palette.isGlass
+        ? Color(red: 1, green: 0.271, blue: 0.227)
+        : (palette.recordingAccent ?? palette.quoteColor ?? palette.accent)
+}
+
+/// Bar/dot colors: white on Current (the ground is black), the theme's
+/// dictation colors otherwise, cycled per element (Día: marigold/magenta/teal).
+private func dictationBarColor(_ index: Int, palette: ThemePalette) -> Color {
+    if palette.isGlass { return Color.white.opacity(0.92) }
     let colors = palette.dictationColors.isEmpty ? [palette.accent] : palette.dictationColors
     return colors[index % colors.count]
+}
+
+/// The recording marker: a blurred copy of the island's silhouette in the
+/// recording color, breathing on a clock — 0.8 s up, 0.8 s down, the same
+/// sine the chat's recording dot uses — independent of the audio, which the
+/// bars already show. Masked so it is zero above and on the seam (the
+/// housing's bottom, or the menu bar's) and full 14 pt below it: around the
+/// docked tab it can only show at the sides and bottom; around the floating
+/// capsule it surrounds it and fades out toward the menu bar instead of
+/// being cut. Clocked by a TimelineView, not a repeatForever animation, for
+/// the reason `RecordingStatusView` records.
+private struct RecordingGlow: View {
+    let color: Color
+    /// False under Reduce Motion: the glow holds a middle value instead.
+    let breathing: Bool
+    let docked: Bool
+    let tabSize: NSSize
+    let panelSize: NSSize
+    /// Panel top → seam, and panel top → the visible tab.
+    let seamInset: CGFloat
+    let tabInset: CGFloat
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !breathing)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            let pulse = breathing ? 0.5 + 0.5 * sin(time * (.pi / 0.8)) : 0.6
+            dictationIslandShape(docked: docked)
+                .fill(color)
+                .frame(width: tabSize.width, height: tabSize.height)
+                .scaleEffect(x: 1 + 0.08 * pulse, y: 1 + (docked ? 0.2 : 0.12) * pulse,
+                             anchor: docked ? .top : .center)
+                .opacity(0.45 + 0.5 * pulse)
+                .blur(radius: 10)
+        }
+        .padding(.top, tabInset)
+        .frame(width: panelSize.width, height: panelSize.height, alignment: .top)
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .clear, location: seamInset / panelSize.height),
+                    .init(color: .black, location: (seamInset + 14) / panelSize.height)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+        .allowsHitTesting(false)
+    }
 }
 
 /// Live spectrum bars: each bar is a real log-spaced frequency band of the
 /// input (80 Hz … 8 kHz via FFT), not a synthetic wobble — bass on the left,
 /// sibilants on the right, and the picture follows the actual voice timbre.
+/// Each bar fades toward its ends; neon themes (Synthwave's `panelGlow`)
+/// cast the bar's light around it.
 private struct EqualizerBars: View {
     let level: Float
     var spectrum: [Float] = []
+    let palette: ThemePalette
     private let barCount = MicCapture.bandCount
-    @Environment(\.colorScheme) private var colorScheme
-    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         HStack(spacing: 2.5) {
             ForEach(0..<barCount, id: \.self) { index in
+                let color = dictationBarColor(index, palette: palette)
                 Capsule()
-                    .fill(dictationBarColor(index, theme: settings.theme, scheme: colorScheme))
+                    .fill(LinearGradient(
+                        stops: [
+                            .init(color: color.opacity(0.45), location: 0),
+                            .init(color: color, location: 0.35),
+                            .init(color: color, location: 0.65),
+                            .init(color: color.opacity(0.45), location: 1)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    ))
                     .frame(width: 2.5, height: barHeight(index))
+                    .shadow(color: palette.panelGlow == nil ? .clear : color.opacity(0.7),
+                            radius: palette.panelGlow == nil ? 0 : 2)
             }
         }
         .animation(.linear(duration: 0.06), value: spectrum)
@@ -1067,8 +1380,7 @@ private struct EqualizerBars: View {
 /// hardware spins up — deliberately unlike the equalizer, so "not hearing
 /// yet" and "recording" can't be confused. No sound cues by design.
 private struct WarmupDots: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @ObservedObject private var settings = AppSettings.shared
+    let palette: ThemePalette
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -1077,7 +1389,7 @@ private struct WarmupDots: View {
                 ForEach(0..<3, id: \.self) { index in
                     let pulse = 0.5 + 0.5 * sin(time * 5.2 - Double(index) * 1.9)
                     Circle()
-                        .fill(dictationBarColor(index, theme: settings.theme, scheme: colorScheme))
+                        .fill(palette.isGlass ? Color.white.opacity(0.6) : dictationBarColor(index, palette: palette))
                         .frame(width: 7, height: 7)
                         .scaleEffect(0.8 + 0.35 * pulse)
                         .opacity(0.35 + 0.65 * pulse)
@@ -1088,10 +1400,9 @@ private struct WarmupDots: View {
 }
 
 /// Processing state: a thin indeterminate track with a running segment
-/// (replaces the system spinner — same semantics, pill-native look).
+/// (replaces the system spinner — same semantics, island-native look).
 private struct RunningLine: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @ObservedObject private var settings = AppSettings.shared
+    let palette: ThemePalette
 
     private let trackWidth: CGFloat = 74
     private let runnerWidth: CGFloat = 26
@@ -1100,7 +1411,7 @@ private struct RunningLine: View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
             let phase = time.truncatingRemainder(dividingBy: 1.3) / 1.3
-            let color = dictationBarColor(0, theme: settings.theme, scheme: colorScheme)
+            let color = palette.isGlass ? Color.white : dictationBarColor(0, palette: palette)
             ZStack(alignment: .leading) {
                 Capsule().fill(color.opacity(0.22))
                 Capsule()
@@ -1111,6 +1422,35 @@ private struct RunningLine: View {
             .frame(width: trackWidth, height: 3)
             .clipShape(Capsule())
         }
+    }
+}
+
+/// Translate mode: the translate glyph and the target's ISO code on a
+/// rounded chip — white on Current, the theme's ink on its accent otherwise;
+/// monospaced on Terminal, rounded everywhere else.
+private struct TranslateChip: View {
+    let palette: ThemePalette
+    let code: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "translate")
+                .font(.system(size: 9, weight: .semibold))
+            Text(code)
+                .font(.system(size: 10, weight: .bold,
+                              design: palette.fontDesign == .monospaced ? .monospaced : .rounded))
+        }
+        .foregroundStyle(palette.isGlass ? Color.white.opacity(0.92) : palette.ink)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(palette.isGlass ? Color.white.opacity(0.14) : palette.accent.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(palette.isGlass ? Color.clear : palette.accent.opacity(0.35), lineWidth: 1)
+        )
     }
 }
 

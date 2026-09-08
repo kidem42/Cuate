@@ -324,7 +324,19 @@ General).
   Halloween, Día de Muertos and Yule. Checklist: `docs/THEMING-CHECKLIST.md`.
 - **Voice UI:** `AudioRecorder`, `VoiceMessagePlayer` (real waveform),
   `RecordingStatusView`; system-wide dictation is `App/DictationService.swift`
-  (a glass pill under the notch, phrase-by-phrase insertion via `TextInserter`,
+  (the island: a black tab at the housing's width whose black runs from the
+  screen's top edge through the housing's column — the API's width runs a
+  hair wide of the cutout, and covering the whole column turns that into "a
+  pixel wider", never a step, as the notch utilities do — or a dark floating
+  capsule 4 pt under the menu bar on displays without one; docked, its black grows
+  from the screen's top edge through the housing's column and out of the
+  seam on show, as opaque as its edge is far down the column and fully so at
+  the seam, and retracts the same way on hide, the content fading in only once the tab has
+  landed; floating it appears in place; the theme's DARK palette in both appearances, a glow in the
+  recording color that breathes on a 1.6 s clock as the recording indicator
+  and never crosses the seam with the housing or the menu bar — design study
+  `design/dictation/pill-studies.html`; phrase-by-phrase insertion via
+  `TextInserter`,
   optional cleanup/translation by a small model resolved in
   `AppSettings.resolvedDictationCleanup`, Deepgram streaming mode).
   `App/DictationTextShaping.swift` is that pass's contract with the model:
