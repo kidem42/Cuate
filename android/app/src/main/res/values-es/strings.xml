@@ -10,8 +10,10 @@
     <string name="chat_send">Enviar</string>
     <string name="chat_stop">Detener</string>
     <string name="chat_dictate">Dictar</string>
-    <string name="chat_recording">Grabando… toca ■ para terminar</string>
+    <string name="chat_recording">Grabando… toca ■ para terminar, dos toques para cancelar</string>
     <string name="chat_stop_recording">Terminar grabación</string>
+    <string name="chat_cancel_recording">Cancelar grabación</string>
+    <string name="chat_recording_cancelled">Grabación cancelada.</string>
     <string name="chat_transcribing">Transcribiendo…</string>
     <string name="chat_jump_latest">Ir al último mensaje</string>
 
@@ -182,6 +184,11 @@
 
     <!-- Hermes Agent addon -->
     <string name="hermes_role">Agente Hermes</string>
+    <string name="hermes_stopping">Deteniendo el agente…</string>
+    <string name="hermes_stopped">Detenido.</string>
+    <string name="hermes_stop_unconfirmed">Parada solicitada, pero el gateway aún no la ha confirmado — puede que el agente siga terminando su paso actual.</string>
+    <string name="hermes_stop_failed">No se pudo detener la ejecución en el gateway — puede que el agente siga trabajando.</string>
+    <string name="hermes_held">Se enviará cuando el agente se detenga…</string>
     <string name="hermes_new_session">Nueva sesión</string>
     <string name="hermes_sessions">Sesiones</string>
     <string name="hermes_rename">Renombrar sesión</string>

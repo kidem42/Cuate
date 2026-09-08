@@ -468,6 +468,31 @@ class AppSettings private constructor(context: Context) {
     }
 
     /**
+     * Messages posted mid-turn (or while a Stop settled) that carry
+     * attachments and so cannot ride the steer channel, conversationId →
+     * JSON array of message ids. The bubbles are in Room; this list is what
+     * still owes the agent a turn — one message per turn, delivered when the
+     * conversation is verified idle. Persisted like the text queue.
+     */
+    private val _hermesHeldMessages = MutableStateFlow(readStringMap("hermesHeldMessages"))
+
+    fun hermesHeldMessageIds(conversationId: String): List<String> {
+        val raw = _hermesHeldMessages.value[conversationId] ?: return emptyList()
+        return try {
+            val array = org.json.JSONArray(raw)
+            (0 until array.length()).map { array.optString(it) }.filter { it.isNotEmpty() }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    fun setHermesHeldMessages(conversationId: String, ids: List<String>) {
+        val next = if (ids.isEmpty()) _hermesHeldMessages.value - conversationId
+            else _hermesHeldMessages.value + (conversationId to org.json.JSONArray(ids).toString())
+        if (next == _hermesHeldMessages.value) return
+        _hermesHeldMessages.value = next
+        writeStringMap("hermesHeldMessages", next)
+    }
+
+    /**
      * Tool-call rounds one reply may spend (the desktop 3.20 "tool budget",
      * same 1–12 range and default). When it runs out the model is forced to
      * write its final answer from what it has gathered.

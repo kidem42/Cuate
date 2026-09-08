@@ -443,6 +443,78 @@ nonisolated enum ChatPersistence {
         }
     }
 
+    // MARK: Fold one conversation into another (agent twin migration)
+
+    /// Moves the rows of `key` into `targetKey` and deletes `key`
+    /// (`HermesAddon.mergeTwinConversations`: the same gateway session
+    /// mirrored into two local conversations). Rows that carry the same
+    /// `externalID` are one gateway message seen twice: the copy holding
+    /// media — attachments, a voice recording — survives, the other is
+    /// dropped (the mirror rebuilds rows from the transcript, which keeps no
+    /// pixels and no audio). The source's leading assistant rows without
+    /// gateway identity are its welcome line and stay behind. Everything
+    /// else lands by timestamp, target rows first on a tie, and sort indexes
+    /// are renumbered. Media files travel with their rows — path strings
+    /// move, nothing on disk is touched — and the source's deletion cascades
+    /// only over what stayed behind.
+    static func mergeConversation(key: String, intoKey targetKey: String) {
+        queue.async {
+            let ctx = ModelContext(container)
+            guard key != targetKey, let source = fetchConversation(key: key, in: ctx) else { return }
+            let target = fetchOrCreateConversation(key: targetKey, in: ctx)
+            let sourceRows = source.messages.sorted { $0.sortIndex < $1.sortIndex }
+            var kept = target.messages.sorted { $0.sortIndex < $1.sortIndex }
+            var byExternal: [String: Int] = [:]
+            for (index, row) in kept.enumerated() {
+                if let external = row.externalID { byExternal[external] = index }
+            }
+            func hasMedia(_ row: SDMessage) -> Bool {
+                !row.attachments.isEmpty || row.audioURLString != nil
+            }
+            var moving: [SDMessage] = []
+            var replaced: [SDMessage] = []
+            var sawIdentity = false
+            var dropped = 0
+            for row in sourceRows {
+                let identified = row.isUser || row.externalID != nil
+                if !sawIdentity, !identified, row.typeRaw != ChatMessage.MessageType.system.rawValue {
+                    continue // the welcome line
+                }
+                sawIdentity = sawIdentity || identified
+                if let external = row.externalID, let index = byExternal[external] {
+                    let twin = kept[index]
+                    if hasMedia(row), !hasMedia(twin) {
+                        replaced.append(twin)
+                        kept[index] = row
+                        moving.append(row)
+                    } else {
+                        dropped += 1
+                    }
+                    continue
+                }
+                moving.append(row)
+            }
+            // Order: target rows keep their relative order; source rows slot
+            // in by timestamp, after a target row with the same timestamp.
+            let merged = (kept.filter { !replaced.contains($0) } + moving.filter { row in !kept.contains(row) })
+            let ordered = merged.enumerated().sorted { a, b in
+                if a.element.timestamp != b.element.timestamp {
+                    return a.element.timestamp < b.element.timestamp
+                }
+                return a.offset < b.offset
+            }.map(\.element)
+            for (index, row) in ordered.enumerated() {
+                if row.conversation !== target { row.conversation = target }
+                if row.sortIndex != index { row.sortIndex = index }
+            }
+            for row in replaced { ctx.delete(row) }
+            target.updatedAt = max(target.updatedAt, source.updatedAt)
+            ctx.delete(source) // cascades over the rows left behind
+            try? ctx.save()
+            Diagnostics.log("hermes", "twin.merged moved=\(moving.count) replaced=\(replaced.count) dropped=\(dropped) rows=\(ordered.count)")
+        }
+    }
+
     // MARK: Delete a whole conversation (custom preset removed)
 
     static func deleteConversation(key: String) {

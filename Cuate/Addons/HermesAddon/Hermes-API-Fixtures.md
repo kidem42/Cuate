@@ -73,6 +73,30 @@ The facts below come from the tag's sources, and each is what the client targets
   (`feat(api-server): expose context fill and window in turn usage`) adds it together
   with `context_window`.
 
+## Stop (2026-09-07) — sources of the 2026-08-16 checkout, `~/.hermes/hermes-agent`
+
+`POST /v1/runs/{run_id}/stop` (`_handle_stop_run`) looks the run up in
+`_active_run_agents` / `_active_run_tasks`; a session-chat turn is registered there too
+(`_handle_session_chat_stream` → `_run_agent(active_run_id=run_id)` — the same entry the
+steer handler uses), so the route stops OUR turns. It calls `request_hard_interrupt(agent,
+"Stop requested via API")`, reaps the run's background processes, marks the run
+`stopping` and answers `{"run_id":…,"status":"stopping"}` at once — the run winds down
+asynchronously; `GET /v1/runs/{id}` reads a terminal status after that (the client polls it,
+`HermesAddon.stopConfirmWindow`). 404 `run_not_found` = already over or swept.
+
+The stock disconnect handler of the session SSE (`_drain_session_stream_task_on_disconnect`,
+`agent.interrupt("SSE client disconnected")`) is what a closed socket used to trigger; the
+detached-runs edit (HermesLocalGateway / the VPS paste-block) replaces it with a log line, so
+on a patched gateway the stop route is the ONLY way a client ends a run. The desktop client
+never sent it before 5.1 (app.log 2026-09-07 14:49: `turn.end … final=false`, then
+`liveTurn active=true` two seconds later, three times that day).
+
+There is no per-session busy guard in these sources (a second `chat/stream` on a session
+with a live run is accepted); the transcript of 2026-09-07 nevertheless shows the second
+turn's user row written one second after the first run's final reply and answered 12 s
+later — the deployed (older) gateway serialized them. Mechanism not pinned; the client
+holds sends behind a Stop instead of relying on either behaviour.
+
 ## Enabling the API server (onboarding instructions)
 
 In `~/.hermes/.env`:

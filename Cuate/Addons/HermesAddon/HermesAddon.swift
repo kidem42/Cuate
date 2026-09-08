@@ -84,6 +84,155 @@ final class HermesAddon: ObservableObject {
         activeTurnKeys[key] != nil
     }
 
+    // MARK: - Stopping a run
+
+    /// What a stop request came to, as the chat reports it.
+    enum StopOutcome: Equatable {
+        /// `GET /v1/runs/{id}` read a terminal status after the stop.
+        case stopped(status: String)
+        /// The gateway no longer knows the run: it had ended already, or a
+        /// restart swept it. Either way nothing is running.
+        case gone
+        /// The stop was accepted but the run was still winding down when
+        /// the confirmation window closed — the agent may still be working
+        /// (a long tool call returns first; the live-turn detector keeps
+        /// watching the transcript).
+        case unconfirmed
+        /// The stop request itself failed (transport, auth, 5xx).
+        case failed(String)
+    }
+
+    /// How long a stop waits for the run to read finished. A hard interrupt
+    /// lands at the agent's next loop check — milliseconds between tool
+    /// calls — but a tool already running has to return first, and the
+    /// gateway reaps that tool's background processes on the way out.
+    static let stopConfirmWindow: TimeInterval = 20
+
+    /// In-flight stop requests by run id. Two callers ask for the same run
+    /// — the window's Stop button, and the session's own cancellation path
+    /// that fires for Stop, new chat and a deleted role alike — and both
+    /// await ONE request instead of racing two.
+    private var stopTasks: [String: Task<StopOutcome, Never>] = [:]
+
+    /// Stops a run on the gateway and waits for the gateway to confirm.
+    ///
+    /// Until the detached-runs patch, closing our stream interrupted the
+    /// run as a side effect (stock Hermes: `agent.interrupt("SSE client
+    /// disconnected")`), which is what Stop silently relied on — the
+    /// explicit `POST /v1/runs/{id}/stop` sat in a `catch` the cancellation
+    /// path never reached (an `AsyncThrowingStream` ends with nil when its
+    /// consumer is cancelled, it does not throw). Patched gateways keep the
+    /// run going, so "Stopped." was a lie and the agent worked on for
+    /// minutes (2026-09-07 14:49). This request is the only stop there is
+    /// now; the confirmation comes from `GET /v1/runs/{id}`.
+    func requestStop(runID: String, sessionID: String?) async -> StopOutcome {
+        if let running = stopTasks[runID] { return await running.value }
+        let task = Task<StopOutcome, Never> { @MainActor [weak self] in
+            guard let self else { return .failed("addon released") }
+            return await self.performStop(runID: runID, sessionID: sessionID)
+        }
+        stopTasks[runID] = task
+        let outcome = await task.value
+        stopTasks.removeValue(forKey: runID)
+        return outcome
+    }
+
+    private func performStop(runID: String, sessionID: String?) async -> StopOutcome {
+        let transport = transport()
+        Diagnostics.log("hermes", "stop.request run=\(runID)")
+        let reply: HermesTransport.RunStopReply
+        do {
+            reply = try await transport.stopRun(runID: runID)
+        } catch {
+            Diagnostics.log("hermes", "stop.failed run=\(runID) \(String(error.localizedDescription.prefix(120)))")
+            return .failed(error.localizedDescription)
+        }
+        var outcome: StopOutcome = .unconfirmed
+        if reply == .notFound {
+            outcome = .gone
+        } else {
+            let deadline = Date().addingTimeInterval(Self.stopConfirmWindow)
+            var polls = 0
+            confirm: while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                polls += 1
+                switch await transport.runProbe(runID: runID) {
+                case .known(let state):
+                    if !state.isRunning {
+                        outcome = .stopped(status: state.status)
+                        break confirm
+                    }
+                case .gone:
+                    outcome = .gone
+                    break confirm
+                case .unreachable:
+                    // The stop was accepted; a flaky probe is no reason to
+                    // give up before the window closes.
+                    continue
+                }
+            }
+            Diagnostics.log("hermes", "stop.confirm run=\(runID) polls=\(polls)")
+        }
+        switch outcome {
+        case .stopped, .gone:
+            // The interrupted turn's transcript tail may end on a tool call
+            // with no result row — retire the pill now, as the orphan path
+            // does, instead of waiting out the staleness window. The run is
+            // over for sure: the persisted id has nothing left to point at.
+            if let sessionID {
+                markTailDead(sessionID: sessionID)
+                if settings.activeRun(forSession: sessionID) == runID {
+                    settings.setActiveRun(nil, forSession: sessionID)
+                }
+            }
+        case .unconfirmed, .failed:
+            // Kept on purpose: a relaunch can still stop it.
+            break
+        }
+        Diagnostics.log("hermes", "stop.outcome run=\(runID) \(outcome.logLabel)")
+        return outcome
+    }
+
+    // MARK: - One session, one conversation
+
+    /// A gateway session lives in ONE local conversation. A session started
+    /// from a role's default thread is bound to that thread's key; the
+    /// sessions list used to open the very same session AS ITS OWN
+    /// conversation on top of that (`role.conversationID(sessionID:)`),
+    /// mirroring the transcript into a twin — every row rebuilt from the
+    /// gateway, which keeps no pixels and no audio, so a screenshot sent
+    /// from the default thread "vanished" the moment the user picked the
+    /// session in the sidebar (report 2026-09-07 14:49). The window now
+    /// opens the default thread for such a session (`continueHermesSession`)
+    /// and resolves a stale "active session" the same way; this folds the
+    /// twins older builds left behind into the default thread — rows keyed
+    /// by `externalID`, the copy holding media wins, pins carried over —
+    /// and drops the twin. Cheap when there is nothing to do, so it runs at
+    /// every launch (a settings import can bring a twin back).
+    func mergeTwinConversations() {
+        for role in roles {
+            let defaultKey = role.conversationID().storageKey
+            guard let sessionID = settings.sessionID(forConversationKey: defaultKey) else { continue }
+            let twinKey = role.conversationID(sessionID: sessionID).storageKey
+            // Settings are rewritten synchronously here, the store merge is
+            // enqueued — so the store step must not depend on the settings
+            // still showing the twin: a launch that died between the two
+            // would otherwise leave the twin's rows orphaned with nothing
+            // pointing at them. The persistence merge is a no-op when no
+            // such conversation exists, which makes every launch after the
+            // first one free.
+            if settings.sessionID(forConversationKey: twinKey) == sessionID {
+                settings.unbindSession(forConversationKey: twinKey)
+                settings.mergePins(fromConversationKey: twinKey, intoConversationKey: defaultKey)
+                Diagnostics.log("hermes", "twin.merge session=\(sessionID)")
+            }
+            if settings.activeSession(roleID: role.id) == sessionID {
+                settings.setActiveSession(nil, roleID: role.id)
+            }
+            ChatPersistence.mergeConversation(key: twinKey, intoKey: defaultKey)
+        }
+    }
+
     /// sessionID → a turn running ON THE GATEWAY (started elsewhere, or by
     /// us before a restart). Rebuilt from the transcripts the mirror and the
     /// poll already fetch, so nothing extra goes over the wire. This is what
@@ -689,4 +838,17 @@ extension Notification.Name {
     /// Object: the user-facing notice string. ChatWindow shows it as one
     /// system line in the active agent chat (model-switch feedback).
     static let hermesSystemNotice = Notification.Name("hermesSystemNotice")
+}
+
+extension HermesAddon.StopOutcome {
+    /// Diagnostics label — states only, never gateway error text beyond
+    /// what the transport already logs.
+    var logLabel: String {
+        switch self {
+        case .stopped(let status): return "stopped status=\(status)"
+        case .gone: return "gone"
+        case .unconfirmed: return "unconfirmed"
+        case .failed: return "failed"
+        }
+    }
 }

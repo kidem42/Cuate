@@ -107,6 +107,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             AppSettings.shared.autoLoadModelsIfNeeded(for: AppSettings.shared.chatProvider)
         }
 
+        // A gateway session mirrored into two local conversations (older
+        // "continue here" on the default thread's own session) folds into
+        // one BEFORE the window resolves which conversation to show — the
+        // fold rewrites the session map and the persisted rows.
+        HermesAddon.shared.mergeTwinConversations()
+
         // Setup chat window
         setupChatWindow()
 

@@ -417,6 +417,7 @@ final class HermesSettings: ObservableObject {
     func forgetSessionMarks(_ id: String) {
         pinnedSessions.removeAll { $0 == id }
         sessionColors.removeValue(forKey: id)
+        activeRunBySession.removeValue(forKey: id)
     }
 
     // MARK: - Sidebar collapse state (per role)
@@ -456,6 +457,65 @@ final class HermesSettings: ObservableObject {
         sessionMap.removeValue(forKey: key)
     }
 
+    /// Carries one conversation's pins over to another (the twin merge in
+    /// `HermesAddon.mergeTwinConversations`): the union, the source's entry
+    /// removed. Pins name message ids, which the merge keeps.
+    func mergePins(fromConversationKey source: String, intoConversationKey target: String) {
+        guard source != target, let moving = pinnedMessagesByConversation[source] else { return }
+        var pins = pinnedMessagesByConversation[target] ?? []
+        for id in moving where !pins.contains(id) { pins.append(id) }
+        pinnedMessagesByConversation.removeValue(forKey: source)
+        if !pins.isEmpty { pinnedMessagesByConversation[target] = pins }
+    }
+
+    // MARK: - The run in flight, per session (survives the process)
+
+    /// sessionID → the run id our last turn started there, kept until the
+    /// run is known to be over. The in-memory registry
+    /// (`HermesAddon.noteRun`) dies with the process; this copy is what
+    /// lets a relaunched app STOP or steer a run that outlived it — the
+    /// mirror shows such a run as a turn "started elsewhere", and without
+    /// the id there was nothing to press (Android keeps the same record as
+    /// `hermesActiveRuns`).
+    @Published private(set) var activeRunBySession: [String: String] {
+        didSet { defaults.set(activeRunBySession, forKey: "hermes.activeRunBySession") }
+    }
+
+    func activeRun(forSession sessionID: String) -> String? {
+        activeRunBySession[sessionID]
+    }
+
+    func setActiveRun(_ runID: String?, forSession sessionID: String) {
+        if let runID {
+            activeRunBySession[sessionID] = runID
+        } else {
+            activeRunBySession.removeValue(forKey: sessionID)
+        }
+    }
+
+    // MARK: - Sends held behind a Stop (survive the process)
+
+    /// conversation storageKey → ids of user messages whose bubbles are in
+    /// the chat but whose text never went out: a Stop was still settling
+    /// when the app died. An in-memory hold took the message with it;
+    /// these are re-sent on the next catch-up of that conversation
+    /// (`ChatWindow.recoverHeldSends`).
+    @Published private(set) var heldSendsByConversation: [String: [String]] {
+        didSet { defaults.set(heldSendsByConversation, forKey: "hermes.heldSends") }
+    }
+
+    func heldSendIDs(forConversationKey key: String) -> [String] {
+        heldSendsByConversation[key] ?? []
+    }
+
+    func setHeldSendIDs(_ ids: [String], forConversationKey key: String) {
+        if ids.isEmpty {
+            heldSendsByConversation.removeValue(forKey: key)
+        } else {
+            heldSendsByConversation[key] = ids
+        }
+    }
+
     // MARK: - Init
 
     private init() {
@@ -484,5 +544,7 @@ final class HermesSettings: ObservableObject {
         sessionColors = (defaults.dictionary(forKey: "hermes.sessionColors") as? [String: String]) ?? [:]
         sidebarCollapsed = (defaults.dictionary(forKey: "hermes.sidebarCollapsed") as? [String: Bool]) ?? [:]
         sessionMap = (defaults.dictionary(forKey: "hermes.sessionMap") as? [String: String]) ?? [:]
+        activeRunBySession = (defaults.dictionary(forKey: "hermes.activeRunBySession") as? [String: String]) ?? [:]
+        heldSendsByConversation = (defaults.dictionary(forKey: "hermes.heldSends") as? [String: [String]]) ?? [:]
     }
 }

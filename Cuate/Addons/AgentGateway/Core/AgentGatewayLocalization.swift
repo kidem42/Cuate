@@ -270,10 +270,35 @@ enum AgentGatewayStrings {
             .spanish: "Detener el agente (la ejecución se cancela también en el gateway)",
             .russian: "Остановить агента (ран отменяется и на гейтвее)"
         ],
+        "agent.stopping": [
+            .english: "Stopping the agent…",
+            .spanish: "Deteniendo el agente…",
+            .russian: "Останавливаю агента…"
+        ],
         "agent.stopped": [
             .english: "Stopped.",
             .spanish: "Detenido.",
             .russian: "Остановлено."
+        ],
+        "agent.stopped.unconfirmed": [
+            .english: "Stop requested, but the gateway has not confirmed it yet — the agent may still be finishing its current step.",
+            .spanish: "Parada solicitada, pero el gateway aún no la ha confirmado — puede que el agente siga terminando su paso actual.",
+            .russian: "Стоп отправлен, но гейтвей его ещё не подтвердил — агент может дорабатывать текущий шаг."
+        ],
+        "agent.stopped.failed": [
+            .english: "Could not stop the run on the gateway: %@ — the agent may still be working.",
+            .spanish: "No se pudo detener la ejecución en el gateway: %@ — puede que el agente siga trabajando.",
+            .russian: "Не удалось остановить ран на гейтвее: %@ — агент может продолжать работу."
+        ],
+        "agent.stopped.noRun": [
+            .english: "Stopped here. The gateway had not started the turn yet; if it does, it will show as outside activity.",
+            .spanish: "Detenido aquí. El gateway aún no había iniciado el turno; si lo hace, aparecerá como actividad externa.",
+            .russian: "Остановлено здесь. Гейтвей ещё не начал ход; если начнёт, он покажется как внешняя активность."
+        ],
+        "agent.held": [
+            .english: "Sending once the agent has stopped…",
+            .spanish: "Se enviará cuando el agente se detenga…",
+            .russian: "Отправлю, как только агент остановится…"
         ],
         "agent.offline.older": [
             .english: "Older messages are stored on the agent, which is unreachable right now.",

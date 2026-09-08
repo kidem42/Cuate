@@ -139,7 +139,12 @@ struct HermesSidebarView: View {
     /// `model/info`), not one global constant.
     @ViewBuilder
     private var contextGauge: some View {
-        if let sessionID = HermesSettings.shared.activeSession(roleID: role.id),
+        // The session of the conversation ON SCREEN — the default thread
+        // has one too (bound when its first turn created it), and the
+        // per-role "active session" memory is nil exactly there.
+        if let sessionID = ChatWindowBridge.chatStore.flatMap({
+               settings.sessionID(forConversationKey: $0.conversation.storageKey)
+           }),
            !sessionID.isEmpty,
            let used = HermesSettings.shared.contextTokens(forSession: sessionID),
            // Tier 0: the window the agent itself reported for THIS session

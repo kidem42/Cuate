@@ -144,6 +144,8 @@ fun ChatScreen(
     pendingAttachments: List<ChatAttachment>,
     isRecording: Boolean,
     isTranscribing: Boolean,
+    /** The double-tap cancel window right after ■: the slot keeps the same button, its tap now cancels. */
+    isVoiceCancelWindow: Boolean = false,
     transcriptionResult: String?,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
@@ -845,7 +847,7 @@ fun ChatScreen(
             // action slot below holds Send, so the mic gets its own slot —
             // dictating what to do with a photo must not require typing.
             // The transcript and the attachments then go out as one message.
-            if (!isRecording && !isTranscribing && !isLoading &&
+            if (!isRecording && !isTranscribing && !isVoiceCancelWindow && !isLoading &&
                 input.isBlank() && pendingAttachments.isNotEmpty()
             ) {
                 Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
@@ -884,6 +886,22 @@ fun ChatScreen(
                             ),
                         ) {
                             Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.chat_stop_recording))
+                        }
+                    }
+                    // Same button, same place, for the length of the cancel
+                    // window: the second tap of a double tap lands HERE and
+                    // cancels (the desktop's second Space press). A spinner
+                    // in this slot swallowed that tap and the clip went out.
+                    isVoiceCancelWindow -> {
+                        FilledIconButton(
+                            onClick = onCancelRecording,
+                            modifier = Modifier.size(48.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = if (palette.isDynamic) MaterialTheme.colorScheme.error
+                                else (palette.recordingAccent ?: palette.quoteColor ?: palette.accent),
+                            ),
+                        ) {
+                            Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.chat_cancel_recording))
                         }
                     }
                     isTranscribing -> {

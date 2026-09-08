@@ -159,8 +159,11 @@ final class HermesAgentSession: AgentSession {
                         case .runStarted(let runID):
                             self.currentRunID = runID
                             // Published for the composer's steer path — see
-                            // HermesAddon.noteRun.
+                            // HermesAddon.noteRun — and persisted per session
+                            // so a relaunched app can still stop or steer
+                            // this run if the process dies under it.
                             self.addon.noteRun(runID, conversationKey: self.conversationKey)
+                            self.settings.setActiveRun(runID, forSession: sessionID)
                             // The gateway accepted the message — the briefing
                             // is in the session's history for good. Marking
                             // here (not before the send) lets a failed send
@@ -277,13 +280,33 @@ final class HermesAgentSession: AgentSession {
                             Diagnostics.log("hermes", "sse.unknown \(name) keys=\(payload.keys.sorted().joined(separator: ","))")
                         }
                     }
+                    let ended = self.currentRunID
                     self.currentRunID = nil
                     self.addon.clearRun(conversationKey: self.conversationKey)
+                    // Cancellation ends the event stream with nil, not a
+                    // throw — this is the path Stop, new chat and a deleted
+                    // role actually take, and the gateway must hear about it
+                    // here or never (see stopAbandonedRun).
+                    if Task.isCancelled, let ended {
+                        self.stopAbandonedRun(ended)
+                    } else if self.settings.activeRun(forSession: sessionID) == ended {
+                        // Over for good — a stop keeps the record until the
+                        // gateway confirms (HermesAddon.performStop).
+                        self.settings.setActiveRun(nil, forSession: sessionID)
+                    }
                     continuation.finish()
                 } catch {
                     let orphaned = self.currentRunID
                     self.currentRunID = nil
                     self.addon.clearRun(conversationKey: self.conversationKey)
+                    if Task.isCancelled {
+                        // A cancel that surfaced as a throw (the transport's
+                        // check landed first): same duty, no orphan probe —
+                        // the stop flow reads the run state itself.
+                        if let orphaned { self.stopAbandonedRun(orphaned) }
+                        continuation.finish(throwing: CancellationError())
+                        return
+                    }
                     // The stream broke mid-run (gateway restart, crash, lost
                     // link). Ask the gateway whether the run outlived our
                     // connection: when it did not, its transcript tail stays
@@ -299,6 +322,9 @@ final class HermesAgentSession: AgentSession {
                         let state = await self.addon.transport().runState(runID: orphaned)
                         if !(state?.isRunning ?? false) {
                             self.addon.markTailDead(sessionID: sessionID)
+                            if self.settings.activeRun(forSession: sessionID) == orphaned {
+                                self.settings.setActiveRun(nil, forSession: sessionID)
+                            }
                         }
                         if let pending = state?.pendingSteer {
                             let text = HermesSteer.unframed(pending)
@@ -320,9 +346,27 @@ final class HermesAgentSession: AgentSession {
         }
     }
 
+    /// The consumer walked away from a run in flight. Until 5.1 the run
+    /// outlived it: `abort()` was reached only from a `catch` that a
+    /// cancelled `AsyncThrowingStream` never enters (its iteration ends
+    /// with nil), and by then `currentRunID` was cleared anyway — the only
+    /// thing that ever interrupted the agent was the closed socket, which
+    /// the detached-runs gateway patch deliberately took away. Fire and
+    /// forget: the window's Stop awaits the same request through the
+    /// addon's per-run dedupe and reports the outcome; new chat and a
+    /// deleted role only need the run gone.
+    private func stopAbandonedRun(_ runID: String) {
+        let addon = self.addon
+        let sessionID = boundSessionID
+        Diagnostics.log("hermes", "turn.cancelled run=\(runID)")
+        Task { @MainActor in
+            _ = await addon.requestStop(runID: runID, sessionID: sessionID)
+        }
+    }
+
     func abort() async {
         guard let runID = currentRunID else { return }
-        try? await addon.transport().stopRun(runID: runID)
+        _ = await addon.requestStop(runID: runID, sessionID: boundSessionID)
     }
 
     func resolveApproval(id: String, decision: AgentApprovalDecision) async throws {

@@ -508,8 +508,27 @@ nonisolated struct HermesTransport {
 
     // MARK: Runs
 
-    func stopRun(runID: String) async throws {
-        _ = try await json("POST", "v1/runs/\(runID)/stop")
+    /// `POST /v1/runs/{id}/stop`. The handler (`_handle_stop_run`, sources
+    /// 2026-08-16) looks the run up in `_active_run_agents` — where
+    /// `_run_agent(active_run_id:)` registers session-chat runs too — and
+    /// hard-interrupts the agent; the reply is `{"status":"stopping"}` and
+    /// the run winds down asynchronously (`GET /v1/runs/{id}` confirms). A
+    /// 404 `run_not_found` means the run already ended or the gateway
+    /// forgot it — not an error for a caller that only wants it gone.
+    /// Since the detached-runs patch a dropped socket no longer interrupts
+    /// anything, so this request is the ONLY way a client ends a run.
+    enum RunStopReply: Equatable {
+        case stopping
+        case notFound
+    }
+
+    func stopRun(runID: String) async throws -> RunStopReply {
+        do {
+            _ = try await json("POST", "v1/runs/\(runID)/stop")
+            return .stopping
+        } catch HermesTransportError.http(let status, _) where status == 404 {
+            return .notFound
+        }
     }
 
     /// `GET /v1/runs/{id}` → `{"object":"hermes.run","status":…}`, or 404
@@ -541,10 +560,33 @@ nonisolated struct HermesTransport {
     }
 
     func runState(runID: String) async -> RunState? {
-        guard let object = try? await json("GET", "v1/runs/\(runID)"),
-              let status = object["status"] as? String else { return nil }
-        let pending = (object["pending_steer"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return RunState(status: status, pendingSteer: pending)
+        if case .known(let state) = await runProbe(runID: runID) { return state }
+        return nil
+    }
+
+    /// `runState` with the failure modes kept apart — the stop confirmation
+    /// loop must tell "the gateway forgot the run" (done, stop waiting) from
+    /// "the gateway did not answer" (keep asking).
+    enum RunProbe {
+        case known(RunState)
+        /// 404 `run_not_found`: ended long enough ago to be swept, or a
+        /// gateway restart in between.
+        case gone
+        /// Transport failure or an unrecognized payload.
+        case unreachable
+    }
+
+    func runProbe(runID: String) async -> RunProbe {
+        do {
+            let object = try await json("GET", "v1/runs/\(runID)")
+            guard let status = object["status"] as? String else { return .unreachable }
+            let pending = (object["pending_steer"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return .known(RunState(status: status, pendingSteer: pending))
+        } catch HermesTransportError.http(let status, _) where status == 404 {
+            return .gone
+        } catch {
+            return .unreachable
+        }
     }
 
     /// Body shape to be pinned against the live gateway in stage 6 (the

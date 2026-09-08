@@ -12,8 +12,10 @@
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>
     <string name="chat_dictate">Dictate</string>
-    <string name="chat_recording">Recording… tap ■ to finish</string>
+    <string name="chat_recording">Recording… tap ■ to finish, tap twice to cancel</string>
     <string name="chat_stop_recording">Finish recording</string>
+    <string name="chat_cancel_recording">Cancel recording</string>
+    <string name="chat_recording_cancelled">Recording cancelled.</string>
     <string name="chat_transcribing">Transcribing…</string>
     <string name="chat_jump_latest">Jump to latest</string>
 
@@ -184,6 +186,11 @@
 
     <!-- Hermes Agent addon -->
     <string name="hermes_role">Hermes Agent</string>
+    <string name="hermes_stopping">Stopping the agent…</string>
+    <string name="hermes_stopped">Stopped.</string>
+    <string name="hermes_stop_unconfirmed">Stop requested, but the gateway has not confirmed it yet — the agent may still be finishing its current step.</string>
+    <string name="hermes_stop_failed">Could not stop the run on the gateway — the agent may still be working.</string>
+    <string name="hermes_held">Sending once the agent has stopped…</string>
     <string name="hermes_new_session">New session</string>
     <string name="hermes_sessions">Sessions</string>
     <string name="hermes_rename">Rename session</string>

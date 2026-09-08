@@ -402,6 +402,56 @@ same `ChatEvent` stream; the window's loop is unchanged. What differs:
   a run is over for sure, re-sends the texts no transcript row carries — the
   road for a run a restarted gateway forgot, which has no `pending_steer`
   left to ask for;
+- every user message bound for an agent conversation — typed, dictated, a
+  slash command, a held send — goes through one door (`ChatWindow.post`):
+  hold while a Stop settles, steer into a turn in flight (ours or one the
+  gateway shows), else open a turn with only that message on the wire. The
+  dictation path takes the same courier road as a typed send (upload +
+  path note for staged images/files on a remote gateway); until 5.1 it
+  bypassed both, so a dictated screenshot reached the model inline and
+  nothing else, and a dictated follow-up raced the running turn;
+- Stop stops the run ON THE GATEWAY: `HermesAddon.requestStop` sends
+  `POST /v1/runs/{id}/stop` (the run id is read before the local stream is
+  cancelled — the session clears it as it unwinds), then polls
+  `GET /v1/runs/{id}` up to `stopConfirmWindow` and reports stopped / gone
+  / unconfirmed / failed as a system line; the pill reads "Stopping…"
+  meanwhile and sends typed during the wait are held (`heldSends`: the
+  first opens the next turn, the rest steer into it). The session's own
+  cancellation path fires the same request for new chat and a deleted
+  role — cancellation ends an `AsyncThrowingStream` with nil, never a
+  throw, so a stop parked in a `catch` was never sent; with the
+  detached-runs gateway patch the closed socket no longer interrupts
+  either, and "Stopped." used to be a lie (2026-09-07). One request per run
+  (`stopTasks`), whoever asks. What survives the process: the run id is
+  persisted per session at `run.started` (`hermes.activeRunBySession`,
+  cleared when the run is known to be over), so after a relaunch the Stop
+  button also covers OUR run the mirror now shows as "started elsewhere",
+  and a follow-up steers into it; held sends are persisted by message id
+  (`hermes.heldSends`, the bubbles are in the store) and go out after the
+  next catch-up of that conversation (`recoverHeldSends`: idle → a turn,
+  live → steer). Quitting the app cancels no stream, so it never stops the
+  agent's run — a detached run keeps working and the mirror shows it. A
+  turn started from the phone or CLI never reaches us with a run id and
+  cannot be stopped from here (Hermes has no run listing). Android keeps
+  the same contract in `ChatViewModel.stopStreaming`/`confirmStop`: the
+  run id stays persisted until the gateway confirms, the conversation
+  counts as busy meanwhile (`_stoppingIds`), sends are held into its
+  persisted follow-up queue, and a message with attachments that no turn
+  can take right now — dictation over a staged screenshot mid-turn used to
+  be dropped — is remembered by id (`hermesHeldMessages`) and opens a turn
+  of its own once the session is verified idle;
+- one session, one conversation: a session started from a role's default
+  thread is bound to that thread's key and opens THERE from the sessions
+  list (`continueHermesSession`; `targetConversation` resolves a stale
+  per-role session memory the same way). Older builds opened it as its own
+  `.agent(role, session:)` conversation on top — a twin mirrored from the
+  transcript, which carries no pixels and no audio — and
+  `HermesAddon.mergeTwinConversations` folds those into the default thread
+  at every launch (`ChatPersistence.mergeConversation`: rows keyed by
+  `externalID`, the copy holding media wins, the twin's welcome line stays
+  behind, pins carried over). The store step is enqueued whether or not the
+  settings still show the twin — a launch that dies between the settings
+  rewrite and the store merge must not orphan the twin's rows;
 - `HermesMirrorSync` reconciles the local store with the gateway transcript
   (`ChatMessage.externalID`/`seq`), `HermesLiveTurn` detects turns started
   elsewhere, `HermesCompaction` renders the gateway's context summaries,
@@ -467,7 +517,11 @@ artifacts, image tools, voice, themes, the Hermes agent and, since Android
 2.9.2, documents in chat (`docs/documents-in-chat.md` §12: PdfBox text
 layer and docx XML, no OCR on the phone). Its own README lists the
 per-version parity. Not on Android: system-wide dictation (planned as an
-IME).
+IME). Voice messages share the desktop's cancel contract: ■ stops the
+recording at once, the transcription waits out a short window
+(`VOICE_CANCEL_WINDOW_MS`), and a second tap on the same button inside it
+discards the clip — nothing is transcribed before the window closes, so
+the length of the recording never shortens the chance to cancel.
 Cross-platform text contracts are tested on both sides (`shared/fixtures/`);
 twins to keep in sync are named in the code (`HermesSteer.swift` ↔
 `hermes/HermesSteer.kt`, pinned by `steer-frame.json`).

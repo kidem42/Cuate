@@ -134,6 +134,19 @@ enum AgentChatService {
                         }
                     }
 
+                    if Task.isCancelled {
+                        // The user walked away (Stop, new chat, a deleted
+                        // role). Cancellation ends the event stream without a
+                        // throw, so nothing below may run — the "turn done"
+                        // banner, the sidebar refresh and the turn.end line
+                        // all describe a finished turn, and this one was cut
+                        // off. Stopping the run on the gateway is the
+                        // session's job (its own cancellation path).
+                        Diagnostics.log("agent", "turn.cancelled role=\(role.id) chars=\(displayedText.count) steps=\(journal.steps.count)")
+                        continuation.finish()
+                        return
+                    }
+
                     // Recordings the agent named by id (its host carries the
                     // Plaud plugin): resolved here with OUR grant into the
                     // usual chips, so the reply keeps the words and the card
@@ -173,8 +186,10 @@ enum AgentChatService {
                     NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)
                     continuation.finish()
                 } catch {
-                    // Best effort: tell the gateway to stop the run the user
-                    // just walked away from (new chat, deleted preset, stop).
+                    // A cancel that surfaced as a throw: the session already
+                    // asked the gateway to stop the run on its own
+                    // cancellation path (deduped per run); this remains for
+                    // session implementations without one.
                     if Task.isCancelled {
                         let abortable = session
                         Task { await abortable.abort() }

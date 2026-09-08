@@ -160,6 +160,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
     val isTranscribing by viewModel.isTranscribing.collectAsStateWithLifecycle()
+    val isVoiceCancelWindow by viewModel.isVoiceCancelWindow.collectAsStateWithLifecycle()
     val transcriptionResult by viewModel.transcriptionResult.collectAsStateWithLifecycle()
     val errorText by viewModel.errorText.collectAsStateWithLifecycle()
     val sharedText by sharedTextFlow.collectAsState()
@@ -242,6 +243,7 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
             pendingAttachments = pendingAttachments,
             isRecording = isRecording,
             isTranscribing = isTranscribing,
+            isVoiceCancelWindow = isVoiceCancelWindow,
             transcriptionResult = transcriptionResult,
             onSend = { viewModel.send(it) },
             onStop = { viewModel.stopStreaming() },
@@ -250,8 +252,8 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
             onAttachFile = { viewModel.attachFile(it) },
             onRemoveAttachment = { viewModel.removePendingAttachment(it) },
             onStartRecording = { viewModel.startRecording() },
-            onStopRecording = { viewModel.stopRecordingAndTranscribe() },
-            onCancelRecording = { viewModel.cancelRecording() },
+            onStopRecording = { viewModel.stopRecordingWithCancelWindow() },
+            onCancelRecording = { viewModel.cancelPendingVoiceSend() },
             onTranscriptionConsumed = { viewModel.consumeTranscription() },
             onImageTool = { attachment, function, prompt, mask ->
                 viewModel.runImageTool(attachment, function, prompt, mask)

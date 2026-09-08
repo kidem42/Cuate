@@ -86,6 +86,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isTranscribing = MutableStateFlow(false)
     val isTranscribing: StateFlow<Boolean> = _isTranscribing
 
+    /** True inside the double-tap cancel window after ■ ([stopRecordingWithCancelWindow]). */
+    private val _isVoiceCancelWindow = MutableStateFlow(false)
+    val isVoiceCancelWindow: StateFlow<Boolean> = _isVoiceCancelWindow
+
     /** Transcribed text handed to the input field (consumed by the UI). */
     private val _transcriptionResult = MutableStateFlow<String?>(null)
     val transcriptionResult: StateFlow<String?> = _transcriptionResult
@@ -104,9 +108,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val streamJobs = mutableMapOf<String, Job>()
     private val streamingIds = MutableStateFlow<Set<String>>(emptySet())
 
-    /** isLoading == the ACTIVE conversation has a running stream. */
+    /**
+     * Conversations whose Stop is waiting for the gateway to confirm
+     * ([confirmStop]). They count as busy: a send lands in the chat and is
+     * HELD ([hermesHold]) instead of opening a turn the run being stopped
+     * would race — the gateway serialized a follow-up posted right after
+     * Stop BEHIND the "stopped" run (desktop, 2026-09-07 14:49).
+     */
+    private val _stoppingIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /** isLoading == the ACTIVE conversation has a running stream, or a Stop settling. */
     private fun refreshLoading() {
-        _isLoading.value = _activeConversationId.value in streamingIds.value
+        val active = _activeConversationId.value
+        _isLoading.value = active in streamingIds.value || active in _stoppingIds.value
         if (!_isLoading.value) _statusText.value = null
     }
 
@@ -549,15 +563,60 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _isRecording.value = false
     }
 
+    /** The stop whose transcription still waits out the cancel window, and its clip. */
+    private var pendingVoiceStop: kotlinx.coroutines.Job? = null
+    private var pendingVoiceFile: java.io.File? = null
+
     /**
-     * Stops recording, transcribes, and sends the result as a VOICE message
-     * (audio kept for playback, transcript is the message text) — the macOS
-     * voice-message flow.
+     * ■ tap: the recording stops NOW, but transcription (and the send) wait
+     * out [VOICE_CANCEL_WINDOW_MS], during which a second tap on the same
+     * button cancels — the desktop contract (`stopRecordingWithCancelWindow`,
+     * a second Space press). Independent of the clip's length: nothing is
+     * transcribed before the window closes, so a one-second clip is as
+     * cancellable as a minute-long one. Until now the ■ went straight to
+     * transcription and the slot turned into a spinner, so the second tap
+     * of the habit hit nothing and the message went out.
      */
-    fun stopRecordingAndTranscribe() {
+    fun stopRecordingWithCancelWindow() {
         val file = recorder.stop()
         _isRecording.value = false
         if (file == null) return
+        pendingVoiceFile = file
+        _isVoiceCancelWindow.value = true
+        pendingVoiceStop = viewModelScope.launch {
+            kotlinx.coroutines.delay(VOICE_CANCEL_WINDOW_MS)
+            pendingVoiceStop = null
+            pendingVoiceFile = null
+            _isVoiceCancelWindow.value = false
+            transcribeAndSend(file)
+        }
+    }
+
+    /** The second tap inside the window: the clip is discarded, nothing goes out. */
+    fun cancelPendingVoiceSend() {
+        val job = pendingVoiceStop ?: return
+        job.cancel()
+        pendingVoiceStop = null
+        _isVoiceCancelWindow.value = false
+        pendingVoiceFile?.delete()
+        pendingVoiceFile = null
+        val conversationId = _activeConversationId.value ?: return
+        val line = ChatMessage(
+            text = getApplication<Application>().getString(R.string.chat_recording_cancelled),
+            isUser = false, messageType = ChatMessage.Type.SYSTEM,
+        )
+        _messages.value = _messages.value + line
+        totalMessageCount += 1
+        viewModelScope.launch { dao.upsertMessage(line.toEntity(conversationId)) }
+        com.aispotlight.android.core.Diagnostics.log("voice", "recording.cancelled")
+    }
+
+    /**
+     * Transcribes a finished clip and sends the result as a VOICE message
+     * (audio kept for playback, transcript is the message text) — the macOS
+     * voice-message flow. Reached only once the cancel window has passed.
+     */
+    private fun transcribeAndSend(file: java.io.File) {
         _isTranscribing.value = true
         // A pill in the chat while transcribing: a long voice message with no
         // indicator looks like a lost message (port of the Mac fix; the
@@ -1236,17 +1295,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopStreaming() {
         val conversationId = _activeConversationId.value ?: return
+        val sessionId = activeConversation?.takeIf { it.id == conversationId }?.hermesSessionId
         // Agent runs are stopped on the GATEWAY too — cancelling only the
         // local collect would leave the agent working (and billing) blind.
-        hermesRunIds.remove(conversationId)?.let { runID ->
-            activeConversation?.hermesSessionId?.let { settings.setHermesActiveRun(it, null) }
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    HermesChatService.transport(settings).stopRun(runID)
-                } catch (e: Exception) {
-                    com.aispotlight.android.core.Diagnostics.log("hermes", "stop.fail ${e.message?.take(120)}")
-                }
-            }
+        // The id is read BEFORE the cancel and stays persisted until the
+        // gateway confirms the run is over: dropping it up front (as this
+        // did) left a failed stop with nothing to retry or re-attach with —
+        // only the transcript-tail guess, which reads a run killed mid-tool
+        // as "live" for the whole staleness window.
+        val runId = hermesRunIds[conversationId]
+            ?: sessionId?.let { settings.hermesActiveRuns.value[it] }
+        val stoppable = sessionId != null && runId != null
+        if (stoppable) {
+            // Busy until confirmed — set before the cancel so the loading
+            // flag never dips (the stream's own cancel path refreshes it).
+            _stoppingIds.value = _stoppingIds.value + conversationId
+            _statusText.value = getApplication<Application>().getString(R.string.hermes_stopping)
         }
         streamJobs[conversationId]?.cancel()
         markStreaming(conversationId, false)
@@ -1255,7 +1319,89 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (last != null && !last.isUser) {
             viewModelScope.launch { dao.upsertMessage(last.toEntity(conversationId)) }
         }
+        if (stoppable) confirmStop(conversationId, sessionId!!, runId!!)
     }
+
+    /**
+     * Stop, confirmed: `POST /v1/runs/{id}/stop`, then `GET /v1/runs/{id}`
+     * until the run reads terminal (up to [HERMES_STOP_CONFIRM_MS]) — the
+     * handler hard-interrupts the agent and answers "stopping" at once; a
+     * tool already running has to return first. The outcome lands as a
+     * system line; the persisted run id goes only once the gateway
+     * confirmed (a failed stop keeps the re-attach road); then whatever
+     * was held goes out through the liveness-gated delivery. One request
+     * per conversation at a time (a second tap re-uses the pending one).
+     */
+    private fun confirmStop(conversationId: String, sessionId: String, runId: String) {
+        if (stopJobs.containsKey(conversationId)) return
+        com.aispotlight.android.core.Diagnostics.log("hermes", "stop.request run=$runId")
+        val job = viewModelScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                val transport = HermesChatService.transport(settings)
+                try {
+                    transport.stopRun(runId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: com.aispotlight.android.hermes.HermesTransportException) {
+                    if (e.status == 404) return@withContext HermesStopOutcome.GONE
+                    com.aispotlight.android.core.Diagnostics.log("hermes", "stop.fail http=${e.status}")
+                    return@withContext HermesStopOutcome.FAILED
+                } catch (e: Exception) {
+                    com.aispotlight.android.core.Diagnostics.log("hermes", "stop.fail ${e.message?.take(120)}")
+                    return@withContext HermesStopOutcome.FAILED
+                }
+                val deadline = System.currentTimeMillis() + HERMES_STOP_CONFIRM_MS
+                var result = HermesStopOutcome.UNCONFIRMED
+                while (System.currentTimeMillis() < deadline) {
+                    kotlinx.coroutines.delay(1_000)
+                    try {
+                        if (transport.runState(runId).isTerminal) {
+                            result = HermesStopOutcome.STOPPED
+                            break
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: com.aispotlight.android.hermes.HermesTransportException) {
+                        if (e.status == 404) {
+                            result = HermesStopOutcome.GONE
+                            break
+                        }
+                    } catch (_: Exception) {
+                        // The stop was accepted; a flaky probe is no reason
+                        // to give up before the window closes.
+                    }
+                }
+                result
+            }
+            com.aispotlight.android.core.Diagnostics.log("hermes", "stop.outcome run=$runId $outcome")
+            if (outcome == HermesStopOutcome.STOPPED || outcome == HermesStopOutcome.GONE) {
+                if (settings.hermesActiveRuns.value[sessionId] == runId) {
+                    settings.setHermesActiveRun(sessionId, null)
+                }
+                hermesRunIds.remove(conversationId)
+            }
+            stopJobs.remove(conversationId)
+            _stoppingIds.value = _stoppingIds.value - conversationId
+            refreshLoading()
+            val app = getApplication<Application>()
+            val text = when (outcome) {
+                HermesStopOutcome.STOPPED, HermesStopOutcome.GONE -> app.getString(R.string.hermes_stopped)
+                HermesStopOutcome.UNCONFIRMED -> app.getString(R.string.hermes_stop_unconfirmed)
+                HermesStopOutcome.FAILED -> app.getString(R.string.hermes_stop_failed)
+            }
+            val line = ChatMessage(text = text, isUser = false, messageType = ChatMessage.Type.SYSTEM)
+            if (_activeConversationId.value == conversationId) {
+                _messages.value = _messages.value + line
+                totalMessageCount += 1
+            }
+            dao.upsertMessage(line.toEntity(conversationId))
+            deliverPendingHermesFollowUps(conversationId)
+        }
+        stopJobs[conversationId] = job
+    }
+
+    /** Stop confirmations in flight, by conversation. */
+    private val stopJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
 
     // MARK: - Hermes agent (sessions are conversations)
 
@@ -1825,6 +1971,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * the old in-memory hold died with the process and took the message
      * with it.
      */
+    /**
+     * Parks a message the turn in flight cannot take — attachments (no
+     * steer channel for those), or a Stop still settling: the bubble lands
+     * in the chat and in Room now, the delivery waits for the verified-idle
+     * moment ([deliverPendingHermesFollowUps]). Text joins the persisted
+     * follow-up queue; a message with attachments is remembered by id
+     * ([AppSettings.hermesHeldMessageIds]) and opens a turn of its own.
+     * Persisted both ways, so a process death does not swallow it.
+     */
+    private fun hermesHold(userMessage: ChatMessage, conversationId: String) {
+        viewModelScope.launch {
+            if (_activeConversationId.value == conversationId) {
+                _messages.value = _messages.value + userMessage
+                totalMessageCount += 1
+                if (conversationId in _stoppingIds.value) {
+                    _statusText.value = getApplication<Application>().getString(R.string.hermes_held)
+                }
+            }
+            dao.upsertMessage(userMessage.toEntity(conversationId))
+            for (attachment in userMessage.attachments) {
+                dao.upsertAttachment(attachment.toEntity(userMessage.id))
+            }
+            dao.touch(conversationId, System.currentTimeMillis())
+            if (userMessage.attachments.isEmpty()) {
+                settings.setHermesPendingFollowUps(
+                    conversationId,
+                    settings.hermesPendingFollowUpTexts(conversationId) + userMessage.text,
+                )
+            } else {
+                settings.setHermesHeldMessages(
+                    conversationId,
+                    settings.hermesHeldMessageIds(conversationId) + userMessage.id,
+                )
+            }
+            com.aispotlight.android.core.Diagnostics.log(
+                "hermes", "send.held attachments=${userMessage.attachments.size}")
+        }
+    }
+
     private fun hermesSteerOrQueue(
         userMessage: ChatMessage, conversationId: String, sessionId: String
     ) {
@@ -1892,7 +2077,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun deliverPendingHermesFollowUps(conversationId: String) {
         val held = settings.hermesPendingFollowUpTexts(conversationId)
-        if (held.isEmpty()) return
+        val heldIds = settings.hermesHeldMessageIds(conversationId)
+        if (held.isEmpty() && heldIds.isEmpty()) return
         // Only when the conversation is on screen: hermesDispatch streams
         // into the ACTIVE conversation's state. A held queue for another
         // thread is delivered when that thread is opened.
@@ -1908,8 +2094,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             // Re-check after the round-trip: a send may have started a turn.
             if (conversationId in streamingIds.value ||
-                _activeConversationId.value != conversationId
+                _activeConversationId.value != conversationId ||
+                conversationId in _stoppingIds.value
             ) return@launch
+            // Held messages carry attachments — nothing to steer; they
+            // wait for the run's end.
+            if (activity == "live" && held.isEmpty()) return@launch
             when (activity) {
                 "live" -> {
                     // Into a running turn: an addition to it, framed as such.
@@ -1941,14 +2131,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // the next delivery opportunity.
                 }
                 "idle" -> {
-                    settings.setHermesPendingFollowUps(conversationId, emptyList())
-                    hermesDispatch(
-                        ChatMessage(text = joined, isUser = true),
-                        alreadyPosted = true,
-                    )
+                    if (held.isNotEmpty()) {
+                        settings.setHermesPendingFollowUps(conversationId, emptyList())
+                        hermesDispatch(
+                            ChatMessage(text = joined, isUser = true),
+                            alreadyPosted = true,
+                        )
+                    } else {
+                        // Texts first, then one held message per turn — the
+                        // turn's end brings the next delivery.
+                        deliverHeldMessage(conversationId, heldIds)
+                    }
                 }
                 else -> { } // offline — the queue waits
             }
+        }
+    }
+
+    /**
+     * The oldest held message (attachments — no steer channel) opens the
+     * next turn as its own; the rest wait for that turn's end. A row that
+     * is gone from Room (deleted meanwhile) is skipped.
+     */
+    private suspend fun deliverHeldMessage(conversationId: String, heldIds: List<String>) {
+        var remaining = heldIds
+        while (remaining.isNotEmpty()) {
+            val id = remaining.first()
+            remaining = remaining.drop(1)
+            settings.setHermesHeldMessages(conversationId, remaining)
+            val row = dao.recentMessages(conversationId, 200).firstOrNull { it.id == id }
+            if (row == null) {
+                com.aispotlight.android.core.Diagnostics.log("hermes", "held.missing")
+                continue
+            }
+            val message = withAttachments(listOf(row)).first()
+            com.aispotlight.android.core.Diagnostics.log(
+                "hermes", "held.deliver attachments=${message.attachments.size} left=${remaining.size}")
+            hermesDispatch(message, alreadyPosted = true)
+            return
         }
     }
 
@@ -2158,11 +2378,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val conversation = activeConversation ?: return
         val sessionId = conversation.hermesSessionId ?: return
         if (conversation.id != conversationId) return
+        if (conversationId in _stoppingIds.value) {
+            // A Stop is settling: nothing may start (or steer into) the run
+            // being killed — held until the gateway confirms.
+            hermesHold(userMessage, conversationId)
+            return
+        }
         if (conversationId in streamingIds.value) {
-            // Turn in flight: steer it (text-only — attachments keep the
-            // pre-steer behavior of waiting for the turn).
+            // Turn in flight: steer it (text-only — the steer channel is
+            // text). A message with attachments is HELD for the turn's end;
+            // it used to be dropped here outright, which is how a dictated
+            // screenshot vanished (the typed path refuses attachments
+            // mid-turn in [send], the voice path reached this line).
             if (userMessage.attachments.isEmpty()) {
                 hermesSteerOrQueue(userMessage, conversationId, sessionId)
+            } else {
+                hermesHold(userMessage, conversationId)
             }
             return
         }
@@ -2444,3 +2675,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 }
+
+/** How long a Stop waits for `GET /v1/runs/{id}` to read terminal. */
+private const val HERMES_STOP_CONFIRM_MS = 20_000L
+
+private enum class HermesStopOutcome { STOPPED, GONE, UNCONFIRMED, FAILED }
+
+/**
+ * The double-tap cancel window after ■ — the desktop's 0.35 s, widened a
+ * touch for a thumb: two taps of one habit land well inside, a deliberate
+ * second tap never has to race it.
+ */
+private const val VOICE_CANCEL_WINDOW_MS = 400L

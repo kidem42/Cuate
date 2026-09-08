@@ -84,7 +84,11 @@ enum HermesLocalGateway {
     // run when the session SSE client disconnects (a backgrounded phone, a
     // network flap), stamping "Operation interrupted" into the transcript.
     // Patched, the run finishes on its own and clients recover the reply
-    // from the transcript. Explicit Stop is unaffected (`/v1/runs/{id}/stop`).
+    // from the transcript. The explicit `POST /v1/runs/{id}/stop` is then
+    // the ONLY way a run ends early — the client sends it on Stop and on
+    // every abandoned turn, and confirms through `GET /v1/runs/{id}`
+    // (`HermesAddon.requestStop`); before 5.1 it never did, and Stop lived
+    // off the socket side effect this edit removes.
     // Mirrors the remote paste-block in HermesSettingsView — keep in sync.
 
     enum ContextPatchState: Equatable {

@@ -225,6 +225,16 @@ struct ChatWindow: View {
     /// Keyboard control of voice recording: Space stops, double-Space cancels.
     @State private var panelKeyMonitor: Any?
     @State private var pendingVoiceSend: DispatchWorkItem?
+    /// Agent conversations whose Stop is waiting for the gateway's
+    /// confirmation (`HermesAddon.requestStop`). While one is pending the
+    /// composer HOLDS new sends (`heldSends`) instead of opening a turn the
+    /// run being stopped would race: the gateway serialized the two, and a
+    /// follow-up sent right after Stop sat two minutes behind the "stopped"
+    /// run, then answered against its context (2026-09-07 14:49–14:51).
+    @State private var stoppingConversations: Set<ChatStore.ConversationID> = []
+    /// Sends held until their conversation's stop settles, in order. The
+    /// first opens the next turn; the rest steer into it.
+    @State private var heldSends: [ChatStore.ConversationID: [ChatMessage]] = [:]
     /// Conversation on screen when the mic OPENED — the voice send's true
     /// origin. Captured at record start (not at send: every stop path has an
     /// async gap a fast chat switch can slip into); cleared by send/cancel.
@@ -972,7 +982,7 @@ struct ChatWindow: View {
                         // (typing anything turns it back into send, the
                         // native-chat pattern). Cancelling also stops the
                         // run on the gateway.
-                        if agentTurnInFlight, composerIsEmpty {
+                        if agentTurnInFlight || stoppableExternalTurn, composerIsEmpty {
                             Button(action: stopAgentTurn) {
                                 ZStack {
                                     Circle()
@@ -1871,6 +1881,9 @@ struct ChatWindow: View {
         // The next send creates a fresh session; the role's "which session
         // is open" memory resets to the default thread.
         if chatStore.conversation.isAgent {
+            // Whatever a Stop was holding for this thread goes with it.
+            heldSends.removeValue(forKey: chatStore.conversation)
+            HermesSettings.shared.setHeldSendIDs([], forConversationKey: chatStore.conversation.storageKey)
             HermesSettings.shared.unbindSession(forConversationKey: chatStore.conversation.storageKey)
             if let role = role(for: chatStore.conversation) {
                 HermesSettings.shared.setActiveSession(nil, roleID: role.id)
@@ -1883,30 +1896,156 @@ struct ChatWindow: View {
 
     /// Whether an agent turn is currently streaming into the ON-SCREEN
     /// conversation (drives the send→stop button swap).
+    /// A turn the mirror shows on the gateway that this process is NOT
+    /// streaming, but whose run id it persisted at `run.started` — our own
+    /// run that outlived a relaunch. The Stop button covers it; a turn
+    /// started from the phone or CLI never reaches us with an id and stays
+    /// unstoppable from here (Hermes has no run listing).
+    private var stoppableExternalTurn: Bool {
+        externalTurn != nil
+            && !stoppingConversations.contains(chatStore.conversation)
+            && persistedRunID(for: chatStore.conversation) != nil
+    }
+
+    /// The run id persisted for `origin`'s session, if any.
+    private func persistedRunID(for origin: ChatStore.ConversationID) -> String? {
+        hermesSettings.sessionID(forConversationKey: origin.storageKey)
+            .flatMap { hermesSettings.activeRun(forSession: $0) }
+    }
+
     private var agentTurnInFlight: Bool {
         chatStore.conversation.isAgent
             && currentStreamSlot != nil
             && chatStore.isLoading
     }
 
-    /// Stop button in the thinking pill (agent turns): cancels our stream —
-    /// the cancellation path fires `session.abort()`, which stops the run on
-    /// the gateway too. The last ~1s checkpoint of the partial reply stays
-    /// in the store; a catch-up moments later pulls whatever the gateway
-    /// recorded for the interrupted turn.
+    /// Stop button in the thinking pill (agent turns). Cancels our stream,
+    /// then stops the run ON THE GATEWAY and waits for the gateway to
+    /// confirm (`HermesAddon.requestStop`). Closing the socket alone stops
+    /// nothing since the detached-runs patch, and the cancellation path
+    /// never sent the explicit stop — the agent worked on for minutes after
+    /// "Stopped." (2026-09-07 14:49). Meanwhile the pill reads "Stopping…"
+    /// and sends are held (`heldSends`); the outcome lands as a system
+    /// line, then a catch-up pulls whatever the gateway recorded for the
+    /// interrupted turn. The last ~1s checkpoint of the partial reply stays
+    /// in the store.
     private func stopAgentTurn() {
-        guard let slot = streamSlots[chatStore.conversation] else { return }
-        slot.task?.cancel()
-        streamSlots.removeValue(forKey: chatStore.conversation)
-        pendingAgentApproval = nil
-        chatStore.statusText = nil
-        livePill.clear()
-        hasLiveSteps = false
-        chatStore.setLoading(false)
-        chatStore.addMessage(text: AGL("agent.stopped"), isUser: false, messageType: .system)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            runAgentCatchUpIfNeeded()
+        let origin = chatStore.conversation
+        let key = origin.storageKey
+        let sessionID = hermesSettings.sessionID(forConversationKey: key)
+        let slot = streamSlots[origin]
+        // Ours: read the id BEFORE the cancel (the session clears its
+        // registry entry as it unwinds). Not ours to stream — a run that
+        // outlived a relaunch, shown by the mirror: the id persisted at
+        // run.started.
+        let runID = hermesAddon.activeRunID(conversationKey: key) ?? persistedRunID(for: origin)
+        guard slot != nil || runID != nil else { return }
+        stoppingConversations.insert(origin)
+        if let slot {
+            slot.task?.cancel()
+            streamSlots.removeValue(forKey: origin)
         }
+        pendingAgentApproval = nil
+        hasLiveSteps = false
+        // The pill stays up for the confirmation — isLoading holds it (set
+        // here too: an external turn had no stream to set it), and keeps
+        // the mirror from catching up mid-stop — with its own text.
+        chatStore.isLoading = true
+        livePill.begin(turnID: "stopping|" + key, status: AGL("agent.stopping"), steps: [])
+        chatStore.statusText = AGL("agent.stopping")
+        Diagnostics.log("hermes", "stop.pressed run=\(runID ?? "-")")
+        Task { @MainActor in
+            var outcome: HermesAddon.StopOutcome?
+            if let runID {
+                outcome = await hermesAddon.requestStop(runID: runID, sessionID: sessionID)
+            }
+            finishStop(of: origin, outcome: outcome)
+        }
+    }
+
+    /// The stop settled — or there was no run id to stop, the request never
+    /// having reached `run.started`: report, release the pill, send what
+    /// was held, and let the mirror show the interrupted turn's tail.
+    private func finishStop(of origin: ChatStore.ConversationID, outcome: HermesAddon.StopOutcome?) {
+        stoppingConversations.remove(origin)
+        let text: String
+        switch outcome {
+        case .stopped, .gone:
+            text = AGL("agent.stopped")
+        case .unconfirmed:
+            text = AGL("agent.stopped.unconfirmed")
+        case .failed(let reason):
+            text = String(format: AGL("agent.stopped.failed"), reason)
+        case nil:
+            text = AGL("agent.stopped.noRun")
+        }
+        chatStore.deliver(ChatMessage(text: text, isUser: false, messageType: .system), to: origin)
+        if chatStore.conversation == origin {
+            chatStore.statusText = nil
+            livePill.clear()
+            chatStore.setLoading(false)
+        }
+        if releaseHeldSends(for: origin) { return }
+        // setLoading flips on the next main-queue turn and the catch-up's
+        // guard reads it synchronously — so, after that.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            if chatStore.conversation == origin { runAgentCatchUpIfNeeded() }
+        }
+    }
+
+    // MARK: - Held sends (Stop in progress)
+
+    /// Whether a send into `origin` waits for its Stop to settle.
+    private func shouldHold(_ origin: ChatStore.ConversationID) -> Bool {
+        origin.isAgent && stoppingConversations.contains(origin)
+    }
+
+    /// Parks a message until the stop settles: the bubble lands now, the
+    /// wire waits.
+    private func hold(_ message: ChatMessage, in origin: ChatStore.ConversationID) {
+        heldSends[origin, default: []].append(message)
+        // The bubble persists with the store; the fact that its text never
+        // went out persists here — an in-memory hold died with the process
+        // and took the message with it (`recoverHeldSends`).
+        hermesSettings.setHeldSendIDs(
+            hermesSettings.heldSendIDs(forConversationKey: origin.storageKey) + [message.id.uuidString],
+            forConversationKey: origin.storageKey)
+        place(message, in: origin)
+        if chatStore.conversation == origin {
+            chatStore.isLoading = true
+            livePill.status = AGL("agent.held")
+            chatStore.statusText = AGL("agent.held")
+        }
+        Diagnostics.log("hermes", "send.held n=\(heldSends[origin]?.count ?? 0)")
+    }
+
+    /// Sends what the stop held back: the first message opens the next
+    /// turn, the rest steer into it once the gateway has named the run (or
+    /// at once over the session route). Returns false when nothing was held.
+    @discardableResult
+    private func releaseHeldSends(for origin: ChatStore.ConversationID) -> Bool {
+        guard let held = heldSends.removeValue(forKey: origin), let first = held.first else { return false }
+        hermesSettings.setHeldSendIDs([], forConversationKey: origin.storageKey)
+        Diagnostics.log("hermes", "send.released n=\(held.count)")
+        streamAssistantReply(for: origin, history: [first])
+        let rest = Array(held.dropFirst())
+        guard !rest.isEmpty else { return true }
+        Task { @MainActor in
+            // Up to 5 s for run.started — a steer needs the run id on the
+            // upstream route; the session route takes it right away.
+            for _ in 0..<50 {
+                if streamSlots[origin] == nil || steerRoute(for: origin) != nil { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            for message in rest {
+                if streamSlots[origin] != nil, let route = steerRoute(for: origin) {
+                    performSteer(message, in: origin, route: route, placeBubble: false)
+                } else {
+                    streamAssistantReply(for: origin, history: [message])
+                }
+            }
+        }
+        return true
     }
 
     // MARK: - Agent mirror sync
@@ -1937,6 +2076,9 @@ struct ChatWindow: View {
                    let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey) {
                     await hermesAddon.markSessionRead(sessionID)
                 }
+                // The sync just told us whether the gateway is busy — the
+                // moment to send what a previous life left behind.
+                if reachable { recoverHeldSends(for: conversation) }
             }
         }
     }
@@ -1952,9 +2094,21 @@ struct ChatWindow: View {
             settings.activeAgentRoleID = first.id
         }
         guard let role = settings.activeAgentRole else { return }
-        let conversation = role.conversationID(sessionID: sessionID)
-        HermesSettings.shared.bindSession(sessionID, toConversationKey: conversation.storageKey)
-        HermesSettings.shared.setActiveSession(sessionID, roleID: role.id)
+        // One session, one conversation: a session started from the role's
+        // default thread lives THERE. Opening it "as its own conversation"
+        // made a twin that mirrored the transcript without media, and the
+        // screenshot the user had just sent was gone from the copy on
+        // screen (2026-09-07 14:49). Such a session opens the default
+        // thread; older twins are folded in at launch
+        // (`HermesAddon.mergeTwinConversations`).
+        let defaultKey = role.conversationID().storageKey
+        if HermesSettings.shared.sessionID(forConversationKey: defaultKey) == sessionID {
+            HermesSettings.shared.setActiveSession(nil, roleID: role.id)
+        } else {
+            let conversation = role.conversationID(sessionID: sessionID)
+            HermesSettings.shared.bindSession(sessionID, toConversationKey: conversation.storageKey)
+            HermesSettings.shared.setActiveSession(sessionID, roleID: role.id)
+        }
         syncConversation()
         runAgentCatchUpIfNeeded()
         NotificationCenter.default.post(name: .chatWindowDidBecomeVisible, object: nil)
@@ -1969,7 +2123,15 @@ struct ChatWindow: View {
     /// each session is its own conversation (full stream isolation).
     private func targetConversation() -> ChatStore.ConversationID {
         if let role = settings.activeAgentRole {
-            return role.conversationID(sessionID: hermesSettings.activeSession(roleID: role.id))
+            var sessionID = hermesSettings.activeSession(roleID: role.id)
+            // A remembered session that is the default thread's own opens
+            // there (the one-session-one-conversation rule of
+            // `continueHermesSession`, applied to a memory older than it).
+            if let remembered = sessionID,
+               hermesSettings.sessionID(forConversationKey: role.conversationID().storageKey) == remembered {
+                sessionID = nil
+            }
+            return role.conversationID(sessionID: sessionID)
         }
         return settings.isPresetIsolated(named: settings.activePresetName)
             ? .preset(settings.activePresetName)
@@ -2259,7 +2421,7 @@ struct ChatWindow: View {
 
         // The quote region (if any) becomes a markdown blockquote in the
         // outgoing text; on screen it was a styled block without markers.
-        var text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
+        let text = SelectionGrabber.message(quote: quotedText, instruction: messageText)
 
         // Attachment-only sends are allowed: the image goes to the model as
         // is and the conversation's system prompt drives what happens to it.
@@ -2272,52 +2434,26 @@ struct ChatWindow: View {
             return
         }
 
-        // Agent mode with files: the courier resolves the paths first —
-        // local gateway keeps them as-is, a REMOTE one gets the files
-        // uploaded through the dashboard API and the note lists the remote
-        // paths (Hermes' API server itself takes no file inputs).
-        // Images go the same way (since 4.4): the gateway keeps no pixels, so
-        // a photo sent here reaches the OTHER surfaces as a bare
-        // "[screenshot]" unless a real file lands on the agent's host. The
-        // note must be part of the LOCAL message too — appending it deeper in
-        // the send made our bubble and the gateway's row differ, and the
-        // mirror inserted the gateway's copy as a duplicate (e2e 2026-07-27).
-        let hasAgentImages = settings.activeAgentRole != nil
-            && HermesSettings.shared.isRemoteGateway
-            && HermesSettings.shared.dashboardBaseURL != nil
-            && pendingAttachments.contains { $0.mimeType.hasPrefix("image") }
-        if settings.activeAgentRole != nil, !pendingAgentFilePaths.isEmpty || hasAgentImages {
+        // Agent mode with files or images: the courier first (see
+        // `agentCourierNotes`); the composer clears now so nothing typed
+        // during the upload is wiped afterwards, and the send lands in the
+        // conversation that was open when ⏎ was pressed.
+        let origin = chatStore.conversation
+        if origin.isAgent,
+           agentCourierApplies(paths: pendingAgentFilePaths, attachments: pendingAttachments) {
             let paths = pendingAgentFilePaths
             pendingAgentFilePaths = []
             let baseText = text
-            let attachments = pendingAttachments
+            let attachments = pendingAttachments.map { Self.freshForPosting($0) }
+            messageText = ""
+            quotedText = nil
+            clearPendingAttachments()
             Task { @MainActor in
-                var noteBlocks: [String] = []
-                if !paths.isEmpty {
-                    let delivery = await HermesFileCourier.deliver(paths: paths)
-                    noteBlocks.append(delivery.note)
-                    if let warning = delivery.warning {
-                        chatStore.addMessage(text: warning, isUser: false, messageType: .system)
-                    }
-                }
-                // Uploads run off the pixels we already hold; a failure is
-                // silent by design — the image still reaches the model inline.
-                var imagePaths: [String] = []
-                for attachment in attachments where attachment.mimeType.hasPrefix("image") {
-                    guard let data = Data(base64Encoded: attachment.contentBase64) else { continue }
-                    if let remote = await HermesFileCourier.uploadBytes(
-                        data, filename: attachment.filename
-                    ) {
-                        imagePaths.append(remote)
-                    }
-                }
-                if !imagePaths.isEmpty {
-                    noteBlocks.append(HermesFileCourier.note(for: imagePaths))
-                }
-                let full = ([baseText] + noteBlocks)
+                let notes = await agentCourierNotes(paths: paths, attachments: attachments, origin: origin)
+                let full = ([baseText] + notes)
                     .filter { !$0.isEmpty }
                     .joined(separator: "\n\n")
-                performSend(text: full, attachments: attachments)
+                post(ChatMessage(text: full, isUser: true, attachments: attachments), in: origin)
             }
             return
         }
@@ -2333,23 +2469,99 @@ struct ChatWindow: View {
         performSend(text: text, attachments: pendingAttachments)
     }
 
-    /// Whether a follow-up typed right now should STEER the running agent
-    /// turn instead of opening a competing one: an agent conversation with a
-    /// turn in flight (ours or one detected on the gateway — phone/CLI), a
-    /// steer-capable gateway (the Cuate 0.20 patch advertises
-    /// `session_steer`), and a text-only send (the steer channel is text —
-    /// attachments keep the pre-steer behavior).
-    private func shouldSteer(attachments: [ChatAttachment]) -> Bool {
-        guard chatStore.conversation.isAgent,
-              attachments.isEmpty,
-              agentTurnInFlight || externalTurn != nil,
-              HermesSettings.shared.sessionID(
-                  forConversationKey: chatStore.conversation.storageKey) != nil
-        else { return false }
-        return steerRoute() != nil
+    /// Held sends from a previous life: the process died while a Stop was
+    /// settling, before their text went out. The bubbles are in the store,
+    /// the ids in settings. Runs after a catch-up, which is what tells us
+    /// whether the gateway is idle: idle → out they go (the first as a
+    /// turn, the rest steer into it); a run still live → steer when a route
+    /// exists, else wait for the next catch-up. A bubble the transcript
+    /// already claimed (`externalID` set) did reach the agent — skipped.
+    private func recoverHeldSends(for origin: ChatStore.ConversationID) {
+        guard origin.isAgent, chatStore.conversation == origin, chatStore.isHistoryLoaded,
+              !chatStore.isLoading, streamSlots[origin] == nil,
+              !stoppingConversations.contains(origin), heldSends[origin] == nil
+        else { return }
+        let key = origin.storageKey
+        let ids = hermesSettings.heldSendIDs(forConversationKey: key)
+        guard !ids.isEmpty else { return }
+        let byID = Dictionary(chatStore.messages.map { ($0.id.uuidString, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let messages = ids.compactMap { byID[$0] }.filter { $0.isUser && $0.externalID == nil }
+        guard !messages.isEmpty else {
+            hermesSettings.setHeldSendIDs([], forConversationKey: key)
+            return
+        }
+        Diagnostics.log("hermes", "send.held.recovered n=\(messages.count) of=\(ids.count)")
+        if hermesAddon.liveTurn(forConversationKey: key) != nil {
+            guard let route = steerRoute(for: origin) else { return }
+            hermesSettings.setHeldSendIDs([], forConversationKey: key)
+            for message in messages {
+                performSteer(message, in: origin, route: route, placeBubble: false)
+            }
+            return
+        }
+        heldSends[origin] = messages
+        releaseHeldSends(for: origin)
     }
 
-    /// Which steer channel this turn can take, if any.
+    // MARK: - Agent sends: one door
+
+    /// Whether an agent send goes through the courier: staged file paths
+    /// always (a local gateway keeps them as they are, a REMOTE one gets
+    /// the files uploaded through the dashboard API and the note lists the
+    /// remote paths — Hermes' API server itself takes no file inputs); and
+    /// images on a remote gateway with a dashboard (since 4.4: the gateway
+    /// keeps no pixels, so a photo sent here reaches the OTHER surfaces as
+    /// a bare "[screenshot]" unless a real file lands on the agent's host).
+    private func agentCourierApplies(paths: [String], attachments: [ChatAttachment]) -> Bool {
+        if !paths.isEmpty { return true }
+        return HermesSettings.shared.isRemoteGateway
+            && HermesSettings.shared.dashboardBaseURL != nil
+            && attachments.contains { $0.mimeType.hasPrefix("image") }
+    }
+
+    /// The courier work of a send, shared by the typed and the dictated
+    /// paths (dictation over a staged screenshot used to skip it — the
+    /// image reached the model inline and nothing else, 2026-09-07). Returns
+    /// the path-note blocks; the caller appends them to the message text —
+    /// the note must be part of the LOCAL message, since appending it deeper
+    /// in the send made our bubble and the gateway's row differ and the
+    /// mirror inserted the gateway's copy as a duplicate (e2e 2026-07-27).
+    private func agentCourierNotes(
+        paths: [String], attachments: [ChatAttachment], origin: ChatStore.ConversationID
+    ) async -> [String] {
+        var noteBlocks: [String] = []
+        if !paths.isEmpty {
+            let delivery = await HermesFileCourier.deliver(paths: paths)
+            noteBlocks.append(delivery.note)
+            if let warning = delivery.warning {
+                chatStore.deliver(ChatMessage(text: warning, isUser: false, messageType: .system), to: origin)
+            }
+        }
+        // Uploads run off the pixels we already hold; a failure is silent
+        // by design — the image still reaches the model inline.
+        var imagePaths: [String] = []
+        for attachment in attachments where attachment.mimeType.hasPrefix("image") {
+            guard let data = Data(base64Encoded: attachment.contentBase64) else { continue }
+            if let remote = await HermesFileCourier.uploadBytes(data, filename: attachment.filename) {
+                imagePaths.append(remote)
+            }
+        }
+        if !imagePaths.isEmpty {
+            noteBlocks.append(HermesFileCourier.note(for: imagePaths))
+        }
+        return noteBlocks
+    }
+
+    /// Whether `origin` has a turn in flight: ours (a stream slot, on or
+    /// off screen) or one detected on the gateway (phone/CLI, or our own
+    /// run outliving a relaunch).
+    private func turnInFlight(in origin: ChatStore.ConversationID) -> Bool {
+        streamSlots[origin] != nil
+            || hermesAddon.liveTurn(forConversationKey: origin.storageKey) != nil
+    }
+
+    /// Which steer channel a follow-up into `origin` can take, if any.
     /// - `.run` — upstream `POST /v1/runs/{id}/steer` (`features.run_steer`,
     ///   Hermes v2026.8.13+). Needs a run id, so it covers OUR streaming
     ///   turn only.
@@ -2357,15 +2569,39 @@ struct ChatWindow: View {
     ///   addressed by session id. Kept as the fallback: it is what steers a
     ///   turn started ELSEWHERE (phone/CLI), where no run id ever reaches us.
     private enum SteerRoute { case run(String), session }
-    private func steerRoute() -> SteerRoute? {
+    private func steerRoute(for origin: ChatStore.ConversationID) -> SteerRoute? {
         let caps = HermesAddon.shared.capabilities
+        // The registry knows the run we are streaming; the persisted copy
+        // knows the run we WERE streaming before a relaunch. A stale id
+        // 404s and `performSteer` falls back to a new turn.
         if caps?.supports("run_steer") == true,
-           let runID = HermesAddon.shared.activeRunID(
-               conversationKey: chatStore.conversation.storageKey) {
+           let runID = HermesAddon.shared.activeRunID(conversationKey: origin.storageKey)
+               ?? persistedRunID(for: origin) {
             return .run(runID)
         }
         if caps?.supports("session_steer") == true { return .session }
         return nil
+    }
+
+    /// Whether a message bound for `origin` should STEER the running agent
+    /// turn instead of opening a competing one: a turn in flight, a bound
+    /// session, a steer-capable gateway, and a text-only send (the steer
+    /// channel is text — attachments keep the new-turn behavior).
+    private func steerDecision(for origin: ChatStore.ConversationID, attachments: [ChatAttachment]) -> SteerRoute? {
+        guard origin.isAgent, attachments.isEmpty, turnInFlight(in: origin),
+              hermesSettings.sessionID(forConversationKey: origin.storageKey) != nil
+        else { return nil }
+        return steerRoute(for: origin)
+    }
+
+    /// Puts a user message into `origin` — synchronously when on screen,
+    /// into the dormant conversation's store otherwise.
+    private func place(_ message: ChatMessage, in origin: ChatStore.ConversationID) {
+        if chatStore.conversation == origin {
+            chatStore.appendNow(message)
+        } else {
+            chatStore.deliver(message, to: origin)
+        }
     }
 
     /// Mid-turn follow-up: the bubble lands in the chat as usual, the text
@@ -2380,16 +2616,15 @@ struct ChatWindow: View {
     /// instead: the bubble is already in the store, so the fallback only
     /// starts the stream. A steer accepted but never read by the agent
     /// comes back on `run.completed` and is replayed the same way
-    /// (`redeliverFollowUp`).
-    private func performSteer(text: String) {
-        let conversationKey = chatStore.conversation.storageKey
-        guard let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationKey),
-              let route = steerRoute() else { return }
-        chatStore.appendNow(ChatMessage(text: text, isUser: true))
-        messageText = ""
-        quotedText = nil
-        clearPendingAttachments()
-        let wire = HermesSteer.framed(text)
+    /// (`redeliverFollowUp`). `placeBubble` false when the caller already
+    /// put the message in the chat (a held send).
+    private func performSteer(
+        _ message: ChatMessage, in origin: ChatStore.ConversationID,
+        route: SteerRoute, placeBubble: Bool
+    ) {
+        guard let sessionID = hermesSettings.sessionID(forConversationKey: origin.storageKey) else { return }
+        if placeBubble { place(message, in: origin) }
+        let wire = HermesSteer.framed(message.text)
         Task { @MainActor in
             do {
                 let transport = HermesAddon.shared.transport()
@@ -2403,7 +2638,8 @@ struct ChatWindow: View {
                     Diagnostics.log("hermes", "steer session=\(sessionID) queued=\(queued)")
                 }
                 guard queued else {
-                    streamAssistantReply() // agent refused — ordinary turn
+                    // Agent refused — ordinary turn.
+                    streamAssistantReply(for: origin, history: [message])
                     return
                 }
                 // Queued into the running turn. The pill keeps streaming;
@@ -2413,36 +2649,58 @@ struct ChatWindow: View {
                 // run_not_accepting_steer upstream, 409 no_active_turn on the
                 // patched route), or any transport failure: deliver as a
                 // normal turn so the message is never lost. The user bubble
-                // is already on screen.
+                // is already in the chat.
                 Diagnostics.log("hermes", "steer fallback: \(String(error.localizedDescription.prefix(120)))")
-                streamAssistantReply()
+                streamAssistantReply(for: origin, history: [message])
             }
         }
     }
 
-    /// Appends the user message and streams the reply, clearing the composer.
-    /// The whole staged batch rides on ONE message — providers turn each
-    /// attachment into a vision content part (or OCR text for non-vision
-    /// models) in `buildMessages`.
-    private func performSend(text: String, attachments: [ChatAttachment]) {
-        // Agent turn already running → steer it instead of racing it.
-        if shouldSteer(attachments: attachments) {
-            performSteer(text: text)
+    /// Every user message bound for a conversation goes through here —
+    /// typed, dictated, a slash command, a held send. Agent conversations:
+    /// hold while a Stop settles, steer into a turn in flight, else open a
+    /// turn with only this message on the wire (the agent holds the
+    /// context). Plain conversations: the bubble, then the reply over the
+    /// on-screen history (a dormant plain conversation is the voice path's
+    /// business — it reloads the history from disk).
+    private func post(_ message: ChatMessage, in origin: ChatStore.ConversationID) {
+        if origin.isAgent {
+            if shouldHold(origin) {
+                hold(message, in: origin)
+                return
+            }
+            if let route = steerDecision(for: origin, attachments: message.attachments) {
+                performSteer(message, in: origin, route: route, placeBubble: true)
+                return
+            }
+            place(message, in: origin)
+            streamAssistantReply(for: origin, history: [message])
             return
         }
-        // An attachment restored from an existing chat message (ImageAddon
-        // "continue editing") already owns a store row; posting the
-        // same id again would collide with the unique index and persist an
-        // attachment-less message — re-wrap with a fresh identity.
-        let posted = attachments.map {
-            ImageOperations.isRestoredFromChat($0) ? ImageOperations.freshCopyForPosting($0) : $0
-        }
-        let userMessage = ChatMessage(text: text, isUser: true, attachments: posted)
-        chatStore.appendNow(userMessage)
+        chatStore.appendNow(message)
+        streamAssistantReply()
+    }
+
+    /// An attachment restored from an existing chat message (ImageAddon
+    /// "continue editing") already owns a store row; posting the same id
+    /// again would collide with the unique index and persist an
+    /// attachment-less message — re-wrap with a fresh identity.
+    private static func freshForPosting(_ attachment: ChatAttachment) -> ChatAttachment {
+        ImageOperations.isRestoredFromChat(attachment)
+            ? ImageOperations.freshCopyForPosting(attachment) : attachment
+    }
+
+    /// Composer send: clears the editor and posts the message into the
+    /// on-screen conversation. The whole staged batch rides on ONE message
+    /// — providers turn each attachment into a vision content part (or OCR
+    /// text for non-vision models) in `buildMessages`.
+    private func performSend(text: String, attachments: [ChatAttachment]) {
+        let origin = chatStore.conversation
+        let userMessage = ChatMessage(text: text, isUser: true, attachments: attachments.map { Self.freshForPosting($0) })
         messageText = "" // the editor re-measures itself back to one line
         quotedText = nil
         clearPendingAttachments()
-        streamAssistantReply()
+        post(userMessage, in: origin)
     }
 
     /// For a local (Ollama) provider: refreshes the loaded state, and if the
@@ -2915,12 +3173,15 @@ struct ChatWindow: View {
                 streamSlots.removeValue(forKey: origin)
                 live.reset()
             }
-            if isLive {
+            // A Stop in progress owns the pill and the loading flag until
+            // the gateway confirms (`finishStop`) — this cancelled stream
+            // must not wipe them a beat later.
+            if isLive, !stoppingConversations.contains(origin) {
                 chatStore.statusText = nil
                 // The journal's live copy retires with the turn — the
                 // delivered reply carries its own (persisted) one.
                 livePill.clear()
-            hasLiveSteps = false
+                hasLiveSteps = false
                 chatStore.setLoading(false)
                 // Fold older turns into the rolling summary when the context
                 // grows. Skipped on cancellation (the chat is being deleted)
@@ -3528,19 +3789,38 @@ struct ChatWindow: View {
                 return
             }
             let userMessage: ChatMessage
-            if !pendingAttachments.isEmpty {
-                // Dictation over staged images: voice here is just an input
-                // method (instead of typing), so the transcript goes out as a
-                // regular text message under the images — no audio kept, no
-                // voice reply. (A failed transcription keeps the attachments
-                // staged for retry.)
-                userMessage = ChatMessage(text: transcript, isUser: true, attachments: pendingAttachments)
+            let staged = pendingAttachments.map { Self.freshForPosting($0) }
+            let stagedPaths = origin.isAgent ? pendingAgentFilePaths : []
+            if !staged.isEmpty || !stagedPaths.isEmpty {
+                // Dictation over staged images/files: voice here is just an
+                // input method (instead of typing), so the transcript goes
+                // out as a regular text message under the images — no audio
+                // kept, no voice reply. (A failed transcription keeps the
+                // attachments staged for retry.) An agent send takes the
+                // same courier road as a typed one — the upload and the
+                // path note used to be skipped here, so a dictated
+                // screenshot reached the model inline and nothing else.
                 clearPendingAttachments()
+                pendingAgentFilePaths = []
                 try? FileManager.default.removeItem(at: audioURL)
+                var text = transcript
+                if origin.isAgent, agentCourierApplies(paths: stagedPaths, attachments: staged) {
+                    let notes = await agentCourierNotes(paths: stagedPaths, attachments: staged, origin: origin)
+                    text = ([transcript] + notes)
+                        .filter { !$0.isEmpty }
+                        .joined(separator: "\n\n")
+                }
+                userMessage = ChatMessage(text: text, isUser: true, attachments: staged)
             } else {
                 userMessage = ChatMessage(text: transcript, isUser: true, messageType: .voice, audioURL: audioURL)
             }
-            if onOrigin {
+            if origin.isAgent {
+                // The one door: hold behind a Stop, steer into a turn in
+                // flight, or open a turn — on screen or detached alike (an
+                // agent turn needs no local history on the wire). Dictated
+                // follow-ups used to bypass all of it and race the run.
+                post(userMessage, in: origin)
+            } else if onOrigin {
                 chatStore.appendNow(userMessage)
                 streamAssistantReply()
             } else {
