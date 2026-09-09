@@ -61,6 +61,17 @@ xcrun swiftc -o "$tmp/dictation-shaping-test" \
     scripts/DictationShapingContractTest.swift
 "$tmp/dictation-shaping-test"
 
+echo "== Swift contract: translator =="
+# The selection translator: the prompt shape, the reply shaping, the live
+# preview while a chunk streams, the chunking of a long selection, and the
+# bubble's placement next to the selection — pure files, no app target.
+xcrun swiftc -o "$tmp/translator-test" \
+    Cuate/App/DictationTextShaping.swift \
+    Cuate/Addons/TranslatorAddon/TranslatorPrompt.swift \
+    Cuate/Addons/TranslatorAddon/TranslatorGeometry.swift \
+    scripts/TranslatorContractTest.swift
+"$tmp/translator-test"
+
 echo "== Swift contract: conference link =="
 # Which link in an event counts as the call (Zoom, Meet, Teams… by host) and
 # which field wins — shared by the calendar tool and the World Time popover.

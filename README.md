@@ -41,6 +41,7 @@ Then add a key for at least one provider in **Settings → API Keys** and press 
 | World Time panel | ⌥⇧T |
 | LayoutFix: convert the selection (or the last word) | ⌃⌥F |
 | LayoutFix: smart fix through the model | ⌃⌥G |
+| Translator: translate the selection in a bubble | ⌃⌥T |
 | Close the panel | Esc |
 
 All of them are configurable: the app hotkeys in Settings → General, the addon ones in their own tabs.
@@ -60,12 +61,13 @@ All of them are configurable: the app hotkeys in Settings → General, the addon
 **Know what it costs.** Token usage is captured from every provider and priced from a bundled catalog: session/today/month totals, charts by provider or model, and a soft monthly budget.
 
 <details>
-<summary><b>Addons</b> — image tools, calendar, world time, layout fixer</summary>
+<summary><b>Addons</b> — image tools, calendar, world time, layout fixer, translator</summary>
 
 - **Image tools** — background removal and upscaling run **on-device for free** (Apple Vision / Core Image), with higher-quality cloud models optional through a single fal.ai key. Object removal uses an inline brush-mask editor or a text description. Slash commands `/upscale`, `/bg`, `/cleanup`. Transparency is handled end to end.
 - **Calendar & Reminders** — the assistant reads your schedule and creates events through macOS EventKit (iCloud, Google, Exchange — whatever is already synced). Per-calendar checkboxes decide what it can see. Off by default.
 - **World Time** — a timezone grid in a floating glass panel: cities as rows, the home city's 24 hours as columns, DST-aware, every IANA zone plus ~240 major cities, searchable in English, Russian and Spanish at once. With the Calendar addon on, it also shows your busy lane and creates 30-minute events by clicking a slot; clicking a busy block opens the meeting's details — its time in every listed city, the people, the notes and a one-click join button for Zoom, Meet, Teams and the like — overlapping meetings share one capsule split into segments, with the hover label listing them and chips in the popover to switch.
 - **LayoutFix** — fixes text typed in the wrong keyboard layout (`ghbdtn` → `привет`, EN/RU/ES), statistically rather than by dictionary lookup, so names and typos convert too.
+- **Translator** — select text in any app, press ⌃⌥T, and the translation streams into a bubble right next to the selection: the language is detected by the model, the target is switchable on the spot, copy or continue in the chat with one click, long selections go paragraph by paragraph into a scrolling bubble. Runs on the small model the dictation cleanup uses (or one you pick). Off by default.
 
 Two addons are large enough to have their own sections: [Hermes Agent](#hermes-agent--your-own-agent-gets-a-desktop) and [Plaud](#plaud--your-recorded-meetings-become-answerable).
 

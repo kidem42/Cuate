@@ -38,19 +38,22 @@ with floating panels, not a document app with windows:
 - **Startup order** (`applicationDidFinishLaunching`): remote-file janitor
   drain → diagnostics → holiday theme manager → `PermissionHealer` →
   Keychain warm + model-list warm (off the main thread) → World Time panel →
-  hotkeys → `LayoutFixAddon.start()` → `ImageAddon.start()` → Plaud session
+  hotkeys → `LayoutFixAddon.start()` → `ImageAddon.start()` →
+  `TranslatorAddon.start()` (its bubble panel is born here) → Plaud session
   upkeep → `NotificationService.activate()` → (after the key warm) notification
   permission and `HermesAddon.startBackgroundPolling()`. Persistence migrations
   and the media-retention pass run from `ChatStore.init`.
 - **Status-bar menu:** open panel, full/area screenshot, World Time (when the
-  addon is on), dictation and translated dictation (when enabled), LayoutFix
+  addon is on), translate the selection (when the Translator addon is on),
+  dictation and translated dictation (when enabled), LayoutFix
   auto-switch toggle and settings (when enabled), a Local models submenu (when
   enabled), Settings, "follow mouse", Appearance.
 - **Hotkeys:** `App/HotkeyManager.swift` + `App/HotkeyCombo.swift` (Carbon
   key codes). App hotkey ids 1–5: toggle panel ⌘⇧Space, full screenshot ⌘⇧S,
   area screenshot ⌘⇧D, dictation ⌥Space, translated dictation ⌥⇧Space. The
   addons own their own combos: World Time ⌥⇧T (`WorldTimeSettings`),
-  LayoutFix ⌃⌥F / ⌃⌥G on ids 901/902 (`LayoutFixSettings`). Recorded through
+  LayoutFix ⌃⌥F / ⌃⌥G on ids 901/902 (`LayoutFixSettings`), Translator ⌃⌥T
+  on id 903 (`TranslatorSettings`). Recorded through
   `Views/ShortcutRecorderView.swift`.
 - **Onboarding:** `Views/OnboardingView.swift` + `OnboardingScenes.swift` —
   five animated scenes, shown on first launch, reopenable from Settings →
@@ -382,6 +385,7 @@ secrets; a `Diagnostics` category; host mount points kept to one line each.
 | WorldTimeAddon | `Addons/WorldTimeAddon` | own panel + hotkey + status-menu item, tab; uses CalendarAddon for the busy lane (blocks are snapshots; blocks that touch share one capsule split into equal segments by start order with a count badge — the segment under the cursor is the target; a click opens `WorldTimeEventPopover`: chips for the capsule's other meetings, the meeting in every row's zone, join/copy link, place, people, notes) and `WorldTimeSlotService` (EventKit, no LLM) for slot events | none | this map |
 | PlaudAddon | `Addons/PlaudAddon` | tab, `PlaudToolService` in `ChatService`, chips in `MessageRow`, preview window, `/plaud` command, session upkeep at launch; the Hermes agent reads Plaud through its own plugin and its own sign-in (`hermes-plugins/plaud`), nothing is handed over | Plaud tools | `docs/plaud-addon.md`, `hermes-plugins/plaud/README.md` |
 | HermesAddon | `Addons/HermesAddon` + `Addons/AgentGateway/Core` | tab, a role in the preset switcher, `AgentChatService` in `streamAssistantReply`, the detached sidebar, notifications, background polling, courier | the agent's own | `docs/hermes-vps-setup.md`, `Addons/HermesAddon/Hermes-API-Fixtures.md` |
+| TranslatorAddon | `Addons/TranslatorAddon` | `start()`, tab, toggle in General, status-menu item, `.translatorOpenInChat` (the original text quoted into the composer); reads the selection through the host's `SelectionGrabber` and its bounds through its own `SelectionLocator` (WebKit text-marker bounds for web content, `kAXBoundsForRange` for native text views, mouse fallback), translates through the dictation-cleanup provider stack in paragraph chunks, shows a non-activating bubble panel pinned to the selection (`TranslatorGeometry`, contract-tested), Esc / click elsewhere / a linger clock close it | none | `Addons/TranslatorAddon/TranslatorAddon-README.md`, `scripts/TranslatorContractTest.swift` |
 
 ## 10. Agent chats versus ordinary chats
 

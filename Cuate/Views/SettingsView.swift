@@ -13,6 +13,7 @@ enum SettingsTab: String, Hashable {
     case worldTime // WorldTimeAddon (Addons/WorldTimeAddon)
     case hermes // HermesAddon (Addons/HermesAddon)
     case plaudAddon // PlaudAddon (Addons/PlaudAddon)
+    case translator // TranslatorAddon (Addons/TranslatorAddon)
 }
 
 struct SettingsView: View {
@@ -23,6 +24,7 @@ struct SettingsView: View {
     @ObservedObject private var worldTime = WorldTimeSettings.shared // addon: gates its tab
     @ObservedObject private var hermes = HermesSettings.shared // addon: gates its tab
     @ObservedObject private var plaudAddon = PlaudSettings.shared // addon: gates its tab
+    @ObservedObject private var translator = TranslatorSettings.shared // addon: gates its tab
 
     enum KeyTestState: Equatable {
         case testing
@@ -103,6 +105,9 @@ struct SettingsView: View {
         .onChange(of: plaudAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .plaudAddon { selectedTab = .general }
         }
+        .onChange(of: translator.enabled) { _, enabled in
+            if !enabled && selectedTab == .translator { selectedTab = .general }
+        }
         .onChange(of: calendarAddon.enabled) { _, enabled in
             if !enabled && selectedTab == .calendarAddon { selectedTab = .general }
         }
@@ -178,7 +183,7 @@ struct SettingsView: View {
 
             // Addon rows appear only while the addon is enabled
             // (master switches live in the General section).
-            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled || hermes.enabled || plaudAddon.enabled {
+            if layoutFix.enabled || imageAddon.enabled || calendarAddon.enabled || worldTime.enabled || hermes.enabled || plaudAddon.enabled || translator.enabled {
                 Section(L("sidebar.addons")) {
                     if layoutFix.enabled {
                         sidebarRow(LFL("lf.tab"), systemImage: "keyboard.fill", color: .indigo)
@@ -195,6 +200,10 @@ struct SettingsView: View {
                     if worldTime.enabled {
                         sidebarRow(WTL("wt.tab"), systemImage: "globe", color: .cyan)
                             .tag(SettingsTab.worldTime)
+                    }
+                    if translator.enabled {
+                        sidebarRow(TRL("tr.tab"), systemImage: "character.bubble", color: .purple)
+                            .tag(SettingsTab.translator)
                     }
                     if hermes.enabled {
                         // The addon's wing glyph, not an SF Symbol — the
@@ -259,6 +268,7 @@ struct SettingsView: View {
             case .imageAddon: ImageAddonSettingsView() // brings its own Form
             case .calendarAddon: CalendarSettingsView() // brings its own Form
             case .worldTime: WorldTimeSettingsView()   // brings its own Form
+            case .translator: TranslatorSettingsView() // brings its own Form
             case .hermes: HermesSettingsView()         // brings its own Form
             case .plaudAddon: PlaudSettingsView()      // brings its own Form
             }
@@ -878,6 +888,7 @@ struct SettingsView: View {
         var combos = [settings.togglePanelHotkey, settings.screenshotHotkey, settings.areaScreenshotHotkey,
                       settings.dictationHotkey, settings.dictationTranslateHotkey]
         if worldTime.enabled { combos.append(worldTime.hotkey) }
+        if translator.enabled { combos.append(translator.hotkey) }
         return combos
     }
 
@@ -1218,6 +1229,9 @@ struct SettingsView: View {
             }
             featureRow("globe", .cyan) {
                 WorldTimeEnableToggle() // WorldTimeAddon master switch (Addons/WorldTimeAddon)
+            }
+            featureRow("character.bubble", .purple) {
+                TranslatorEnableToggle() // TranslatorAddon master switch (Addons/TranslatorAddon)
             }
             featureRow(asset: "Provider-hermes", .teal) {
                 HermesEnableToggle() // HermesAddon master switch (Addons/HermesAddon)

@@ -130,6 +130,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
         // ImageAddon — self-contained; all code lives in Addons/ImageAddon.
         ImageAddon.shared.start()
 
+        // TranslatorAddon — self-contained; all code lives in Addons/TranslatorAddon.
+        // Its bubble panel is born here too, while the policy is `.accessory`.
+        TranslatorAddon.shared.start()
+
         // PlaudAddon: keep the OAuth grant rotating. Their refresh token dies
         // on a ~week clock, and a Mac that goes a week without asking the
         // model about a recording used to come back to a dead account that
@@ -228,6 +232,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             Task { @MainActor in
                 self?.setupHotkeys()
                 self?.setupStatusItem()
+            }
+        }
+        // TranslatorAddon: its menu item appears with the master switch; the
+        // bubble's chat button hands the original text over as a quote.
+        NotificationCenter.default.addObserver(forName: .translatorAddonDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.setupStatusItem() }
+        }
+        NotificationCenter.default.addObserver(forName: .translatorOpenInChat, object: nil, queue: .main) { [weak self] note in
+            let text = note.object as? String
+            Task { @MainActor in
+                guard let self, let text, !text.isEmpty else { return }
+                self.appState.pendingInputText = text
+                self.showChatWindow()
             }
         }
         NotificationCenter.default.addObserver(forName: .openWorldTimeWindow, object: nil, queue: .main) { [weak self] _ in
@@ -377,6 +394,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
             )
             worldTimeItem.target = self
             menu.addItem(worldTimeItem)
+        }
+
+        // TranslatorAddon — translate the selection (shown when enabled).
+        if TranslatorSettings.shared.enabled {
+            menu.addItem(NSMenuItem.separator())
+            let translateItem = NSMenuItem(
+                title: "\(TRL("tr.menu.translate")) (\(TranslatorSettings.shared.hotkey.displayString))",
+                action: #selector(translateSelectionFromStatusItem(_:)),
+                keyEquivalent: ""
+            )
+            translateItem.target = self
+            menu.addItem(translateItem)
         }
 
         // Dictation shortcuts (shown when the feature is enabled)
@@ -676,6 +705,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDele
     /// enough to mean "hide": a pinned panel stays visible BEHIND other apps,
     /// and summoning must then raise it, not order it out. Hide only when the
     /// user is actually in it (key); otherwise (re-)summon to the front.
+    // MARK: - Translator (Addons/TranslatorAddon)
+
+    /// The status item does not activate the app, so the selection in the
+    /// frontmost app is still there for the addon to read.
+    @objc private func translateSelectionFromStatusItem(_ sender: Any?) {
+        TranslatorAddon.shared.translateSelection()
+    }
+
     @objc private func openWorldTime(_ sender: Any?) {
         if let window = worldTimeWindow, window.isVisible, window.isKeyWindow {
             dismissWorldTimePanel()
