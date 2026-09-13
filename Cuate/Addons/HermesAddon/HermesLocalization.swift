@@ -396,19 +396,19 @@ enum HermesAddonStrings {
             .russian: "Устанавливаю сервис гейтвея…"
         ],
         "hermes.auto.step.patch": [
-            .english: "Enabling the accurate context metric…",
-            .spanish: "Activando la métrica de contexto precisa…",
-            .russian: "Включаю точную метрику контекста…"
+            .english: "Applying gateway compatibility fixes…",
+            .spanish: "Aplicando correcciones de compatibilidad del gateway…",
+            .russian: "Применяю исправления совместимости гейтвея…"
         ],
         "hermes.patch.found": [
-            .english: "This gateway does not serve the real context fill (usage.context_tokens / context_window), so the gauge runs on an estimate. Cuate can patch the gateway's api_server.py — one anchored edit, a backup saved next to the file. A Hermes update rolls this back; the offer will then reappear here.",
-            .spanish: "Este gateway no expone el llenado real del contexto (usage.context_tokens / context_window), así que el indicador funciona con una estimación. Cuate puede parchear api_server.py del gateway: una edición anclada, con copia de seguridad junto al archivo. Una actualización de Hermes lo revierte; la oferta reaparecerá aquí.",
-            .russian: "Этот гейтвей не отдаёт реальное заполнение контекста (usage.context_tokens / context_window) — индикатор живёт на оценке. Cuate может пропатчить api_server.py гейтвея: одна правка по якорю, бэкап останется рядом. Обновление Hermes откатит правки — предложение снова появится здесь."
+            .english: "This gateway needs compatibility fixes for the context gauge, background runs or model catalog. Cuate will back up the affected files, apply the matching fixes and restart the gateway. After an update, this offer may appear again.",
+            .spanish: "Este gateway necesita correcciones de compatibilidad para el contexto, las tareas en segundo plano o el catálogo de modelos. Cuate guardará copias de los archivos afectados, aplicará las correcciones y reiniciará el gateway. Tras una actualización, esta opción puede reaparecer.",
+            .russian: "Этому гейтвею нужны исправления совместимости для индикатора контекста, фоновых задач или списка моделей. Cuate сохранит копии затронутых файлов, применит подходящие исправления и перезапустит гейтвей. После обновления это предложение может появиться снова."
         ],
         "hermes.patch.run": [
-            .english: "Enable accurate context gauge",
-            .spanish: "Activar medidor de contexto preciso",
-            .russian: "Включить точный гейдж контекста"
+            .english: "Apply gateway fixes",
+            .spanish: "Aplicar correcciones del gateway",
+            .russian: "Применить исправления гейтвея"
         ],
         "hermes.patch.running": [
             .english: "Patching the gateway and restarting…",
@@ -416,9 +416,9 @@ enum HermesAddonStrings {
             .russian: "Патчу гейтвей и перезапускаю…"
         ],
         "hermes.patch.ok": [
-            .english: "Done: the gateway now reports the real context fill and accepts mid-turn follow-ups.",
-            .spanish: "Listo: el gateway ahora informa el llenado real del contexto y acepta mensajes durante el turno.",
-            .russian: "Готово: гейтвей теперь отдаёт реальное заполнение контекста и принимает досылку сообщений в работающий ход."
+            .english: "Gateway fixes applied. Restart and model catalog check succeeded.",
+            .spanish: "Correcciones aplicadas. El reinicio y la comprobación del catálogo de modelos se completaron correctamente.",
+            .russian: "Исправления применены. Перезапуск и проверка списка моделей прошли успешно."
         ],
         "hermes.patch.err": [
             .english: "Could not patch the gateway:",

@@ -8,7 +8,9 @@
 #     shared/fixtures/steer-frame.json;
 #   - markdown lists (numbering, nesting, continuations);
 #   - the conference link of a calendar event (which hosts, which field wins);
-#   - the Hermes Plaud plugin, including the seam with the Hermes runtime.
+#   - the Hermes Plaud plugin, including the seam with the Hermes runtime;
+#   - the Hermes gateway patch, against the api_server.py layouts of every
+#     Hermes release it recognizes.
 # Run after touching any of those implementations or their fixtures.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -79,6 +81,22 @@ xcrun swiftc -o "$tmp/conference-link-test" \
     Cuate/Addons/CalendarAddon/ConferenceLinkDetector.swift \
     scripts/ConferenceLinkContractTest.swift
 "$tmp/conference-link-test"
+
+echo "== Swift contract: Hermes gateway patch =="
+# The three anchored edits to api_server.py (context fill/window, detached
+# runs) against the layouts of Hermes up to 0.21.0 and 0.21.1: recognized,
+# applied once, idempotent, refused on a foreign layout — pure file.
+xcrun swiftc -o "$tmp/gateway-patch-test" \
+    Cuate/Addons/HermesAddon/HermesGatewayPatch.swift \
+    scripts/HermesGatewayPatchContractTest.swift
+"$tmp/gateway-patch-test"
+python3 scripts/HermesCatalogPatchContractTest.py "$tmp/gateway-patch-test" .
+
+echo "== Swift contract: Ollama compatibility =="
+xcrun swiftc -o "$tmp/ollama-test" \
+    Cuate/Providers/OllamaCompatibility.swift \
+    scripts/OllamaCompatibilityContractTest.swift
+"$tmp/ollama-test"
 
 echo "== Python contract: Hermes Plaud plugin =="
 # The seam with Hermes (how it calls a handler, what it does with check_fn)

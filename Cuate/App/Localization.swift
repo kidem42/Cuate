@@ -151,6 +151,7 @@ enum Localization {
 
         "params.header": [.english: "Model Parameters", .spanish: "Parámetros del modelo", .russian: "Параметры модели"],
         "params.reasoning": [.english: "Reasoning", .spanish: "Razonamiento", .russian: "Рассуждение"],
+        "params.reasoning.help": [.english: "Auto uses the model’s default. Fast requests less reasoning; Deep requests more. The effect depends on the model.", .spanish: "Auto usa el valor predeterminado del modelo. Rápido solicita menos razonamiento; Profundo, más. El efecto depende del modelo.", .russian: "Авто использует настройку модели. Быстро запрашивает меньше рассуждений, Глубоко — больше. Эффект зависит от модели."],
         "params.reasoning.na": [.english: "Not tunable for the selected model", .spanish: "No ajustable para el modelo seleccionado", .russian: "Недоступно для выбранной модели"],
         "params.reasoning.deepseek": [.english: "Tunable on DeepSeek V4 models — pick one in the model list", .spanish: "Ajustable en los modelos DeepSeek V4 — elige uno en la lista de modelos", .russian: "Регулируется у моделей DeepSeek V4 — выберите такую в списке моделей"],
         "params.reasoning.mistral": [.english: "Pick a magistral-* model for reasoning", .spanish: "Elige un modelo magistral-* para razonar", .russian: "Выберите модель magistral-*"],

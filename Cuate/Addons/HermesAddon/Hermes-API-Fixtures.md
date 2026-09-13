@@ -71,7 +71,10 @@ The facts below come from the tag's sources, and each is what the client targets
   (`function_call_output`). Cuate's mirrors strip the frame (`HermesSteer.extract`).
 - **`usage.context_tokens` is still ours** — absent from the release; the upstream PR
   (`feat(api-server): expose context fill and window in turn usage`) adds it together
-  with `context_window`.
+  with `context_window`. Still absent in 0.21.1 (v2026.9.7), which packs the usage dict
+  into `_finish_turn_result` and hugs the disconnect call's bracket — the patch recognizes
+  that layout as well (2026-09-09); `/v1/runs` builds its usage from a `_USAGE_FIELDS`
+  table in `api_server_runs.py` since 0.21.0 and is not patched.
 
 ## Stop (2026-09-07) — sources of the 2026-08-16 checkout, `~/.hermes/hermes-agent`
 
@@ -253,9 +256,11 @@ Conclusions for the transport:
   (captured live 2026-07-30: a turn without tools → `input_tokens:17915`; the same context with
   2 tool calls → `35990`). It is NOT suitable for a context gauge — a 26-step turn "used" 2188K
   against a 1050K window. There are no hidden fields: the full set is `input/output/total_tokens` + `runtime{...}`.
-- `usage.context_tokens` is OUR carried gateway patch (api_server.py, both usage dicts in
-  `_run_agent`): `agent.context_compressor.last_prompt_tokens` — the prompt of the LAST call,
-  the same number the Hermes status bar shows. That is the actual context fill; a stock gateway
+- `usage.context_tokens` is OUR carried gateway patch (api_server.py, the usage dict of
+  `_run_agent` — two sites up to 0.20.6, one from 0.21.0, the packed `_finish_turn_result`
+  dict in 0.21.1): the usage anchor's prompt+completion, falling back to
+  `agent.context_compressor.last_prompt_tokens` — the prompt of the LAST call, the same
+  number the Hermes status bar shows. That is the actual context fill; a stock gateway
   (VPS) doesn't send the field → the client falls back to the summed value capped by the window.
 - `tool.started.args` — the command body is there, which is enough for the approval card / step log.
 - `_thinking` in `tool.progress` is the reasoning stream, not a tool.
@@ -291,6 +296,17 @@ session stream and lies dormant until the gateway sends them; the resolve reques
 The label already carries the emoji — the "Skills/Toolsets" section is drawn from this as is.
 
 ## `/api/model/options` → providers and models for the "Agent" section
+
+**Catalog import failure (2026-09-13).** A reported VPS installation returned
+HTTP 500 with `ImportError: cannot import name '_format_price_per_mtok' from
+hermes_cli.models`. Source verification against Hermes 0.21.1 (`v2026.9.7`):
+the helper moved to `hermes_cli.models_pricing`; stock `inventory.py` already
+uses that module. A locally retained older inventory can keep the wrong
+import. The gateway compatibility repair now handles that observed import
+shape when the destination function exists and its old definition is absent.
+Python syntax validation alone cannot catch this runtime import failure.
+After a repair, restart from outside the agent's own gateway session and
+verify this authenticated endpoint, not just `/health`.
 ```json
 {"providers":[{"slug":"nous","name":"Nous Portal","is_current":true,"is_user_defined":false,
   "models":["anthropic/claude-fable-5","anthropic/claude-opus-5",...]},...]}

@@ -60,13 +60,17 @@ struct OllamaAdminService {
 
     // MARK: - Detection
 
-    /// True when the endpoint is Ollama (native `/api/version` answers 2xx).
+    /// True when the native `/api/version` returns a version, not an HTML
+    /// fallback page from another OpenAI-compatible server or reverse proxy.
     func detect() async -> Bool {
         var request = URLRequest(url: apiURL("version"))
         request.timeoutInterval = 4
-        guard let (_, response) = try? await HTTPClient.session.data(for: request),
+        guard let (data, response) = try? await HTTPClient.session.data(for: request),
               let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else {
+              (200..<300).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = json["version"] as? String,
+              !version.isEmpty else {
             return false
         }
         return true
@@ -108,8 +112,10 @@ struct OllamaAdminService {
     func show(model: String) async throws -> ModelInfo {
         let request = try jsonRequest("show", method: "POST", body: ["model": model])
         let data = try await HTTPClient.json(request)
-        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let caps = (json?["capabilities"] as? [String]) ?? []
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ProviderError.decoding("unexpected /api/show payload")
+        }
+        let caps = (json["capabilities"] as? [String]) ?? []
         return ModelInfo(
             id: model,
             supportsVision: caps.contains("vision"),

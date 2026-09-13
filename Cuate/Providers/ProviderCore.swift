@@ -406,7 +406,7 @@ struct LLMMessage {
     var documents: [LLMDocument] = []
     /// Tool calls the assistant requested (assistant role only).
     var toolCalls: [ToolCall] = []
-    /// The reasoning the model produced before those tool calls (DeepSeek);
+    /// The reasoning the model produced before those tool calls (DeepSeek/Ollama);
     /// echoed back verbatim on the follow-up request of the same turn.
     var reasoningContent: String?
     /// For `.tool` role: which call this result answers.
@@ -497,8 +497,8 @@ struct WebCitation {
 enum LLMStreamEvent {
     case text(String)
     /// Reasoning text streamed alongside the answer (DeepSeek's
-    /// `reasoning_content`). Not shown; kept so a tool-calling turn can hand
-    /// it back — DeepSeek's thinking mode rejects the follow-up request
+    /// `reasoning_content`, Ollama's `reasoning`). Not shown; kept so a
+    /// tool-calling turn can hand it back — DeepSeek rejects the follow-up
     /// without it.
     case reasoning(String)
     /// Emitted once at the end of the turn when the model requested tools.

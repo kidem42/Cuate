@@ -1,7 +1,7 @@
 import Foundation
 
 /// Chat provider for OpenAI-compatible APIs: OpenAI, Mistral, DeepSeek,
-/// OpenRouter, Kimi (Moonshot).
+/// OpenRouter, Kimi (Moonshot), and local endpoints including Ollama.
 /// Uses `POST {base}/chat/completions` with SSE streaming, function calling,
 /// and `GET {base}/models`.
 struct OpenAICompatibleProvider: LLMProvider {
@@ -93,12 +93,11 @@ struct OpenAICompatibleProvider: LLMProvider {
                     }
                 ]
                 if !message.text.isEmpty { entry["content"] = message.text }
-                // DeepSeek's thinking mode (on by default) requires the
-                // reasoning of a tool-calling turn to come back with it —
-                // a 400 otherwise. Sent only there: the other compatible
-                // providers may reject an unknown field.
-                if providerID == .deepseek, let reasoning = message.reasoningContent, !reasoning.isEmpty {
-                    entry["reasoning_content"] = reasoning
+                // Preserve tool-turn thinking using each provider's wire key.
+                // Other compatible providers may reject these extra fields.
+                if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                    if providerID == .deepseek { entry["reasoning_content"] = reasoning }
+                    if providerID == .ollama { entry["reasoning"] = reasoning }
                 }
                 apiMessages.append(entry)
             default:
@@ -188,13 +187,20 @@ struct OpenAICompatibleProvider: LLMProvider {
             if options.zdrOnly { routing["zdr"] = true }
             if !routing.isEmpty { body["provider"] = routing }
         }
-        // OpenRouter accepts a reasoning-effort knob directly on chat/completions
-        // (Mistral/DeepSeek do not). Only sent for models the catalog says
+        // OpenRouter accepts a reasoning-effort knob directly on chat/completions.
+        // Only sent for models the catalog says
         // support it, so it never reaches a model that would reject it.
         if providerID == .openrouter,
            options.reasoning != .auto,
            options.modelSupportsReasoning {
             body["reasoning"] = ["effort": options.reasoning == .fast ? "low" : "high"]
+        }
+        if providerID == .ollama,
+           let effort = OllamaCompatibility.reasoningEffort(
+               mode: options.reasoning.rawValue,
+               supported: options.modelSupportsReasoning,
+               preferNoReasoning: options.preferNoReasoning) {
+            body["reasoning_effort"] = effort
         }
         // DeepSeek V4: thinking is on by default at effort "high". Fast →
         // "low", Deep → "max" (top-level `reasoning_effort`); Auto leaves the
@@ -253,7 +259,10 @@ struct OpenAICompatibleProvider: LLMProvider {
                             if let content = delta["content"] as? String, !content.isEmpty {
                                 continuation.yield(.text(content))
                             }
-                            if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+                            let reasoning = providerID == .ollama
+                                ? OllamaCompatibility.reasoningDelta(delta)
+                                : delta["reasoning_content"] as? String
+                            if let reasoning, !reasoning.isEmpty {
                                 continuation.yield(.reasoning(reasoning))
                             }
                             // OpenRouter's server-side web search cites its
@@ -536,7 +545,9 @@ struct OpenAICompatibleProvider: LLMProvider {
                let chat = caps["completion_chat"] as? Bool, chat == false {
                 continue
             }
-            if isLikelyChatModel(id) {
+            // Local model names are user-defined. AppSettings filters actual
+            // Ollama models using native capabilities after detection.
+            if providerID == .ollama || isLikelyChatModel(id) {
                 ids.append(id)
             }
         }

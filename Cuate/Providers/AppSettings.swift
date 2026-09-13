@@ -124,7 +124,16 @@ final class AppSettings: ObservableObject {
     /// Base URL of the local OpenAI-compatible endpoint (Ollama's default; the
     /// user can point it at LM Studio, vLLM, llama.cpp, LocalAI, …).
     @Published var localEndpointURL: String {
-        didSet { defaults.set(localEndpointURL, forKey: "localEndpointURL") }
+        didSet {
+            defaults.set(localEndpointURL, forKey: "localEndpointURL")
+            if localEndpointURL != oldValue {
+                localEndpointVerified = false
+                ollamaDetected = false
+                ollamaCatalog = [:]
+                ollamaLoadedModels = []
+                ollamaLoadedVRAM = [:]
+            }
+        }
     }
 
     /// Cached "the /v1 endpoint answered" flag — gates the local provider the
@@ -145,7 +154,7 @@ final class AppSettings: ObservableObject {
     }
 
     /// Per-model capabilities for local Ollama models, from `/api/show`
-    /// (vision/tools). Persisted as JSON like `openRouterCatalog`.
+    /// (vision/tools/reasoning). Persisted as JSON like `openRouterCatalog`.
     @Published private(set) var ollamaCatalog: [String: ModelInfo] {
         didSet {
             if let data = try? JSONEncoder().encode(ollamaCatalog) {
@@ -1000,7 +1009,28 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     /// Fetches the model list for a provider from its API and caches it.
     func refreshModels(for provider: ProviderID) async throws {
         let apiKey = try resolvedAPIKey(for: provider)
-        let models = try await ProviderRegistry.provider(for: provider).fetchModels(apiKey: apiKey)
+        let endpoint = localEndpointURL
+        var models = try await ProviderRegistry.provider(for: provider).fetchModels(apiKey: apiKey)
+        if provider == .ollama {
+            let admin = OllamaAdminService(endpointURL: endpoint)
+            let detected = await admin.detect()
+            var catalog: [String: ModelInfo] = [:]
+            if detected {
+                for model in models {
+                    try Task.checkCancellation()
+                    if let info = try? await admin.show(model: model) { catalog[model] = info }
+                }
+                models = models.filter {
+                    OllamaCompatibility.isChatModel(capabilities: catalog[$0]?.supportedParameters)
+                }
+            }
+            try Task.checkCancellation()
+            // A settings edit during discovery must not install another
+            // endpoint's capabilities under identical local model names.
+            guard localEndpointURL == endpoint else { throw CancellationError() }
+            ollamaDetected = detected
+            ollamaCatalog = catalog
+        }
         cachedModels[provider.rawValue] = models
         // Auto-select a sensible default if none is selected or the selection
         // disappeared, so chat works right after a key is added.
@@ -1099,33 +1129,22 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     /// Best-effort; returns whether `/v1` answered.
     @discardableResult
     func verifyLocalEndpoint() async -> Bool {
+        let endpoint = localEndpointURL
         do {
             try await refreshModels(for: .ollama)
+            guard localEndpointURL == endpoint else { return false }
             localEndpointVerified = true
         } catch {
+            guard localEndpointURL == endpoint else { return false }
             localEndpointVerified = false
             ollamaDetected = false
             ollamaLoadedModels = []
             return false
         }
-        let admin = OllamaAdminService(endpointURL: localEndpointURL)
-        ollamaDetected = await admin.detect()
         if ollamaDetected {
-            await refreshOllamaCatalog(using: admin)
-            await refreshOllamaLoaded(using: admin)
+            await refreshOllamaLoaded(using: OllamaAdminService(endpointURL: endpoint))
         }
-        return true
-    }
-
-    /// Populates `ollamaCatalog` (vision/tools per model) from `/api/show`.
-    func refreshOllamaCatalog(using admin: OllamaAdminService) async {
-        var catalog = ollamaCatalog
-        for model in models(for: .ollama) {
-            if let info = try? await admin.show(model: model) {
-                catalog[model] = info
-            }
-        }
-        ollamaCatalog = catalog
+        return localEndpointURL == endpoint
     }
 
     /// Refreshes which Ollama models are currently loaded in memory (`/api/ps`).
@@ -1144,7 +1163,8 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     }
 
     func refreshOllamaLoaded(using admin: OllamaAdminService) async {
-        guard let loaded = try? await admin.ps() else { return }
+        guard let loaded = try? await admin.ps(),
+              admin.host == OllamaAdminService(endpointURL: localEndpointURL).host else { return }
         // Assign only on change: a @Published Set/Dictionary fires objectWillChange
         // on every assignment even when equal, and an unconditional assign here
         // re-renders the settings tree → re-fires the view's onAppear refresh →
@@ -1275,6 +1295,9 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
     func modelSupportsReasoningControl(provider: ProviderID, model: String) -> Bool {
         if provider == .openrouter {
             return openRouterModelInfo(for: model)?.supportsReasoning ?? false
+        }
+        if provider == .ollama {
+            return ollamaDetected && (ollamaCatalog[model]?.supportsReasoning ?? false)
         }
         return ModelCapabilities.supportsReasoningControl(provider: provider, model: model)
     }

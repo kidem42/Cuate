@@ -255,6 +255,21 @@ picker). Per-provider clamps live in `ChatService.streamReply`
 (`providerTokenCap`). Errors go through `ProviderError.fromHTTP` (sanitized,
 truncated); SSE through `HTTPClient.sseStream`.
 
+**Local Ollama compatibility.** `/v1/models` supplies IDs without name-based
+exclusions. Every local model refresh detects native Ollama with a JSON version
+response and rebuilds `/api/show` capabilities; known non-`completion` models
+are excluded from chat, while missing metadata leaves a model selectable.
+Generic OpenAI-compatible local servers keep their model list. Changing the
+endpoint clears native capabilities; in-flight discovery cannot apply another
+endpoint's catalog. `OllamaCompatibility` handles `delta.reasoning` (with a
+`reasoning_content` fallback), keeping tool-turn thinking for the assistant's
+`reasoning` field on the follow-up. Thinking stays internal, not in the transcript.
+The existing reasoning selector is catalog-gated: Auto omits the override,
+Fast sends `reasoning_effort: low`, Deep sends `high`; the model determines how
+these levels affect generation. The standalone `OllamaCompatibilityContractTest`
+covers stream fields, effort policy and custom model aliases without running
+the application.
+
 Other provider-side services:
 
 | Service | File | Role |
@@ -480,6 +495,18 @@ same `ChatEvent` stream; the window's loop is unchanged. What differs:
 - the transport is written against `Hermes-API-Fixtures.md`, never against
   prose; capability flags from `/v1/capabilities` gate UI sections.
 
+**Gateway compatibility repair.** `HermesGatewayPatch` handles the gateway
+text edits and the known stale catalog import after Hermes split out
+`hermes_cli.models_pricing`: move `_format_price_per_mtok` out of an old
+`inventory.py` import only when the new module defines it and the old module
+no longer defines it. Stock old/new installs are unchanged. The local patch
+offer checks the inventory too; `HermesLocalGateway` validates candidate Python
+files before writing backups and replacements, then checks restart, health and
+the authenticated model catalog. The VPS command, embedded guide and Android
+asset carry the same repair. `HermesCatalogPatchContractTest.py` exercises all
+four paste-blocks and compares their output with Swift, reproducing the runtime
+ImportError without real credentials or provider calls.
+
 ## 11. Cross-cutting
 
 - **Localization:** `L()` (`App/Localization.swift`, en/es/ru, English
@@ -518,8 +545,9 @@ same `ChatEvent` stream; the window's loop is unchanged. What differs:
 - `scripts/test-attach-note.sh` runs every contract test: the attach note
   (Swift + Kotlin against `shared/fixtures/attach-note.json`), the Plaud
   marker (`shared/fixtures/plaud-note.json`), markdown lists, the document
-  pre-flight and `read_document` queries, and the Hermes Plaud plugin
-  (Python, stdlib only). The Swift suites compile standalone with `swiftc`
+  pre-flight and `read_document` queries, the Hermes Plaud plugin
+  (Python, stdlib only) and the Hermes gateway patch (`HermesGatewayPatch`
+  against the `api_server.py` layouts of Hermes 0.20–0.21.0 and 0.21.1). The Swift suites compile standalone with `swiftc`
   from pure files — a file under test must stay free of AppKit/SwiftUI/app
   types.
 - `scripts/make-dmg.sh` — the only way to build a distributable (universal

@@ -56,6 +56,10 @@ hermes gateway install
 #    flap killed the agent mid-task ("Operation interrupted" in the chat).
 #    Patched, the run finishes on its own and clients recover the reply
 #    from the transcript. An explicit Stop still works (/v1/runs/{id}/stop).
+# Anchored by code, not line numbers: recognizes Hermes up to 0.21.0 (one
+# usage entry per line, the disconnect call closing on its own line) and
+# 0.21.1 (packed usage dict, hugged bracket); refuses any other layout
+# without touching the file.
 HERMES_DIR=$(hermes --version | sed -n 's/^Install directory: //p') python3 - <<'PYEOF'
 import os, re, pathlib
 p = pathlib.Path(os.environ["HERMES_DIR"]) / "gateway/platforms/api_server.py"
@@ -63,6 +67,7 @@ src = orig = p.read_text()
 fill_v3 = '"context_tokens": max(0, getattr(getattr(agent, "context_compressor", None), "last_prompt_tokens", 0) or 0),'
 fill = '"context_tokens": (lambda _a, _c: max(0, int(_a["prompt_tokens"]) + int(_a.get("completion_tokens") or 0)) if isinstance(_a, dict) and _a.get("prompt_tokens") else max(0, getattr(_c, "last_prompt_tokens", 0) or 0))(getattr(agent, "_usage_anchor", None), getattr(agent, "context_compressor", None)),'
 window = '"context_window": max(0, getattr(getattr(agent, "context_compressor", None), "context_length", 0) or 0),'
+total = '"total_tokens": getattr(agent, "session_total_tokens", 0) or 0'
 if fill in src:
     print("context_tokens: v4 already in place")
 elif fill_v3 in src:
@@ -71,8 +76,10 @@ elif fill_v3 in src:
 elif '"context_tokens"' in src:
     print("context_tokens: native upstream - leaving as is")
 else:
-    pat = re.compile(r'^(\s*)("total_tokens": getattr\(agent, "session_total_tokens", 0\) or 0,)$', re.M)
-    src, n = pat.subn(lambda m: m.group(0) + "\n" + m.group(1) + fill, src)
+    # Up to 0.21.0 the usage dict holds one entry per line (trailing comma);
+    # 0.21.1 packs "total_tokens" and the closing brace on one line.
+    pat = re.compile(r'^(\s*)' + re.escape(total) + r'(,|\})$', re.M)
+    src, n = pat.subn(lambda m: m.group(1) + total + ",\n" + m.group(1) + fill + ("" if m.group(2) == "," else "\n" + m.group(1) + "}"), src)
     assert n >= 1, "context anchor not found - different Hermes version, patch by hand"
     print(f"context_tokens: ok, {n} site(s)")
 if '"context_window"' in src:
@@ -85,23 +92,52 @@ else:
 if "continues detached" in src:
     print("detached runs: already patched")
 else:
-    old = (
+    call = (
         '            await self._drain_session_stream_task_on_disconnect(\n'
-        '                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False\n'
-        '            )\n'
-        '            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)'
+        '                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False'
     )
+    log = '            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)'
     new = '            logger.info("Session SSE client disconnected; run %s continues detached", run_id)'
-    assert old in src, "disconnect anchor not found - different Hermes version, patch by hand"
+    # Up to 0.21.0 the call closes on its own line; 0.21.1 hugs the bracket.
+    old = next((o for o in (call + '\n            )\n' + log, call + ')\n' + log) if o in src), None)
+    assert old, "disconnect anchor not found - different Hermes version, patch by hand"
     src = src.replace(old, new)
     print("detached runs: ok")
+# Repair a retained old inventory after the pricing module was split out.
+# Stock old/new installs are no-ops; preserve every unrelated local edit.
+catalog = p.parents[2] / "hermes_cli/inventory.py"
+models = p.parents[2] / "hermes_cli/models.py"
+pricing = p.parents[2] / "hermes_cli/models_pricing.py"
+catalog_orig = catalog_new = None
+if all(f.is_file() for f in (catalog, models, pricing)):
+    definition = r"(?m)^def _format_price_per_mtok\("
+    if re.search(definition, pricing.read_text()) and not re.search(definition, models.read_text()):
+        catalog_orig = catalog.read_text()
+        catalog_new = re.sub(
+            r"(?m)^([ \t]*)from hermes_cli\.models import \(\n[ \t]*_format_price_per_mtok,\n",
+            r"\1from hermes_cli.models_pricing import _format_price_per_mtok\n\1from hermes_cli.models import (\n",
+            catalog_orig)
+        catalog_new = re.sub(
+            r"(?m)^([ \t]*)from hermes_cli\.models import _format_price_per_mtok$",
+            r"\1from hermes_cli.models_pricing import _format_price_per_mtok", catalog_new)
+# Validate BOTH candidates before either file changes. No module is imported
+# here: patching must not load credentials or contact provider APIs.
+import ast
+ast.parse(src)
+if catalog_new is not None:
+    ast.parse(catalog_new)
 if src != orig:
     pathlib.Path(str(p) + ".bak").write_text(orig)
-    import ast; ast.parse(src)
     p.write_text(src)
     print("written; backup at api_server.py.bak")
 else:
     print("nothing to do")
+if catalog_new is not None and catalog_new != catalog_orig:
+    pathlib.Path(str(catalog) + ".bak").write_text(catalog_orig)
+    catalog.write_text(catalog_new)
+    print("model catalog: repaired pricing import; backup at inventory.py.bak")
+else:
+    print("model catalog: no repair needed")
 PYEOF
 hermes gateway restart
 
@@ -158,6 +194,10 @@ You run on your own VPS with full rights — maintain yourself.
   logs: journalctl --user -u hermes-gateway -n 50
 - Install packages freely (apt, pip) — the environment is persistent.
 - Do NOT update yourself unless the user explicitly asks.
+- Never touch ~/.hermes/state.db or its -wal/-shm files: no moving, renaming,
+  replacing, repairing, `.recover`, `hermes sessions repair`, `hermes doctor --fix`.
+  The operator recovers the database from an external shell with the gateway
+  stopped. If the state database reports corruption, say so and stop.
 EOF
 
 # Verify and print the app values
@@ -178,6 +218,14 @@ echo "Dashboard token:  $DASHTOKEN"
 echo "════════════════════════════════════════════"
 ```
 
+
+The patch also repairs the known old `inventory.py` pricing import when Hermes
+has moved `_format_price_per_mtok` to `hermes_cli.models_pricing`. It backs up
+that file separately; stock old/new installations need no catalog edit.
+Restart from an external terminal, not the agent's own gateway session. Then
+refresh the model list in Cuate: an active service and valid Python syntax do
+not prove that `/api/model/options` can execute successfully.
+
 ## Step 4 — the app
 
 Cuate → Settings → **Hermes Agent**: paste the four values printed above →
@@ -197,6 +245,8 @@ sessions in the sidebar, files and images work.
 | File uploads over ~10 MB fail (413) | proxy body limit below 64 MB on `dash.` (or on `agent.`, but only oversized inline GIFs ever hit that one) — rerun the body-limit self-check from Step 3; in Caddy: `request_body { max_size 64MB }`, in nginx: `client_max_body_size 64m` (rewrite the config file whole, never append a duplicate directive, and `nginx -t` before reloading) |
 | The agent's terminal does not work at all | egress firewall was enabled — set `proxy.enabled: false` in `~/.hermes/config.yaml` + restart the gateway |
 | The agent "cannot see" files/images | Docker terminal backend is still active: set `backend: local` in config.yaml **and** delete the `TERMINAL_ENV=docker` line from `.env`, restart |
+| Turns come back empty, `state database reported structural corruption` | stop the gateway and the dashboard, then the offline recovery of Hermes itself: `hermes sessions recover --source ~/.hermes/state.db --inspect-only`, then `--output ~/recovered.db` (add `--allow-partial` when it stops at a damaged range), verify the counts, move the live `state.db`, `-wal`, `-shm` aside together, copy the recovered file in, `hermes sessions repair --check-only`, start. Never `hermes doctor --fix` on a live gateway, never `sqlite3 .recover` on the live file |
+| `state database file was replaced underneath this process` right after a recovery | the agent executed a stale plan from its own session and swapped the file under the running gateway (SOUL.md rule above forbids it): stop the gateway, put the intended `state.db`, `-wal`, `-shm` back under their names, move the agent's file aside, start, and continue in a NEW session |
 | Something broke after `hermes update` | roll back: `cd /usr/local/lib/hermes-agent && git fetch --unshallow; git checkout <previous commit> && systemctl --user restart hermes-gateway` |
 
 ## If ports 80/443 are already taken on the server

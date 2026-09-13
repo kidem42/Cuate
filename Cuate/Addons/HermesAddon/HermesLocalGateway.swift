@@ -60,73 +60,20 @@ enum HermesLocalGateway {
         }
     }
 
-    // MARK: - Context-metric patch (usage.context_tokens)
+    // MARK: - Gateway patch (usage.context_tokens / context_window, detached runs)
     //
-    // Hermes reports run-CUMULATIVE token sums in `run.completed.usage` —
-    // useless as a context gauge (a 26-step turn "fills" the window
-    // severalfold; seen live: 2188K against a 1050K window). The true fill
-    // is what Hermes' own /context shows: preferably the usage anchor
-    // (`agent._usage_anchor` — the last response's exact provider-reported
-    // prompt+completion, Hermes' usage-anchored context accounting), with
-    // `agent.context_compressor.last_prompt_tokens` as the fallback on
-    // installs that predate the anchor. The patch appends that figure as
-    // `usage.context_tokens` after every `"total_tokens"` line of the two
-    // usage dicts in gateway/platforms/api_server.py (anchored by code,
-    // not line numbers — survives version drift; refuses untouched when
-    // the anchor is missing), upgrading an older v3 fill line in place and
-    // leaving a Hermes that ships the fields natively untouched. `hermes
-    // update` overwrites the file, so the state is re-checked each time
-    // the settings pane looks and the offer simply reappears. The client
-    // copes either way: without the field the gauge falls back to the
-    // capped sums.
-    //
-    // Third edit — detached session runs: stock Hermes INTERRUPTS the live
-    // run when the session SSE client disconnects (a backgrounded phone, a
-    // network flap), stamping "Operation interrupted" into the transcript.
-    // Patched, the run finishes on its own and clients recover the reply
-    // from the transcript. The explicit `POST /v1/runs/{id}/stop` is then
-    // the ONLY way a run ends early — the client sends it on Stop and on
-    // every abandoned turn, and confirms through `GET /v1/runs/{id}`
-    // (`HermesAddon.requestStop`); before 5.1 it never did, and Stop lived
-    // off the socket side effect this edit removes.
-    // Mirrors the remote paste-block in HermesSettingsView — keep in sync.
+    // The edits themselves live in `HermesGatewayPatch` — pure text over
+    // api_server.py, contract-tested against every Hermes layout we
+    // recognize (0.20.x–0.21.0 and 0.21.1); this side owns the file:
+    // locating it, the backup, the `ast.parse` gate, the restart. `hermes
+    // update` overwrites the file, so the state is re-checked each time the
+    // settings pane looks and the offer simply reappears. The client copes
+    // either way: without the fields the gauge falls back to the capped
+    // sums, and Stop rides `POST /v1/runs/{id}/stop` (`HermesAddon.
+    // requestStop`) rather than the socket. Mirrors the remote paste-block
+    // in HermesSettingsView — keep in sync.
 
-    enum ContextPatchState: Equatable {
-        case patched
-        case patchable
-        /// No install, unreadable file, or a layout the anchor doesn't
-        /// match — nothing we can safely offer.
-        case unavailable
-    }
-
-    private static let contextPatchAnchor =
-        "\"total_tokens\": getattr(agent, \"session_total_tokens\", 0) or 0,"
-    static let contextPatchLine =
-        "\"context_tokens\": (lambda _a, _c: max(0, int(_a[\"prompt_tokens\"]) + int(_a.get(\"completion_tokens\") or 0)) if isinstance(_a, dict) and _a.get(\"prompt_tokens\") else max(0, getattr(_c, \"last_prompt_tokens\", 0) or 0))(getattr(agent, \"_usage_anchor\", None), getattr(agent, \"context_compressor\", None)),"
-    /// The pre-anchor (v3) fill line — recognized so it upgrades in place;
-    /// the window line inserted after it stays put through the swap.
-    static let contextPatchLineV3 =
-        "\"context_tokens\": max(0, getattr(getattr(agent, \"context_compressor\", None), \"last_prompt_tokens\", 0) or 0),"
-    /// Second usage line: the window the agent ACTUALLY operates with
-    /// (OAuth caps included) — paired with the fill above, the gauge's both
-    /// numbers come from the same `run.completed` frame. Anchored on the
-    /// context_tokens line so it also UPGRADES a gateway carrying only the
-    /// older one-line patch.
-    static let contextWindowLine =
-        "\"context_window\": max(0, getattr(getattr(agent, \"context_compressor\", None), \"context_length\", 0) or 0),"
-
-    /// Detached-runs edit: the stock disconnect handler of the session SSE
-    /// stream, replaced wholesale by a log line. The marker doubles as the
-    /// idempotence check (it only ever exists in a patched file).
-    static let detachedRunsMarker = "continues detached"
-    private static let detachedRunsOldBlock = [
-        "            await self._drain_session_stream_task_on_disconnect(",
-        "                run_id, task, interrupt_message=\"SSE client disconnected\", shield_wait=False",
-        "            )",
-        "            logger.info(\"Session SSE client disconnected; interrupted live run %s\", run_id)",
-    ].joined(separator: "\n")
-    private static let detachedRunsNewBlock =
-        "            logger.info(\"Session SSE client disconnected; run %s continues detached\", run_id)"
+    typealias ContextPatchState = HermesGatewayPatch.State
 
     /// The gateway source file, resolved like `cliPath`: the documented
     /// install root first, then the CLI's own `--version` answer ("Install
@@ -150,100 +97,68 @@ enum HermesLocalGateway {
     static func contextPatchState() async -> ContextPatchState {
         guard let file = await apiServerFile(),
               let src = try? String(contentsOf: file, encoding: .utf8) else { return .unavailable }
-        let contextDone = src.contains("\"context_tokens\"")
-        let windowDone = src.contains("\"context_window\"")
-        // Any edit still applicable → offer the patch. A gateway too old to
-        // carry a given anchor simply doesn't get that edit.
-        if src.contains(contextPatchLineV3) { return .patchable }  // v3 → v4 upgrade
-        if !contextDone, src.contains(contextPatchAnchor) { return .patchable }
-        if contextDone, !windowDone { return .patchable }  // window rides on the context line
-        if !src.contains(detachedRunsMarker), src.contains(detachedRunsOldBlock) { return .patchable }
-        // Nothing more we can do here. "Ours is in place" reads as patched;
-        // a fully foreign layout as unavailable.
-        return contextDone ? .patched : .unavailable
+        if catalogRepair(beside: file) != nil { return .patchable }
+        return HermesGatewayPatch.state(of: src)
     }
 
-    /// Edits api_server.py in place (backup lands next to it as .bak):
-    /// `usage.context_tokens` + `context_window`, skipped when already
-    /// present. One write, after both edits — a half-patched file can never
-    /// hit disk. Returns whether anything changed; the caller owns the
-    /// restart.
+    private static func catalogRepair(beside server: URL) -> (file: URL, original: String, repaired: String)? {
+        let root = server.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let file = root.appendingPathComponent("hermes_cli/inventory.py")
+        guard let inventory = try? String(contentsOf: file, encoding: .utf8),
+              let models = try? String(contentsOf: root.appendingPathComponent("hermes_cli/models.py"), encoding: .utf8),
+              let pricing = try? String(contentsOf: root.appendingPathComponent("hermes_cli/models_pricing.py"), encoding: .utf8),
+              let repaired = HermesGatewayPatch.repairCatalog(inventory: inventory, models: models, pricing: pricing)
+        else { return nil }
+        return (file, inventory, repaired)
+    }
+
+    /// Edits the gateway and, when needed, its catalog import. Validate all
+    /// candidate files before writing; each original is backed up as .bak.
+    /// Returns whether anything changed; the caller owns the restart.
     @discardableResult
     static func applyContextPatchFile() async throws -> Bool {
         guard let file = await apiServerFile(),
               let src = try? String(contentsOf: file, encoding: .utf8) else {
             throw SetupError.patchFailed("api_server.py not found")
         }
-        var work = src
-        // v3 → v4 upgrade: swap the fill line's content in place — the
-        // window line, inserted after it, stays put.
-        var upgradedSites = 0
-        while let range = work.range(of: contextPatchLineV3) {
-            work = work.replacingCharacters(in: range, with: contextPatchLine)
-            upgradedSites += 1
-        }
-        var contextSites = 0
-        if !work.contains("\"context_tokens\"") {
-            var out: [String] = []
-            for line in work.components(separatedBy: "\n") {
-                out.append(line)
-                if line.trimmingCharacters(in: .whitespaces) == contextPatchAnchor {
-                    let indent = line.prefix { $0 == " " || $0 == "\t" }
-                    out.append(indent + contextPatchLine)
-                    contextSites += 1
-                }
-            }
-            if contextSites > 0 { work = out.joined(separator: "\n") }
-        }
-        // context_window rides on the context_tokens line — this same pass
-        // upgrades a gateway that carried only the older one-line patch.
-        var windowSites = 0
-        if work.contains("\"context_tokens\""), !work.contains("\"context_window\"") {
-            var out: [String] = []
-            for line in work.components(separatedBy: "\n") {
-                out.append(line)
-                if line.trimmingCharacters(in: .whitespaces) == contextPatchLine {
-                    let indent = line.prefix { $0 == " " || $0 == "\t" }
-                    out.append(indent + contextWindowLine)
-                    windowSites += 1
-                }
-            }
-            if windowSites > 0 { work = out.joined(separator: "\n") }
-        }
-        // Detached runs: replace the disconnect-interrupt block wholesale.
-        var detachedSites = 0
-        if !work.contains(detachedRunsMarker), work.contains(detachedRunsOldBlock) {
-            work = work.replacingOccurrences(of: detachedRunsOldBlock, with: detachedRunsNewBlock)
-            detachedSites = 1
-        }
-        guard work != src else {
+        let outcome = HermesGatewayPatch.apply(to: src)
+        let catalog = catalogRepair(beside: file)
+        guard outcome != nil || catalog != nil else {
             // Nothing applied. Distinguish "already done" (fine, no-op)
             // from "nothing matched at all" (foreign layout — surface it).
             if src.contains("\"context_tokens\"") { return false }
             throw SetupError.patchFailed("anchor not found")
         }
-        try await syntaxCheck(work)
+        if let outcome { try await syntaxCheck(outcome.source) }
+        if let catalog { try await syntaxCheck(catalog.repaired) }
         do {
-            try src.write(to: URL(fileURLWithPath: file.path + ".bak"),
-                          atomically: true, encoding: .utf8)
-            try work.write(to: file, atomically: true, encoding: .utf8)
+            if let outcome {
+                try src.write(to: URL(fileURLWithPath: file.path + ".bak"),
+                              atomically: true, encoding: .utf8)
+                try outcome.source.write(to: file, atomically: true, encoding: .utf8)
+            }
+            if let catalog {
+                try catalog.original.write(to: URL(fileURLWithPath: catalog.file.path + ".bak"),
+                                           atomically: true, encoding: .utf8)
+                try catalog.repaired.write(to: catalog.file, atomically: true, encoding: .utf8)
+            }
         } catch {
             throw SetupError.patchFailed(error.localizedDescription)
         }
-        Diagnostics.log("hermes", "patch.gateway applied context=\(contextSites) upgraded=\(upgradedSites) window=\(windowSites) detached=\(detachedSites) file=\(file.path)")
+        Diagnostics.log("hermes", "patch.gateway applied context=\(outcome?.contextSites ?? 0) upgraded=\(outcome?.upgradedSites ?? 0) window=\(outcome?.windowSites ?? 0) detached=\(outcome?.detachedSites ?? 0) catalog=\(catalog != nil) file=\(file.path)")
         return true
     }
 
     /// `ast.parse` gate before the patched source may replace the original —
-    /// the same guard the remote paste-block runs. Skipped silently when no
-    /// python3 is around (the edits are anchored and deterministic anyway).
+    /// the same guard the remote paste-block runs. Fail closed if validation
+    /// cannot run; never install an unchecked catalog import rewrite.
     private static func syntaxCheck(_ source: String) async throws {
         let python = ["/usr/bin/python3", "/opt/homebrew/bin/python3"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
-        guard let python else { return }
+        guard let python else { throw SetupError.patchFailed("python3 not found for syntax validation") }
         let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("cuate-hermes-patch-check.py")
-        do { try source.write(to: temp, atomically: true, encoding: .utf8) } catch { return }
+            .appendingPathComponent("cuate-hermes-patch-\(UUID().uuidString).py")
+        try source.write(to: temp, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: temp) }
         let result = await run(python, ["-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", temp.path], timeout: 20)
         guard result.completed else {
@@ -253,12 +168,21 @@ enum HermesLocalGateway {
 
     /// Settings-button entry point: patch + restart + wait for health.
     static func applyContextPatchAndRestart() async throws {
-        let changed = try await applyContextPatchFile()
-        guard changed, let cli = cliPath() else { return }
+        _ = try await applyContextPatchFile()
+        guard let cli = cliPath() else { throw SetupError.patchFailed("Hermes CLI not found for restart") }
+        // The files may already be fixed while the running process still has
+        // the old inventory loaded (for example after a failed restart).
         let restart = await run(cli, ["gateway", "restart"], timeout: 90)
         Diagnostics.log("hermes", "patch.context restart ok=\(restart.completed)")
+        guard restart.completed else { throw SetupError.patchFailed("gateway restart failed: " + restart.tail) }
         let port = Int(readEnv()["API_SERVER_PORT"] ?? "") ?? 8642
-        _ = await waitForHealth(port: port, seconds: 20)
+        guard await waitForHealth(port: port, seconds: 20) else {
+            throw SetupError.patchFailed("gateway did not become healthy after restart")
+        }
+        // Health alone missed a runtime ImportError in the model inventory.
+        // Exercise the same authenticated endpoint the model picker uses.
+        do { _ = try await HermesAddon.shared.transport().modelOptions() }
+        catch { throw SetupError.patchFailed("model catalog check failed: " + error.localizedDescription) }
     }
 
     /// Brings the local gateway up and returns the (port, key) to connect

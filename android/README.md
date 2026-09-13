@@ -4,13 +4,18 @@ The Android port of Cuate: the same multi-provider AI chat, but in the shape of
 an ordinary mobile app (on macOS it is a hotkey panel for quick access; on a
 phone it is an assistant chat with the same features).
 
-## Status: 2.9.2 — Cuate + Hermes Agent + documents in chat; functionally a complete port (except system dictation)
+## Status: 3.0.3 — Cuate + Hermes Agent + documents in chat; functionally a complete port (except system dictation)
 
-A ready-to-install APK: `dist/Cuate-2.9.2.apk` (release, minified, signed with
+A ready-to-install APK: `dist/Cuate-3.0.3.apk` (release, minified, signed with
 the key from `release.keystore`; the keystore and `keystore.properties` are kept
 out of git — store them locally, they are required for updates carrying the same
 signature). Release builds go **only** through `scripts/make-apk.sh` (version
 bump, signing, publishing into `dist/`).
+
+Added in 3.0.3: the gateway patch command repairs a retained old model-catalog
+pricing import after a Hermes update. It preserves unrelated changes, backs
+up the inventory and leaves stock old/new installations unchanged. Apply the
+command to the gateway and restart it before refreshing the model list.
 
 Added in 2.9.2 (documents in chat — the same design as desktop 4.17, see
 [`docs/documents-in-chat.md`](../docs/documents-in-chat.md) §12):

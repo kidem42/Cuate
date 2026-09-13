@@ -452,6 +452,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .help(L("params.reasoning.help"))
             } else {
                 LabeledContent(L("params.reasoning")) {
                     Text(reasoningUnavailableHint)

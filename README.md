@@ -48,7 +48,7 @@ All of them are configurable: the app hotkeys in Settings → General, the addon
 
 ## What it does
 
-**Chat with any model.** OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, Kimi and OpenRouter (any model by slug); model lists come live from each provider's API. Or run models locally through **Ollama** — free, offline, no key — with a built-in console to download, delete, load and unload them without the terminal. A master switch can disable cloud providers entirely.
+**Chat with any model.** OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, Kimi and OpenRouter (any model by slug); model lists come live from each provider's API. Or run models locally through **Ollama** — free, offline, no key — with a built-in console to download, delete, load and unload them without the terminal, capability-based model selection, and Auto/Fast/Deep reasoning control for thinking models. A master switch can disable cloud providers entirely.
 
 **Talk instead of typing.** Speech-to-text via Mistral (Voxtral), OpenAI or Deepgram. System-wide dictation types your words into any text field phrase by phrase as you speak (over Deepgram it streams live, words landing while you talk), optionally cleaned up or translated on the fly by a small model of the provider you pick in Settings → Voice.
 
@@ -104,6 +104,10 @@ The agent stays a black box with its own configuration — Cuate never injects p
 **Files both ways.** Anything you attach is couriered onto the agent's host, so a file you added on the phone is real for the agent too. Files it creates come back the same way: HTML and Markdown arrive as artifact cards with in-app preview, other files download on click, and paths in its replies are clickable. A folder button lists everything exchanged in the conversation.
 
 **When you are away.** A background watch notifies you about finished turns — including runs that completed while the app was closed, or work started from another surface entirely.
+
+**Gateway compatibility.** The setup tools include fixes for context reporting,
+background runs and a stale model-catalog import after a Hermes update, with
+backups of changed files. Local repair verifies the model catalog after restart.
 
 **Setup.** For an agent on this Mac, Settings → Hermes Agent sets up and starts the gateway service in one click. For an agent on a VPS reachable from anywhere without a VPN, follow [docs/hermes-vps-setup.md](docs/hermes-vps-setup.md) — it is self-sufficient: do it yourself, or paste it into any capable LLM and it will walk you through with your values. The token lives in the Keychain; the endpoint works over loopback, LAN or Tailscale.
 
