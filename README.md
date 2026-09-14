@@ -109,7 +109,7 @@ The agent stays a black box with its own configuration — Cuate never injects p
 background runs and a stale model-catalog import after a Hermes update, with
 backups of changed files. Local repair verifies the model catalog after restart.
 
-**Setup.** For an agent on this Mac, Settings → Hermes Agent sets up and starts the gateway service in one click. For an agent on a VPS reachable from anywhere without a VPN, follow [docs/hermes-vps-setup.md](docs/hermes-vps-setup.md) — it is self-sufficient: do it yourself, or paste it into any capable LLM and it will walk you through with your values. The token lives in the Keychain; the endpoint works over loopback, LAN or Tailscale.
+**Setup.** Settings → Hermes Agent has a compact, localized [connection guide](docs/hermes-connection-guide.md): HTTPS with a domain, or an automatic SSH tunnel from a Mac without one. Each route includes full commands for chat, files, the compatibility patch and autostart, plus the exact fields to fill in. Enable “VPS through SSH tunnel” so loopback connections to a VPS transfer files through Dashboard. For Hermes installed on this Mac, the local gateway setup remains available in one click. Tokens live in the Keychain. Existing web stacks have an [advanced VPS guide](docs/hermes-vps-setup.md).
 
 The app's own image tools and OCR **stay out of agent chats by default** — the agent owns its sessions end to end. An opt-in toggle brings them in, running on the app's own keys, with results kept local to Cuate.
 

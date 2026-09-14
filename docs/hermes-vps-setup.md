@@ -1,5 +1,11 @@
 # Hermes on a VPS in 4 steps
 
+For the compact user walkthrough, including an automatic Mac SSH tunnel when
+there is no domain, see [Connect Hermes](hermes-connection-guide.md) or open
+Settings → Hermes Agent → Connect Hermes in the macOS app. The commands below
+are the advanced HTTPS recipe; do not combine its user services with the
+compact guide's system services on the same installation.
+
 You need: a VPS (Ubuntu 22/24, 2+ GB RAM) and a domain. The agent becomes
 reachable from any network over HTTPS — no VPN.
 
@@ -343,3 +349,24 @@ Then in the apps (Settings → Hermes Agent): gateway `https://agent.<domain>` +
 The same dashboard token also powers the **reverse courier**
 (`/api/files/download`): files the agent creates on the VPS flow back into the
 apps — preview cards, downloads, inline images — with no extra server setup.
+
+## Subagent results arrive without a main-agent answer
+
+Stateless Hermes API sessions can finish the parent turn with an acknowledgement,
+then persist background results without starting another turn. The gateway log
+says `async delegation completion persisted as delivery row ... (no wake turn)`.
+This deliberately leaves continuation consent to the client. A result card is
+not evidence that the main agent is still working.
+
+On macOS, Cuate displays a continuation request after these reports. Choose
+**Continue** once, **Allow for this session** to approve future continuations in
+that gateway session, or **Not now** to retain the results and decide later.
+Automatic approval is local to Cuate and the endpoint/session; it does not grant
+tool permissions. Revoke it through **Ask each time** in the chat header. Stop
+also revokes it. Cuate must remain running to issue automatic continuations.
+
+Cuate checks the transcript again before sending through its normal chat path.
+A delivery already claimed locally is not retried automatically after a network
+failure; use the normal visible error/retry flow. Other clients should implement
+their own consent flow; the Android companion does not yet expose this card.
+No dispatcher patch is needed for this client-owned continuation flow.

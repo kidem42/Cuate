@@ -10,6 +10,212 @@ func HL(_ key: String) -> String {
 
 enum HermesAddonStrings {
     static let table: [String: [AppLanguage: String]] = [
+        // MARK: Compact connection guide
+        "hermes.guide.prepare.configure": [
+            .english: "If Hermes is not configured yet, run setup, choose a provider and model, then sign in or enter the provider API key. If it already replies, skip setup. Telegram is optional. On a dedicated VPS choose the Local terminal backend; Docker needs a shared upload folder.",
+            .spanish: "Si Hermes aún no está configurado, ejecuta setup, elige proveedor y modelo e inicia sesión o introduce la clave API. Si ya responde, omite setup. Telegram es opcional. En un VPS dedicado elige el terminal Local; Docker necesita una carpeta compartida para archivos.",
+            .russian: "Если Hermes ещё не настроен, запустите мастер, выберите провайдера и модель, войдите в аккаунт или введите ключ провайдера. Если уже отвечает, мастер пропустите. Telegram необязателен. На отдельном VPS выберите терминал Local; для Docker нужна общая папка загрузок."
+        ],
+        "hermes.guide.prepare.update": [
+            .english: "If the hosting provider preinstalled Hermes or the installation is old, update it first. Skip this command for a freshly installed current version. If the updater fails, keep the error for support; do not bypass it or reset local changes blindly.",
+            .spanish: "Si el hosting preinstaló Hermes o la instalación es antigua, actualízalo primero. Omite este comando en una instalación nueva y actual. Si falla, guarda el error para soporte; no lo omitas ni descartes cambios locales sin revisarlos.",
+            .russian: "Если Hermes был предустановлен хостингом или давно не обновлялся, сначала обновите его. Для только что установленной актуальной версии эту команду пропустите. При сбое сохраните ошибку для поддержки; не обходите её и не сбрасывайте локальные изменения вслепую."
+        ],
+        "hermes.guide.title": [
+            .english: "Connect Hermes",
+            .spanish: "Conectar Hermes",
+            .russian: "Как подключить Hermes"
+        ],
+        "hermes.guide.route": [
+            .english: "Connection method",
+            .spanish: "Método de conexión",
+            .russian: "Способ подключения"
+        ],
+        "hermes.guide.route.help": [
+            .english: "Choose instructions for a VPS with a domain or a Mac connected through SSH. This choice does not change your connection settings.",
+            .spanish: "Elige instrucciones para un VPS con dominio o un Mac conectado por SSH. Esta selección no cambia la conexión.",
+            .russian: "Выберите инструкцию для VPS с доменом или подключения Mac через SSH. Выбор инструкции не меняет настройки соединения."
+        ],
+        "hermes.guide.domain": [
+            .english: "I have a domain",
+            .spanish: "Tengo un dominio",
+            .russian: "Есть домен"
+        ],
+        "hermes.guide.tunnel": [
+            .english: "No domain",
+            .spanish: "Sin dominio",
+            .russian: "Без домена"
+        ],
+        "hermes.guide.domain.intro": [
+            .english: "With a domain, Cuate connects to your VPS over HTTPS. The same addresses work on Mac and Android; no open Terminal window is needed.",
+            .spanish: "Con un dominio, Cuate se conecta al VPS por HTTPS. Las mismas direcciones sirven en Mac y Android; no necesitas mantener Terminal abierto.",
+            .russian: "С доменом Cuate подключается к VPS по HTTPS. Одни и те же адреса работают на Mac и Android; держать Терминал открытым не нужно."
+        ],
+        "hermes.guide.tunnel.intro": [
+            .english: "Without a domain, an SSH tunnel gives this Mac a private connection to the VPS. It starts after you log in and reconnects after network interruptions. The Mac tunnel does not connect an Android phone.",
+            .spanish: "Sin dominio, un túnel SSH conecta este Mac al VPS de forma privada. Se inicia al entrar en tu cuenta y se reconecta tras cortes de red. No conecta un teléfono Android.",
+            .russian: "Без домена SSH-туннель создаёт защищённое соединение этого Mac с VPS. Он запускается после входа в macOS и восстанавливается после обрывов сети. На Android туннель с Mac не распространяется."
+        ],
+        "hermes.guide.steps.prepare": [
+            .english: "1. On the VPS: set up Hermes, choose a model and get a reply in its terminal chat.",
+            .spanish: "1. En el VPS: configura Hermes, elige un modelo y comprueba que responde en su chat de terminal.",
+            .russian: "1. На VPS: настройте Hermes, выберите модель и получите ответ в его чате в терминале."
+        ],
+        "hermes.guide.steps.server": [
+            .english: "2. On the VPS: run the server block for chat, files, the Cuate patch and service autostart. Save the two keys it prints.",
+            .spanish: "2. En el VPS: ejecuta el bloque para chat, archivos, parche de Cuate e inicio automático. Guarda las dos claves que muestra.",
+            .russian: "2. На VPS: выполните блок настройки чата, файлов, патча Cuate и автозапуска служб. Сохраните два выведенных ключа."
+        ],
+        "hermes.guide.steps.domain": [
+            .english: "3. Connect the domain, then enter the two HTTPS addresses and their keys in Cuate.",
+            .spanish: "3. Conecta el dominio e introduce las dos direcciones HTTPS y sus claves en Cuate.",
+            .russian: "3. Подключите домен и перенесите в Cuate два HTTPS-адреса и их ключи."
+        ],
+        "hermes.guide.steps.tunnel": [
+            .english: "3. On the Mac: run the automatic tunnel block. In Cuate, enable “VPS through SSH tunnel” and enter the addresses and keys.",
+            .spanish: "3. En el Mac: ejecuta el bloque del túnel automático. En Cuate, activa «VPS por túnel SSH» e introduce las direcciones y claves.",
+            .russian: "3. На Mac: выполните блок автоматического туннеля. В Cuate включите «VPS через SSH-туннель» и введите адреса и ключи."
+        ],
+        "hermes.guide.steps.check": [
+            .english: "4. Test a reply, an uploaded file and a downloaded file. Then check the connection after restarting.",
+            .spanish: "4. Prueba una respuesta, la subida y la descarga de un archivo. Después comprueba la conexión tras reiniciar.",
+            .russian: "4. Проверьте ответ, отправку и скачивание файла. Затем проверьте соединение после перезагрузки."
+        ],
+        "hermes.guide.open": [
+            .english: "Open full instructions",
+            .spanish: "Abrir instrucciones completas",
+            .russian: "Открыть полную инструкцию"
+        ],
+        "hermes.guide.open.help": [
+            .english: "Open the selected guide with complete command blocks and the exact Cuate fields to fill in.",
+            .spanish: "Abre la guía elegida con comandos completos y los campos que debes rellenar en Cuate.",
+            .russian: "Открыть выбранную инструкцию с полными командами и точными полями для заполнения в Cuate."
+        ],
+        "hermes.guide.copy.help": [
+            .english: "Copy the entire selected guide, including all commands. No saved keys are included.",
+            .spanish: "Copia toda la guía elegida con sus comandos. No incluye claves guardadas.",
+            .russian: "Скопировать выбранную инструкцию целиком, вместе с командами. Сохранённые ключи в неё не включаются."
+        ],
+        "hermes.guide.local": [
+            .english: "Hermes on this Mac? Use the local setup offered in the connection section. The VPS guide is for a separate server.",
+            .spanish: "¿Hermes está en este Mac? Usa la configuración local de la sección de conexión. Esta guía es para un servidor separado.",
+            .russian: "Hermes установлен на этом Mac? Используйте локальную настройку в разделе подключения. Эта инструкция — для отдельного сервера."
+        ],
+        "hermes.guide.tunnel.toggle": [
+            .english: "VPS through SSH tunnel",
+            .spanish: "VPS por túnel SSH",
+            .russian: "VPS через SSH-туннель"
+        ],
+        "hermes.guide.tunnel.toggle.help": [
+            .english: "Enable when the loopback address forwards to another computer. Cuate uploads and downloads files through Dashboard and does not offer to modify a local Hermes installation. This switch does not create a tunnel.",
+            .spanish: "Actívalo si la dirección local redirige a otro equipo. Cuate transfiere archivos mediante Dashboard y no ofrece modificar una instalación local de Hermes. Este control no crea el túnel.",
+            .russian: "Включите, если локальный адрес ведёт на другой компьютер через туннель. Cuate передаёт файлы через Dashboard и не предлагает менять локальную установку Hermes. Сам туннель этот переключатель не создаёт."
+        ],
+        "hermes.guide.prerequisites": [
+            .english: "You need a VPS, its SSH login and an SSH key, plus a model provider account or API key. First confirm that your usual SSH command connects from the Mac. These complete commands cover a dedicated Ubuntu 22/24 VPS, the root account, and a standard Hermes installation in /root/.hermes/hermes-agent. Docker installations, custom service users, and servers already hosting websites need their administrator’s configuration: [advanced VPS guide](https://github.com/kidem42/Cuate/blob/main/docs/hermes-vps-setup.md). Cuate is the client; it does not buy a server or configure it when you open this guide.",
+            .spanish: "Necesitas un VPS, acceso SSH con clave y una cuenta de proveedor de modelos o clave API. Comprueba primero que tu comando SSH habitual conecta desde el Mac. Estos comandos cubren un VPS Ubuntu 22/24 dedicado, la cuenta root y Hermes en /root/.hermes/hermes-agent. Docker, usuarios de servicio personalizados y servidores con sitios web requieren configuración de su administrador: [guía avanzada](https://github.com/kidem42/Cuate/blob/main/docs/hermes-vps-setup.md). Cuate es el cliente; abrir esta guía no compra ni configura un servidor.",
+            .russian: "Понадобятся VPS, доступ к нему по SSH с ключом и аккаунт провайдера модели либо API-ключ. Сначала убедитесь, что ваша обычная команда SSH подключает Mac к серверу. Готовые команды рассчитаны на отдельный VPS с Ubuntu 22/24, входом root и обычной установкой Hermes в /root/.hermes/hermes-agent. Для Docker, другого пользователя службы и сервера с работающими сайтами нужна настройка администратором: [расширенная инструкция](https://github.com/kidem42/Cuate/blob/main/docs/hermes-vps-setup.md). Cuate — клиент: открытие этой инструкции не покупает и не настраивает сервер."
+        ],
+        "hermes.guide.prepare.title": [
+            .english: "1. VPS — prepare Hermes",
+            .spanish: "1. VPS — preparar Hermes",
+            .russian: "1. VPS — подготовить Hermes"
+        ],
+        "hermes.guide.prepare.body": [
+            .english: "Connect to the VPS with your usual SSH command. If Hermes is missing, install it using the [official instructions](https://hermes-agent.nousresearch.com/docs/). Run each command separately and wait for it to finish before pasting the next one.",
+            .spanish: "Conecta al VPS con tu comando SSH habitual. Si falta Hermes, sigue la [instalación oficial](https://hermes-agent.nousresearch.com/docs/). Ejecuta cada comando por separado y espera a que termine antes de pegar el siguiente.",
+            .russian: "Подключитесь к VPS своей обычной командой SSH. Если Hermes ещё не установлен, установите его по [официальной инструкции](https://hermes-agent.nousresearch.com/docs/). Выполняйте команды по одной и дожидайтесь завершения, прежде чем вставлять следующую."
+        ],
+        "hermes.guide.prepare.check": [
+            .english: "Wait for setup to finish before pasting another command. Then open the chat, send “Hello” and wait for a reply. Exit with Ctrl+C. Continue only after it replies.",
+            .spanish: "Espera a que termine la configuración antes de pegar otro comando. Abre el chat, escribe «Hola» y espera la respuesta. Sal con Ctrl+C. Continúa cuando responda.",
+            .russian: "Дождитесь завершения мастера, прежде чем вставлять следующую команду. Затем откройте чат, напишите «Привет» и дождитесь ответа. Выйдите через Ctrl+C. Продолжайте, когда Hermes отвечает."
+        ],
+        "hermes.guide.server.title": [
+            .english: "2. VPS — chat, files and compatibility patch",
+            .spanish: "2. VPS — chat, archivos y parche",
+            .russian: "2. VPS — чат, файлы и патч совместимости"
+        ],
+        "hermes.guide.server.body": [
+            .english: "Paste this entire block into the VPS terminal. It preserves existing keys, configures private API ports, applies the Cuate patch with backups and enables both services at boot. Existing service definitions are retained; custom installations require the advanced guide. Success means “Gateway: OK” and “Dashboard: OK”, followed by two keys. Keep those keys private. If any command fails, stop and share the error without keys; do not bypass a patch check.",
+            .spanish: "Pega el bloque completo en el terminal del VPS. Conserva claves existentes, configura puertos privados, aplica el parche con copias de seguridad y activa ambas funciones al arrancar. Conserva los servicios existentes; instalaciones personalizadas necesitan la guía avanzada. Debe mostrar «Gateway: OK» y «Dashboard: OK», seguidos de dos claves. No compartas las claves. Si falla, detente y comparte el error sin claves; no omitas comprobaciones del parche.",
+            .russian: "Вставьте весь блок в терминал VPS. Он сохранит существующие ключи, настроит закрытые порты API, применит патч Cuate с резервными копиями и включит обе службы в автозагрузку. Описания существующих служб сохраняются; для нестандартной установки используйте расширенную инструкцию. Успех — строки «Gateway: OK» и «Dashboard: OK», затем два ключа. Ключи не публикуйте. При ошибке остановитесь и передайте её текст без ключей; не обходите проверки патча."
+        ],
+        "hermes.guide.domain.title": [
+            .english: "3. VPS — connect the domain",
+            .spanish: "3. VPS — conectar el dominio",
+            .russian: "3. VPS — подключить домен"
+        ],
+        "hermes.guide.domain.body": [
+            .english: "At your domain registrar, create two DNS A records: agent and dash, both pointing to the VPS IPv4 address. Allow inbound TCP ports 80 and 443 in the hosting firewall and any server firewall. Replace YOUR_DOMAIN below with your domain, for example example.com, then run the block on the VPS. It installs Caddy for HTTPS and refuses to overwrite an existing web setup. DNS propagation and certificate issuance can take time.",
+            .spanish: "En tu registrador, crea dos registros DNS A: agent y dash, ambos con la IPv4 del VPS. Permite los puertos TCP entrantes 80 y 443 en los cortafuegos del hosting y del servidor. Cambia YOUR_DOMAIN por tu dominio, por ejemplo example.com, y ejecuta el bloque en el VPS. Instala Caddy para HTTPS y rechaza sobrescribir una configuración web existente. El DNS y el certificado pueden tardar.",
+            .russian: "У регистратора домена создайте две DNS-записи типа A: agent и dash, обе с IPv4-адресом VPS. Разрешите входящие TCP-порты 80 и 443 в панели хостинга и в файрволе сервера, если он включён. Замените YOUR_DOMAIN ниже своим доменом, например example.com, и выполните блок на VPS. Он установит Caddy для HTTPS и откажется перезаписывать существующую веб-настройку. Обновление DNS и выдача сертификата могут занять время."
+        ],
+        "hermes.guide.tunnel.title": [
+            .english: "3. Mac — automatic connection",
+            .spanish: "3. Mac — conexión automática",
+            .russian: "3. Mac — автоматическое подключение"
+        ],
+        "hermes.guide.tunnel.body": [
+            .english: "Open a NEW Terminal window on the Mac, outside the SSH session. Close any previous manual tunnel using ports 18642/19119. In the block below replace YOUR_SERVER_IP and YOUR_SSH_KEY with the values from your working SSH command; adjust SSH_USER and SSH_PORT if needed. The key path is a file on the Mac. Paste the whole block. Enter the SSH key passphrase when asked; it is saved in macOS Keychain. If asked to trust an unfamiliar host, verify it through your normal SSH login first. “Tunnel ready” means Terminal can be closed. The block installs one login service for both chat and files.",
+            .spanish: "Abre una NUEVA ventana de Terminal en el Mac, fuera de la sesión SSH. Cierra túneles manuales que usen 18642/19119. Sustituye YOUR_SERVER_IP y YOUR_SSH_KEY por los valores de tu comando SSH; ajusta SSH_USER y SSH_PORT si hace falta. La clave es un archivo del Mac. Pega todo el bloque e introduce su frase secreta: se guarda en el Llavero. Si el host no es conocido, verifícalo primero con tu acceso SSH habitual. «Tunnel ready» permite cerrar Terminal. El bloque instala un servicio de inicio para chat y archivos.",
+            .russian: "Откройте НОВОЕ окно Терминала на Mac, вне SSH-сессии. Закройте прежний ручной туннель на портах 18642/19119. В блоке замените YOUR_SERVER_IP и YOUR_SSH_KEY значениями из рабочей команды SSH; при необходимости измените SSH_USER и SSH_PORT. Путь к ключу — это файл на Mac. Вставьте блок целиком. При запросе введите секретную фразу SSH-ключа: она сохранится в Связке ключей macOS. Если сервер ещё не известен SSH, сначала проверьте его обычным входом. После «Tunnel ready» Терминал можно закрыть. Блок устанавливает одну службу автозапуска сразу для чата и файлов."
+        ],
+        "hermes.guide.fields.title": [
+            .english: "4. Cuate — fill in the connection fields",
+            .spanish: "4. Cuate — rellenar la conexión",
+            .russian: "4. Cuate — заполнить поля подключения"
+        ],
+        "hermes.guide.domain.fields": [
+            .english: "In Settings → Hermes Agent, turn off “VPS through SSH tunnel”.\n\n| Field | Value |\n|---|---|\n| Gateway address | https://agent.YOUR_DOMAIN |\n| API key | Gateway key from step 2 |\n| Dashboard address | https://dash.YOUR_DOMAIN |\n| Dashboard session token | Dashboard token from step 2 |",
+            .spanish: "En Ajustes → Agente Hermes, desactiva «VPS por túnel SSH».\n\n| Campo | Valor |\n|---|---|\n| Dirección del gateway | https://agent.YOUR_DOMAIN |\n| Clave API | Gateway key del paso 2 |\n| Dirección del dashboard | https://dash.YOUR_DOMAIN |\n| Token de sesión del dashboard | Dashboard token del paso 2 |",
+            .russian: "В Настройки → Hermes-агент выключите «VPS через SSH-туннель».\n\n| Поле | Значение |\n|---|---|\n| Адрес гейтвея | https://agent.YOUR_DOMAIN |\n| API-ключ | Gateway key из шага 2 |\n| Адрес дашборда | https://dash.YOUR_DOMAIN |\n| Session-токен дашборда | Dashboard token из шага 2 |"
+        ],
+        "hermes.guide.tunnel.fields": [
+            .english: "In Settings → Hermes Agent, turn ON “VPS through SSH tunnel”. This makes attachments travel to the VPS instead of using paths on the Mac.\n\n| Field | Value |\n|---|---|\n| Gateway address | http://127.0.0.1:18642 |\n| API key | Gateway key from step 2 |\n| Dashboard address | http://127.0.0.1:19119 |\n| Dashboard session token | Dashboard token from step 2 |",
+            .spanish: "En Ajustes → Agente Hermes, ACTIVA «VPS por túnel SSH» para transferir archivos al VPS.\n\n| Campo | Valor |\n|---|---|\n| Dirección del gateway | http://127.0.0.1:18642 |\n| Clave API | Gateway key del paso 2 |\n| Dirección del dashboard | http://127.0.0.1:19119 |\n| Token de sesión del dashboard | Dashboard token del paso 2 |",
+            .russian: "В Настройки → Hermes-агент ВКЛЮЧИТЕ «VPS через SSH-туннель». Тогда вложения отправляются на VPS, а не передаются как пути к файлам на Mac.\n\n| Поле | Значение |\n|---|---|\n| Адрес гейтвея | http://127.0.0.1:18642 |\n| API-ключ | Gateway key из шага 2 |\n| Адрес дашборда | http://127.0.0.1:19119 |\n| Session-токен дашборда | Dashboard token из шага 2 |"
+        ],
+        "hermes.guide.keys": [
+            .english: "Save both keys using their Save buttons. These are two different server access keys. Your model provider key stays in Hermes on the VPS. Select the Hermes role in the chat to talk to that agent.",
+            .spanish: "Guarda ambas claves con sus botones Guardar. Son dos claves de acceso distintas. La clave del proveedor de modelos se queda en Hermes en el VPS. Selecciona el rol Hermes en el chat.",
+            .russian: "Сохраните оба ключа кнопками сохранения рядом с полями. Это два разных ключа доступа к серверу. Ключ провайдера модели остаётся в Hermes на VPS. Для общения с агентом выберите роль Hermes в чате."
+        ],
+        "hermes.guide.verify.title": [
+            .english: "5. Check chat and files",
+            .spanish: "5. Comprobar chat y archivos",
+            .russian: "5. Проверить чат и файлы"
+        ],
+        "hermes.guide.verify.body": [
+            .english: "Click Test connection. Send a message and wait for a reply. Attach a small text file and ask the agent to read its contents. Then ask it to create a text file for download and open that file from the reply. A green connection check alone does not verify file transfer. With Docker, the upload directory must be mounted at the same path inside the container; see the advanced guide.",
+            .spanish: "Pulsa Probar conexión. Envía un mensaje, adjunta un archivo de texto y pide que lo lea. Después pide crear un archivo para descargar y ábrelo desde la respuesta. Una conexión verde no verifica los archivos. Con Docker, monta la carpeta de subidas en la misma ruta dentro del contenedor; consulta la guía avanzada.",
+            .russian: "Нажмите проверку соединения. Отправьте сообщение и дождитесь ответа. Прикрепите небольшой текстовый файл и попросите прочитать его содержимое. Затем попросите создать файл для скачивания и откройте его из ответа. Зелёная проверка соединения сама по себе не проверяет файлы. При Docker папку загрузок нужно подключить внутри контейнера по тому же пути — см. расширенную инструкцию."
+        ],
+        "hermes.guide.domain.restart": [
+            .english: "The VPS services and Caddy start at boot. Check once after a VPS restart. Cuate needs internet access but no SSH window.",
+            .spanish: "Los servicios del VPS y Caddy arrancan automáticamente. Compruébalo tras reiniciar el VPS. Cuate necesita internet, pero no una ventana SSH.",
+            .russian: "Службы VPS и Caddy запускаются при загрузке сервера. Один раз проверьте подключение после перезагрузки VPS. Cuate нужен интернет, но окно SSH не требуется."
+        ],
+        "hermes.guide.tunnel.restart": [
+            .english: "The VPS services start at boot. The tunnel starts after this user logs into the Mac and reconnects after network interruptions or sleep. Check once after restarting the VPS and after logging back into the Mac. To remove tunnel autostart: run launchctl bootout gui/$(id -u)/com.cuate.hermes-tunnel on the Mac, then remove ~/Library/LaunchAgents/com.cuate.hermes-tunnel.plist.",
+            .spanish: "Los servicios del VPS arrancan al encenderlo. El túnel se inicia al entrar en esta cuenta del Mac y se reconecta tras cortes o reposo. Comprueba ambos reinicios. Para quitar el inicio del túnel, ejecuta launchctl bootout gui/$(id -u)/com.cuate.hermes-tunnel en el Mac y elimina ~/Library/LaunchAgents/com.cuate.hermes-tunnel.plist.",
+            .russian: "Службы VPS запускаются при загрузке сервера. Туннель запускается после входа этого пользователя в macOS и восстанавливается после обрывов или сна. Один раз проверьте перезагрузку VPS и повторный вход на Mac. Чтобы убрать автозапуск туннеля, выполните на Mac launchctl bootout gui/$(id -u)/com.cuate.hermes-tunnel и удалите ~/Library/LaunchAgents/com.cuate.hermes-tunnel.plist."
+        ],
+        "hermes.guide.trouble.title": [
+            .english: "If something fails",
+            .spanish: "Si algo falla",
+            .russian: "Если возникла ошибка"
+        ],
+        "hermes.guide.trouble.body": [
+            .english: "If Hermes reports no inference provider, finish step 1. If a patch anchor is missing, stop and send the error to support. If the server block rejects SQLite, and this installation uses uv-managed Python 3.11, run the block below on the VPS and retry step 2. Updating uv first matters. If uv cannot update itself or Hermes still uses an old SQLite, share the output instead of repeatedly reinstalling. For other Python versions, ask the server administrator.",
+            .spanish: "Si falta un proveedor, termina el paso 1. Si falta un ancla del parche, detente y envía el error a soporte. Si el bloque rechaza SQLite y Hermes usa Python 3.11 gestionado por uv, ejecuta el bloque de abajo en el VPS y repite el paso 2. Primero se actualiza uv. Si uv no puede actualizarse o SQLite sigue antigua, comparte el resultado; no reinstales repetidamente. Para otras versiones de Python, consulta al administrador.",
+            .russian: "Если Hermes сообщает, что провайдер не настроен, завершите шаг 1. Если патч не нашёл ожидаемый участок кода, остановитесь и передайте ошибку в поддержку. Если блок VPS остановился из-за SQLite и установка использует Python 3.11 от uv, выполните блок ниже на VPS и повторите шаг 2. Важно сначала обновить uv. Если uv не обновляется или SQLite в Hermes остаётся старой, передайте вывод вместо повторных переустановок. Для других версий Python обратитесь к администратору."
+        ],
+        "hermes.guide.maintenance": [
+            .english: "These instructions do not schedule Hermes updates. A reboot preserves the patch; a Hermes update may overwrite it. Update deliberately with hermes update, then repeat the compatibility step and verify chat and files. Hosting-provider update jobs are separate. For an HTTP 401, check the key for that service; for an empty skills list, check /v1/skills before assuming skills are missing.",
+            .spanish: "Esta guía no programa actualizaciones de Hermes. Reiniciar conserva el parche; actualizar Hermes puede sobrescribirlo. Actualiza con hermes update cuando lo decidas, repite el paso de compatibilidad y comprueba chat y archivos. Las tareas de actualización del hosting son independientes. Ante HTTP 401, revisa la clave del servicio; si no hay habilidades, comprueba /v1/skills antes de asumir que faltan.",
+            .russian: "Эта инструкция не настраивает автообновление Hermes. Перезагрузка сохраняет патч, обновление Hermes может его перезаписать. Обновляйте осознанно командой hermes update, затем повторяйте шаг совместимости и проверяйте чат и файлы. Задания обновления от хостинга — отдельная настройка. При HTTP 401 проверьте ключ нужной службы; при пустом списке навыков сначала проверьте /v1/skills, а не считайте, что навыки отсутствуют."
+        ],
         "hermes.tab": [.english: "Hermes Agent", .spanish: "Agente Hermes", .russian: "Hermes-агент"],
         "hermes.lock.switched": [
             .english: "Session model → %model% (%provider%)",

@@ -92,6 +92,9 @@ xcrun swiftc -o "$tmp/gateway-patch-test" \
 "$tmp/gateway-patch-test"
 python3 scripts/HermesCatalogPatchContractTest.py "$tmp/gateway-patch-test" .
 
+echo "== Python contract: Hermes connection guide =="
+python3 scripts/HermesConnectionGuideContractTest.py
+
 echo "== Swift contract: Ollama compatibility =="
 xcrun swiftc -o "$tmp/ollama-test" \
     Cuate/Providers/OllamaCompatibility.swift \

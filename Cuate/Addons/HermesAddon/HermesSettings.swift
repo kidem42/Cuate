@@ -41,6 +41,12 @@ final class HermesSettings: ObservableObject {
         didSet { defaults.set(endpointURL, forKey: "hermes.endpointURL") }
     }
 
+    /// A loopback address can forward to a VPS. Opt in explicitly: existing
+    /// local installations must retain their shared-filesystem behavior.
+    @Published var usesSSHTunnel: Bool {
+        didSet { defaults.set(usesSSHTunnel, forKey: "hermes.usesSSHTunnel") }
+    }
+
     /// Resolved base URL (falls back to the default when the field is garbage).
     var baseURL: URL {
         URL(string: endpointURL.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -50,6 +56,7 @@ final class HermesSettings: ObservableObject {
     /// Whether the gateway lives on ANOTHER machine — file attachments then
     /// need the dashboard courier (paths from this Mac mean nothing there).
     var isRemoteGateway: Bool {
+        if usesSSHTunnel { return true }
         guard let host = baseURL.host?.lowercased() else { return false }
         return !["127.0.0.1", "localhost", "::1"].contains(host)
     }
@@ -521,6 +528,7 @@ final class HermesSettings: ObservableObject {
     private init() {
         enabled = defaults.bool(forKey: "hermes.enabled")
         endpointURL = defaults.string(forKey: "hermes.endpointURL") ?? Self.defaultEndpoint
+        usesSSHTunnel = defaults.bool(forKey: "hermes.usesSSHTunnel")
         dashboardURL = defaults.string(forKey: "hermes.dashboardURL") ?? ""
         cachedAgentIDs = defaults.stringArray(forKey: "hermes.cachedAgentIDs") ?? []
         lockProvider = defaults.string(forKey: "hermes.lockProvider") ?? ""

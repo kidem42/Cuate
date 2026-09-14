@@ -507,6 +507,21 @@ asset carry the same repair. `HermesCatalogPatchContractTest.py` exercises all
 four paste-blocks and compares their output with Swift, reproducing the runtime
 ImportError without real credentials or provider calls.
 
+**Connection guide (macOS).** `HermesSettingsView` starts with a collapsed
+"Connect Hermes" guide: domain/HTTPS or no-domain/SSH, four short steps, and
+open/copy actions for the complete localized Markdown. `HermesConnectionGuide`
+assembles the walkthrough offline, reusing the existing remote patch body;
+opening it performs no server operations. Its commands target a standard root
+Ubuntu VPS, preserve existing keys and service definitions, configure both API
+and Dashboard, and offer a Mac launch agent forwarding both ports. Existing
+web stacks are referred to the advanced guide. `hermes.usesSSHTunnel` defaults
+to false (existing local behavior retained); when enabled, `isRemoteGateway`
+uses the remote courier even for loopback URLs, and local installation/patch
+offers are hidden. Guide route selection itself changes no connection setting.
+See `docs/hermes-connection-guide.md`. The standalone Python guide test checks
+shell/Python syntax, translations, key preservation and the tunnel installer
+with mocked SSH, launchctl and networking; it does not certify a live VPS or UI.
+
 ## 11. Cross-cutting
 
 - **Localization:** `L()` (`App/Localization.swift`, en/es/ru, English

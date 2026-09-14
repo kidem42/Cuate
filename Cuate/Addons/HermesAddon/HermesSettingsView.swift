@@ -27,24 +27,14 @@ struct HermesSettingsView: View {
     @State private var lockOptions: [HermesProviderOption] = []
     @State private var sessions: [HermesSessionInfo] = []
     @State private var sessionsLoaded = false
+    @State private var setupExpanded = false
+    @State private var setupUsesDomain = true
 
     private enum ProbeState: Equatable {
         case idle
         case testing
         case result(String, ok: Bool)
     }
-
-    /// Onboarding commands for a REMOTE gateway over SSH (the local case is
-    /// fully automated — HermesLocalGateway). `API_SERVER_HOST=0.0.0.0` is
-    /// required: the default binds loopback only, and the connection from
-    /// another machine silently refuses without it.
-    private static let setupRemoteCommands = """
-    ssh USER@HOST 'echo API_SERVER_ENABLED=true >> ~/.hermes/.env; \\
-      echo API_SERVER_HOST=0.0.0.0 >> ~/.hermes/.env; \\
-      echo API_SERVER_KEY=$(openssl rand -hex 24) >> ~/.hermes/.env; \\
-      hermes gateway install; hermes gateway restart'
-    ssh USER@HOST "grep '^API_SERVER_KEY=' ~/.hermes/.env"
-    """
 
     /// Gateway patch for a REMOTE host, as a paste-into-the-VPS block (we
     /// have no file access over there): `usage.context_tokens` +
@@ -239,9 +229,9 @@ struct HermesSettingsView: View {
 
     var body: some View {
         Form {
+            setupSection
             connectionSection
             dashboardSection
-            setupSection
             modelSection
             briefingSection
             appFeaturesSection
@@ -263,6 +253,9 @@ struct HermesSettingsView: View {
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .help(HL("hermes.conn.endpoint.help"))
+
+            Toggle(HL("hermes.guide.tunnel.toggle"), isOn: $settings.usesSSHTunnel)
+                .help(HL("hermes.guide.tunnel.toggle.help"))
 
             HStack {
                 if let masked = maskedKey {
@@ -329,6 +322,7 @@ struct HermesSettingsView: View {
     /// endpoint with Hermes installed — or a setup pass already ran and its
     /// outcome (success line included) must stay on screen.
     private var autoSetupVisible: Bool {
+        guard !settings.usesSSHTunnel else { return false }
         if autoSetupState != .idle { return true }
         guard case .result(_, ok: false) = probeState else { return false }
         return HermesLocalGateway.isLocalEndpoint(settings.endpointURL)
@@ -425,7 +419,8 @@ struct HermesSettingsView: View {
     /// the row only surfaces an actionable offer or its outcome.
     @ViewBuilder
     private var contextPatchRow: some View {
-        if HermesLocalGateway.isLocalEndpoint(settings.endpointURL),
+        if !settings.usesSSHTunnel,
+           HermesLocalGateway.isLocalEndpoint(settings.endpointURL),
            HermesLocalGateway.isInstalled() {
             VStack(alignment: .leading, spacing: 8) {
                 switch patchRowState {
@@ -543,79 +538,52 @@ struct HermesSettingsView: View {
 
     private var setupSection: some View {
         Section {
-            // Hermes on THIS Mac needs no terminal: the one-click card in
-            // the Connection section (HermesLocalGateway) does everything.
-            Text(HL("hermes.setup.local.auto"))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup(isExpanded: $setupExpanded) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker(HL("hermes.guide.route"), selection: $setupUsesDomain) {
+                        Text(HL("hermes.guide.domain")).tag(true)
+                        Text(HL("hermes.guide.tunnel")).tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .help(HL("hermes.guide.route.help"))
 
-            Divider()
+                    Text(HL(setupUsesDomain ? "hermes.guide.domain.intro" : "hermes.guide.tunnel.intro"))
+                        .font(.callout)
+                    Text(HL("hermes.guide.steps.prepare"))
+                    Text(HL("hermes.guide.steps.server"))
+                    Text(HL(setupUsesDomain ? "hermes.guide.steps.domain" : "hermes.guide.steps.tunnel"))
+                    Text(HL("hermes.guide.steps.check"))
 
-            // Hermes on a remote machine: same over SSH, plus the bind to
-            // 0.0.0.0 — without it the server listens on loopback only.
-            Text(HL("hermes.setup.remote.title"))
-                .font(.callout.weight(.medium))
-            commandBlock(Self.setupRemoteCommands)
-            Text(HL("hermes.setup.remote.caption"))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            // Accurate context gauge on a remote gateway: paste-block for
-            // the VPS terminal (locally the app applies the same patch
-            // itself — contextPatchRow / autoSetup).
-            Text(HL("hermes.setup.patch.title"))
-                .font(.callout.weight(.medium))
-            commandBlock(Self.gatewayPatchRemoteCommands)
-            Text(HL("hermes.setup.patch.caption"))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Full VPS walkthrough (HTTPS, no VPN) — battle-tested, written
-            // to be self-sufficient: read it in the preview window, or copy
-            // and hand it to any capable LLM to be walked through.
-            HStack(spacing: 8) {
-                Button(HL("hermes.vps.open")) {
-                    ArtifactPreview.show(
-                        kind: .markdown,
-                        content: HermesVPSGuide.markdown,
-                        title: "Hermes on a VPS"
-                    )
+                    HStack {
+                        Button(HL("hermes.guide.open")) {
+                            ArtifactPreview.show(kind: .markdown, content: connectionGuide,
+                                                 title: HL("hermes.guide.title"))
+                        }
+                        .help(HL("hermes.guide.open.help"))
+                        Button(HL("hermes.setup.copy")) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(connectionGuide, forType: .string)
+                        }
+                        .help(HL("hermes.guide.copy.help"))
+                    }
+                    Text(HL("hermes.guide.local"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                Button(HL("hermes.setup.copy")) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(HermesVPSGuide.markdown, forType: .string)
-                }
-                Spacer()
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 8)
+            } label: {
+                Label(HL("hermes.guide.title"), systemImage: "questionmark.circle")
             }
-            Text(HL("hermes.vps.caption"))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        } header: {
-            Text(HL("hermes.setup.header"))
+            .help(HL("hermes.guide.route.help"))
+            .onAppear { setupUsesDomain = !settings.usesSSHTunnel }
         }
     }
 
-    /// Monospaced command card with a copy button.
-    private func commandBlock(_ commands: String) -> some View {
-        HStack(alignment: .top) {
-            Text(commands)
-                .font(.system(size: 11, design: .monospaced))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Button(HL("hermes.setup.copy")) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(commands, forType: .string)
-            }
-        }
-        .padding(8)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+    private var connectionGuide: String {
+        HermesConnectionGuide.markdown(usesDomain: setupUsesDomain,
+                                       patch: Self.gatewayPatchRemoteCommands)
     }
 
     // MARK: - Model lock
