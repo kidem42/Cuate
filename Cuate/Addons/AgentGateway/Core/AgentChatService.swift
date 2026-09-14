@@ -53,7 +53,6 @@ enum AgentChatService {
                     HermesAddon.shared.beginStreaming(conversationKey: conversationKey)
                     defer {
                         HermesAddon.shared.endStreaming(conversationKey: conversationKey)
-                        Task { await HermesAddon.shared.reseedPollBaseline() }
                     }
                     let events = session.send(text: userMessage.text, attachments: userMessage.attachments)
                     for try await event in events {
@@ -147,6 +146,12 @@ enum AgentChatService {
                         return
                     }
 
+                    await HermesAddon.shared.refreshBackgroundWork(conversationKey: conversationKey)
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+
                     // Recordings the agent named by id (its host carries the
                     // Plaud plugin): resolved here with OUR grant into the
                     // usual chips, so the reply keeps the words and the card
@@ -176,11 +181,13 @@ enum AgentChatService {
                     }
                     // Long-turn banner: suppressed automatically when the
                     // panel is open on this very conversation (§7.1).
-                    NotificationService.shared.postTurnCompleted(
-                        roleID: role.id, roleName: role.displayName,
-                        preview: displayedText,
-                        conversationKey: conversationKey
-                    )
+                    if !HermesAddon.shared.awaitsBackgroundResult(conversationKey: conversationKey) {
+                        NotificationService.shared.postTurnCompleted(
+                            roleID: role.id, roleName: role.displayName,
+                            preview: displayedText,
+                            conversationKey: conversationKey
+                        )
+                    }
                     Diagnostics.log("agent", "turn.end role=\(role.id) chars=\(displayedText.count) steps=\(journal.steps.count) final=\(sawFinalText)")
                     // Counters/previews in the sidebar's session rows moved.
                     NotificationCenter.default.post(name: .hermesSessionsDidChange, object: nil)

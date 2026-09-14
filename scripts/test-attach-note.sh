@@ -94,6 +94,8 @@ python3 scripts/HermesCatalogPatchContractTest.py "$tmp/gateway-patch-test" .
 
 echo "== Python contract: Hermes connection guide =="
 python3 scripts/HermesConnectionGuideContractTest.py
+echo "== Swift contract: Hermes continuation consent =="
+python3 scripts/HermesLiveTurnContractTest.py
 
 echo "== Swift contract: Ollama compatibility =="
 xcrun swiftc -o "$tmp/ollama-test" \

@@ -57,6 +57,9 @@ struct ChatWindow: View {
         let resolve: @MainActor (AgentApprovalDecision) -> Void
     }
     @State private var pendingAgentApproval: PendingAgentApproval?
+    @State private var continuationChecking: Set<String> = []
+    @State private var continuationUnavailable: Set<String> = []
+    @State private var deferredContinuations: Set<String> = []
     /// Slash autocomplete: keyboard-selected row, and the exact text for
     /// which the popup was dismissed with Esc (typing anything re-arms it).
     @State private var slashSelection = 0
@@ -511,6 +514,63 @@ struct ChatWindow: View {
             })
         }
 
+        if chatStore.conversation.isAgent, currentStreamSlot == nil,
+           let sid = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey),
+           let work = hermesAddon.backgroundWork[sid], !work.isEmpty {
+            var hasher = Hasher()
+            hasher.combine(baseRevision)
+            hasher.combine(Localization.currentLanguage)
+            for item in work {
+                hasher.combine(item.id)
+                hasher.combine(item.count)
+                hasher.combine(item.dispatchedAt)
+            }
+            items.append(TranscriptItem(id: "hermes-background-" + sid, revision: hasher.finalize()) { [palette] in
+                AnyView(HermesBackgroundWorkView(work: work)
+                    .environment(\.themePalette, palette)
+                    .fontDesign(palette.fontDesign)
+                    .frame(width: rowWidth, alignment: .leading))
+            })
+        }
+
+        if let request = currentContinuation {
+            var hasher = Hasher()
+            hasher.combine(baseRevision)
+            hasher.combine(Localization.currentLanguage)
+            hasher.combine(continuationChecking.contains(request.id))
+            hasher.combine(continuationUnavailable.contains(request.id))
+            hasher.combine(deferredContinuations.contains(request.id))
+            let origin = chatStore.conversation
+            items.append(TranscriptItem(id: "hermes-continuation-" + request.id,
+                                        revision: hasher.finalize()) { [palette] in
+                AnyView(Group {
+                    if deferredContinuations.contains(request.id) {
+                        Button(HL("hermes.continuation.reopen")) {
+                            deferredContinuations.remove(request.id)
+                        }
+                        .actionPillStyle(.generic(palette: palette, dark: colorScheme == .dark), glass: palette.isGlass)
+                        .help(HL("hermes.continuation.onceHelp"))
+                    } else {
+                        HermesContinuationCard(
+                            checking: continuationChecking.contains(request.id),
+                            unavailable: continuationUnavailable.contains(request.id),
+                            approve: { continueHermes(request, in: origin, automatic: false) },
+                            approveSession: {
+                                hermesSettings.continuationConsent.setAutomatic(true, scope: request.scope)
+                                continueHermes(request, in: origin, automatic: false)
+                            },
+                            deferRequest: {
+                                hermesSettings.continuationConsent.setAutomatic(false, scope: request.scope)
+                                deferredContinuations.insert(request.id)
+                            })
+                    }
+                }
+                .environment(\.themePalette, palette)
+                .fontDesign(palette.fontDesign)
+                .frame(width: rowWidth, alignment: .leading))
+            })
+        }
+
         if let pending = pendingAgentApproval {
             let approval = pending.approval
             let resolve = pending.resolve
@@ -718,6 +778,12 @@ struct ChatWindow: View {
 
                 // Telegram-style pinned-message bar (agent chats).
                 pinnedMessagesBar
+                if let scope = currentContinuationScope,
+                   hermesSettings.continuationConsent.automaticScopes.contains(scope) {
+                    HermesContinuationModeBar {
+                        hermesSettings.continuationConsent.setAutomatic(false, scope: scope)
+                    }
+                }
 
                 // Chat messages area — AppKit transcript engine
                 // (Views/Transcript/): point row updates, an owned scroll
@@ -742,6 +808,11 @@ struct ChatWindow: View {
                     // Rides this inner view on purpose: the outer chain is at
                     // the type-checker's limit (see RecordingStatusView).
                     .onChange(of: externalTurn) { syncExternalTurnPill() }
+                    .onChange(of: hermesAddon.continuationRequests) { processAutomaticContinuations() }
+                    .onChange(of: hermesAddon.streamActive) { processAutomaticContinuations() }
+                    .onReceive(NotificationCenter.default.publisher(for: .hermesConnectionDidChange)) { _ in
+                        processAutomaticContinuations()
+                    }
 
                     // Floating "jump to latest" button (Telegram-style)
                     if !isNearBottom {
@@ -1940,6 +2011,10 @@ struct ChatWindow: View {
         // run.started.
         let runID = hermesAddon.activeRunID(conversationKey: key) ?? persistedRunID(for: origin)
         guard slot != nil || runID != nil else { return }
+        if let sessionID {
+            let scope = HermesContinuationRequest.scope(endpoint: hermesSettings.endpointURL, sessionID: sessionID)
+            hermesSettings.continuationConsent.setAutomatic(false, scope: scope)
+        }
         stoppingConversations.insert(origin)
         if let slot {
             slot.task?.cancel()
@@ -2219,14 +2294,75 @@ struct ChatWindow: View {
         // between runs; before any step lands there is nothing to keep open.
         let turnID = "external|" + (turn.steps.first?.id
             ?? String(turn.lastRowAt.timeIntervalSince1970))
+        let status = AGL("agent.status.external")
         if livePill.turnID != turnID {
             livePill.begin(turnID: turnID,
-                           status: AGL("agent.status.external"),
+                           status: status,
                            steps: turn.steps)
         } else {
+            livePill.status = status
             livePill.steps = turn.steps
         }
         hasLiveSteps = !turn.steps.isEmpty
+    }
+
+    private var currentContinuationScope: String? {
+        guard chatStore.conversation.isAgent,
+              let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey)
+        else { return nil }
+        return HermesContinuationRequest.scope(endpoint: hermesSettings.endpointURL, sessionID: sessionID)
+    }
+
+    private var currentContinuation: HermesContinuationRequest? {
+        guard chatStore.conversation.isAgent, currentStreamSlot == nil,
+              let sessionID = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey),
+              let request = hermesAddon.continuationRequests[sessionID],
+              request.endpoint == hermesSettings.endpointURL else { return nil }
+        return request
+    }
+
+    private func processAutomaticContinuations() {
+        guard hermesSettings.enabled else { return }
+        for request in hermesAddon.continuationRequests.values
+        where hermesSettings.continuationConsent.allowsAutomatically(request) {
+            // Reuse the existing conversation binding; never create a new session.
+            let candidates = [chatStore.conversation] + hermesAddon.roles.flatMap {
+                [$0.conversationID(sessionID: request.sessionID), $0.conversationID()]
+            }
+            guard let origin = candidates.first(where: {
+                $0.isAgent && hermesSettings.sessionID(forConversationKey: $0.storageKey) == request.sessionID
+            }) else { continue }
+            continueHermes(request, in: origin, automatic: true)
+        }
+    }
+
+    private func continueHermes(_ request: HermesContinuationRequest,
+                                in origin: ChatStore.ConversationID, automatic: Bool) {
+        func available() -> Bool {
+            hermesSettings.enabled && request.endpoint == hermesSettings.endpointURL
+                && hermesSettings.continuationConsent.needsDecision(request)
+                && hermesSettings.sessionID(forConversationKey: origin.storageKey) == request.sessionID
+                && streamSlots[origin] == nil && !shouldHold(origin)
+                && heldSends[origin] == nil
+                && hermesSettings.heldSendIDs(forConversationKey: origin.storageKey).isEmpty
+                && !hermesAddon.isTurnActive(forConversationKey: origin.storageKey)
+                && (!automatic || hermesSettings.continuationConsent.allowsAutomatically(request))
+        }
+        guard available(), continuationChecking.insert(request.id).inserted else { return }
+        continuationUnavailable.remove(request.id)
+        Task { @MainActor in
+            defer { continuationChecking.remove(request.id) }
+            guard await hermesAddon.validateContinuation(request), available() else {
+                if continuationUnavailable.insert(request.id).inserted {
+                    Diagnostics.log("hermes", "continuation.deferred session=\(request.sessionID) automatic=\(automatic)")
+                }
+                return
+            }
+            // Record before opening the socket. A lost response is never
+            // permission to issue another paid turn on the next poll/relaunch.
+            hermesAddon.dismissContinuation(request)
+            post(ChatMessage(text: HL("hermes.continuation.prompt"), isUser: true), in: origin)
+        }
     }
 
     private var externalTurn: HermesLiveTurn? {
@@ -2672,6 +2808,10 @@ struct ChatWindow: View {
             if let route = steerDecision(for: origin, attachments: message.attachments) {
                 performSteer(message, in: origin, route: route, placeBubble: true)
                 return
+            }
+            if let sessionID = hermesSettings.sessionID(forConversationKey: origin.storageKey),
+               let request = hermesAddon.continuationRequests[sessionID] {
+                hermesAddon.dismissContinuation(request)
             }
             place(message, in: origin)
             streamAssistantReply(for: origin, history: [message])

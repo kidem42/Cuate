@@ -10,6 +10,92 @@ func HL(_ key: String) -> String {
 
 enum HermesAddonStrings {
     static let table: [String: [AppLanguage: String]] = [
+        "hermes.background.title": [
+            .english: "Background work · %d subagents",
+            .spanish: "Trabajo en segundo plano · %d subagentes",
+            .russian: "Работа в фоне · сабагентов: %d"
+        ],
+        "hermes.background.waiting": [
+            .english: "Subagents were dispatched. Waiting for their results…",
+            .spanish: "Los subagentes se iniciaron. Esperando sus resultados…",
+            .russian: "Сабагенты запущены. Ожидаю результаты…"
+        ],
+        "hermes.background.unconfirmed": [
+            .english: "No completion report yet. The current status is unconfirmed.",
+            .spanish: "Aún no hay informe final. El estado actual no está confirmado.",
+            .russian: "Отчёт о завершении ещё не получен. Текущий статус не подтверждён."
+        ],
+        // MARK: Session continuation consent
+        "hermes.continuation.title": [
+            .english: "Continue the task?",
+            .spanish: "¿Continuar la tarea?",
+            .russian: "Продолжить задачу?"
+        ],
+        "hermes.continuation.body": [
+            .english: "Background results are ready. Allow the main agent to continue and prepare the answer? A continuation uses your model quota.",
+            .spanish: "Los resultados en segundo plano están listos. ¿Permitir que el agente principal continúe y prepare la respuesta? La continuación consume cuota del modelo.",
+            .russian: "Фоновые результаты получены. Разрешить основному агенту продолжить работу и подготовить ответ? Продолжение расходует квоту модели."
+        ],
+        "hermes.continuation.once": [
+            .english: "Continue",
+            .spanish: "Continuar",
+            .russian: "Продолжить"
+        ],
+        "hermes.continuation.onceHelp": [
+            .english: "Allow one continuation using the results already in this session.",
+            .spanish: "Permitir una continuación con los resultados de esta sesión.",
+            .russian: "Разрешить одно продолжение с результатами, уже полученными в этой сессии."
+        ],
+        "hermes.continuation.session": [
+            .english: "Allow for this session",
+            .spanish: "Permitir en esta sesión",
+            .russian: "Разрешать в этой сессии"
+        ],
+        "hermes.continuation.sessionHelp": [
+            .english: "Automatically approve future background-result continuations in this session only. Tool approvals remain separate.",
+            .spanish: "Aprobar automáticamente futuras continuaciones con resultados en segundo plano solo en esta sesión. Los permisos de herramientas siguen siendo independientes.",
+            .russian: "Автоматически разрешать будущие продолжения после фоновых результатов только в этой сессии. Разрешения на действия инструментов остаются отдельными."
+        ],
+        "hermes.continuation.later": [
+            .english: "Not now",
+            .spanish: "Ahora no",
+            .russian: "Не сейчас"
+        ],
+        "hermes.continuation.laterHelp": [
+            .english: "Keep the results and decide later. No continuation is sent.",
+            .spanish: "Conservar los resultados y decidir más tarde. No se envía una continuación.",
+            .russian: "Сохранить результаты и решить позже. Запрос продолжения не отправляется."
+        ],
+        "hermes.continuation.reopen": [
+            .english: "Results ready — review continuation",
+            .spanish: "Resultados listos — revisar continuación",
+            .russian: "Результаты готовы — разрешить продолжение…"
+        ],
+        "hermes.continuation.enabled": [
+            .english: "Continuations are approved for this session",
+            .spanish: "Continuaciones aprobadas para esta sesión",
+            .russian: "Автопродолжение разрешено в этой сессии"
+        ],
+        "hermes.continuation.disable": [
+            .english: "Ask each time",
+            .spanish: "Preguntar siempre",
+            .russian: "Спрашивать каждый раз"
+        ],
+        "hermes.continuation.disableHelp": [
+            .english: "Revoke automatic continuation approval for this session.",
+            .spanish: "Revocar la aprobación automática de continuaciones para esta sesión.",
+            .russian: "Отозвать авторазрешение продолжений для этой сессии."
+        ],
+        "hermes.continuation.unavailable": [
+            .english: "Continuation has not been sent. The session may be busy or unavailable; you can try again.",
+            .spanish: "No se ha enviado la continuación. La sesión puede estar ocupada o no disponible; puedes intentarlo de nuevo.",
+            .russian: "Продолжение не отправлено. Сессия может быть занята или недоступна; можно повторить попытку."
+        ],
+        "hermes.continuation.prompt": [
+            .english: "Continue the original task using the background results already received in this session and prepare the answer. Do not repeat completed work.",
+            .spanish: "Continúa la tarea original con los resultados en segundo plano ya recibidos en esta sesión y prepara la respuesta. No repitas el trabajo completado.",
+            .russian: "Продолжи исходную задачу с учётом фоновых результатов, уже полученных в этой сессии, и подготовь ответ. Не повторяй завершённую работу."
+        ],
         // MARK: Compact connection guide
         "hermes.guide.prepare.configure": [
             .english: "If Hermes is not configured yet, run setup, choose a provider and model, then sign in or enter the provider API key. If it already replies, skip setup. Telegram is optional. On a dedicated VPS choose the Local terminal backend; Docker needs a shared upload folder.",

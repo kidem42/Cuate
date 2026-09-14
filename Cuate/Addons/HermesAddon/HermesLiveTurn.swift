@@ -21,6 +21,9 @@ struct HermesLiveTurn: Equatable {
         /// so a finished-looking tail is not proof the run is over — growth
         /// is. Weak evidence: it expires the moment growth stops.
         case growth
+        /// Background results arrived, but no subsequent agent work is
+        /// visible yet. This is waiting for a continuation, not proof of one.
+        case awaitingContinuation
     }
 
     /// Steps rebuilt from the transcript tail. May be empty: a turn whose
@@ -49,7 +52,7 @@ enum HermesLiveTurnDetector {
     /// that is the reply. Anything after it — tool results, tool-call shells,
     /// or a user message still awaiting an answer — means work is in flight.
     static func detect(rows: [HermesTranscriptMessage], now: Date = Date()) -> HermesLiveTurn? {
-        guard let newest = rows.last else { return nil }
+        guard !rows.isEmpty else { return nil }
         let lastReply = rows.lastIndex { row in
             row.role == "assistant"
                 && !row.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -60,7 +63,25 @@ enum HermesLiveTurnDetector {
         let lastRowAt = rows.reversed().compactMap(\.timestamp).first ?? now
         guard now.timeIntervalSince(lastRowAt) < staleAfter else { return nil }
         let tailStart = lastReply.map { rows.index(after: $0) } ?? rows.startIndex
-        return HermesLiveTurn(steps: steps(in: rows[tailStart...], now: now), lastRowAt: lastRowAt)
+        let tail = rows[tailStart...]
+        let onlyNotices = tail.allSatisfy {
+            $0.role == "user" && HermesServiceNotice.isNotice($0.content)
+        }
+        return HermesLiveTurn(steps: steps(in: tail, now: now), lastRowAt: lastRowAt,
+                              source: onlyNotices ? .awaitingContinuation : .tail)
+    }
+
+    /// A count increase alone may be a tool result or a service notice.
+    /// Notify only for a new assistant reply at the end of the fetched
+    /// transcript. Never recycle an earlier acknowledgement as its preview.
+    static func completionPreview(rows: [HermesTranscriptMessage], previousCount: Int) -> String? {
+        guard previousCount >= 0, rows.count > previousCount,
+              let last = rows.last, last.role == "assistant",
+              last.toolCallArguments.isEmpty,
+              !HermesServiceNotice.isNotice(last.content),
+              !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return last.content
     }
 
     /// Pairs tool-call shells with their result rows: a call still missing

@@ -127,6 +127,21 @@ final class HermesSettings: ObservableObject {
         didSet { defaults.set(reasoningEffort, forKey: "hermes.reasoningEffort") }
     }
 
+    // Consent is local to this gateway and session, off for every new session.
+    var continuationConsent: HermesContinuationConsent {
+        get {
+            guard let data = defaults.data(forKey: "hermes.continuationConsent"),
+                  let value = try? JSONDecoder().decode(HermesContinuationConsent.self, from: data)
+            else { return HermesContinuationConsent() }
+            return value
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            objectWillChange.send()
+            defaults.set(data, forKey: "hermes.continuationConsent")
+        }
+    }
+
     // MARK: - Active session per role
     //
     // Each gateway session opens as its OWN conversation (streaming

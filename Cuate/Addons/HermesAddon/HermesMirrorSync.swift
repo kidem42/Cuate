@@ -44,6 +44,8 @@ enum HermesMirrorSync {
               let sessionID = HermesSettings.shared.sessionID(forConversationKey: conversationID.storageKey) else {
             return true // nothing to sync yet — not an error
         }
+        let endpoint = HermesSettings.shared.endpointURL
+        let countKey = HermesContinuationRequest.scope(endpoint: endpoint, sessionID: sessionID)
         // Coalesce concurrent triggers: onAppear, panel.show, the history-
         // loaded hook and the 20s poll all fire around the same moments, and
         // the telemetry showed the SAME session fetched 2–3× in parallel
@@ -67,6 +69,7 @@ enum HermesMirrorSync {
             // redundant.
             var gateCount: Int?
             let gateSessions = try? await HermesAddon.shared.transport().sessions(limit: 50)
+            guard HermesSettings.shared.endpointURL == endpoint else { return true }
             if let gateSessions {
                 // Same fetch doubles as the label reconcile: the composer
                 // shows the gateway's ACTUAL session model at launch and on
@@ -77,7 +80,7 @@ enum HermesMirrorSync {
             }
             if let sessions = gateSessions,
                let row = sessions.first(where: { $0.id == sessionID }) {
-                if lastMergedCounts[sessionID] == row.messageCount {
+                if lastMergedCounts[countKey] == row.messageCount {
                     // Proof the transcript did NOT grow — retires a turn that
                     // was only inferred from growth (an interim reply mid-run
                     // looks exactly like a final one).
@@ -89,6 +92,7 @@ enum HermesMirrorSync {
             let clock = ContinuousClock()
             var mark = clock.now
             let rows = try await HermesAddon.shared.transport().messages(sessionID: sessionID)
+            guard HermesSettings.shared.endpointURL == endpoint else { return true }
             let fetchMs = elapsedMs(since: &mark, clock: clock)
             // Is the gateway mid-turn right now? Read off the same fetch —
             // this is what restores the progress pill after a relaunch, and
@@ -103,7 +107,7 @@ enum HermesMirrorSync {
             // The transcript just fetched is at LEAST as fresh as the count
             // read before it — committing the earlier count can only err
             // low, which re-fetches next tick (the safe direction).
-            if let gateCount { lastMergedCounts[sessionID] = gateCount }
+            if let gateCount { lastMergedCounts[countKey] = gateCount }
             // A transcript that mirrors into far fewer bubbles than it holds
             // rows is the signature of rows being dropped wholesale (an old
             // phone-held session came back as two bubbles out of 289 rows —

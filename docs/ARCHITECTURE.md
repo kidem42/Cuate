@@ -495,6 +495,47 @@ same `ChatEvent` stream; the window's loop is unchanged. What differs:
 - the transport is written against `Hermes-API-Fixtures.md`, never against
   prose; capability flags from `/v1/capabilities` gate UI sections.
 
+**Background delegation visibility (macOS).** `HermesBackgroundWork` matches
+persisted `delegate_task` background dispatch IDs to async delivery headers,
+including independent completion units in newer Hermes. This state survives the
+parent's final acknowledgement and is restored from transcript reads. A separate
+service row shows the unresolved child count with the shared `ThinkingEqualizer`;
+it does not turn composer sends into steering or claim a parent run is active.
+After 20 minutes without a delivery (or without a dispatch timestamp), the row
+states that the current status is unconfirmed and pauses animation. The HTTP API
+does not provide a session-scoped child roster: the count represents children
+awaiting their unit's report, not precise live progress. A completed local parent
+refreshes its own transcript before completion notification; other sessions keep
+polling during local streams. No global baseline reseed can swallow their reports.
+
+**Background continuations (macOS).** Stateless Hermes API sessions persist
+background service deliveries without starting another parent turn. Cuate owns
+that next request: `HermesContinuationRequest` detects a service-only suffix,
+independently of the live-turn timeout. `HermesAddon` publishes pending consent
+from mirror/background polling; delivery-only tails do not drive Stop/steer or
+claim that the main agent is working. Background notifications distinguish a
+continuation request from a new terminal assistant answer.
+
+The inline card offers Continue, Allow for this session, and Not now (reopenable).
+`HermesContinuationCard` shares `HermesServiceCardSurface` with service reports,
+uses palette text, and uses the chat's existing compact `actionPillStyle`. Its actions and
+`HermesContinuationModeBar` switch to vertical layout when width is insufficient;
+preflight displays a checking status while actions are disabled. Transcript row
+revision includes the language as well as the inherited theme/scheme/width.
+`HermesContinuationConsent` persists handled row IDs and opt-in automatic approval
+scoped to the endpoint and gateway session, off for every new session. A header
+control revokes it; Stop also revokes it. Tool permissions remain independent.
+`ChatWindow` reuses the existing per-conversation send/stream pipeline, including
+background conversations, usage, errors and manual retry. Before sending it
+rechecks the binding, local work/held sends, known run status and fresh transcript.
+A claimed delivery is recorded before sending, so a lost response is not retried
+automatically. Later real user/assistant/tool activity supersedes the request.
+The gateway lacks an atomic claim-by-delivery API and a session-wide run listing:
+this prevents duplicate Cuate polls, but cannot eliminate a simultaneous send
+from another client between the fresh read and POST. Automatic continuation
+requires Cuate running. The standalone `HermesLiveTurnContractTest.py` covers
+transcript classification and the consent ledger without building the app.
+
 **Gateway compatibility repair.** `HermesGatewayPatch` handles the gateway
 text edits and the known stale catalog import after Hermes split out
 `hermes_cli.models_pricing`: move `_format_price_per_mtok` out of an old

@@ -144,6 +144,22 @@ final class NotificationService: NSObject, ObservableObject, UNUserNotificationC
         post(id: "turn-\(conversationKey)", content: content)
     }
 
+    /// Opens the exact session; it never approves a continuation from a banner.
+    func postContinuationRequest(roleID: String, roleName: String,
+                                 sessionID: String, conversationKey: String) {
+        guard authorized == true, !isConversationOnScreen(conversationKey) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = roleName
+        content.body = HL("hermes.continuation.title")
+        content.userInfo = ["roleID": roleID, "continuationSessionID": sessionID]
+        post(id: "continuation-\(sessionID)", content: content)
+    }
+
+    func revokeContinuation(sessionID: String) {
+        center.removeDeliveredNotifications(withIdentifiers: ["continuation-\(sessionID)"])
+        center.removePendingNotificationRequests(withIdentifiers: ["continuation-\(sessionID)"])
+    }
+
     /// The agent asked the human for permission (dormant on Hermes 0.19.0 —
     /// no mid-run approval frames yet; wired for when they arrive).
     func postApprovalRequest(_ approval: AgentApproval, roleID: String, roleName: String, conversationKey: String) {
@@ -203,9 +219,14 @@ final class NotificationService: NSObject, ObservableObject, UNUserNotificationC
         let userInfo = response.notification.request.content.userInfo
         let roleID = userInfo["roleID"] as? String
         let approvalID = userInfo["approvalID"] as? String
+        let continuationSessionID = userInfo["continuationSessionID"] as? String
         let action = response.actionIdentifier
         let replyText = (response as? UNTextInputNotificationResponse)?.userText
         await MainActor.run {
+            if let roleID, let continuationSessionID,
+               action == UNNotificationDefaultActionIdentifier {
+                HermesSettings.shared.setActiveSession(continuationSessionID, roleID: roleID)
+            }
             NotificationService.shared.handleResponse(
                 action: action, roleID: roleID, approvalID: approvalID, replyText: replyText
             )

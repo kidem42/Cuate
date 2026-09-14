@@ -31,13 +31,7 @@ struct HermesServiceNoticeView: View {
                     .padding(.leading, 14)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
-        )
+        .modifier(HermesServiceCardSurface())
     }
 
     private var headerLine: some View {
@@ -167,5 +161,19 @@ struct HermesServiceNoticeView: View {
                 .padding(.leading, 18)
             }
         }
+    }
+}
+
+/// Shared service chrome for result, progress and continuation cards.
+struct HermesServiceCardSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
+            )
     }
 }

@@ -58,6 +58,7 @@ this file too.
 | ArtifactView / MermaidBlockView / AgentInlineImageView | the artifact card, mermaid, inline images |
 | AttachmentActionsBar / ImageResultActionsBar | the pills under an attachment and under a result |
 | AgentGatewayViews / AgentFileChips / AgentSidebar / AgentTerminalText / HermesSidebarView | the approval card, the step log, the role chip, the file pills, the sidebar (the active session's highlight = `ink` 0.12), terminal text |
+| HermesContinuationCard / HermesContinuationModeBar | shared service-card surface and compact chat action pills, checking/error states, deferred reopen control and session permission bar; narrow widths and all three languages |
 | WorldTimeView (+Theme) | the whole grid, the top bar with the date strip, busy blocks, selection/"now", the `.worldTime` decorations |
 | ThemeGridPicker | the theme thumbnail |
 
@@ -75,3 +76,7 @@ node is resident — see `themedPanelSurface`, never recreate it inside if branc
 - A new element of the scaffolding = every theme automatically; a theme = tokens only.
 - TODO: remove the `default:` from `ThemeDecorations` — it is the only switch over
   themes where the compiler doesn't catch a forgotten one.
+
+Hermes background waiting uses the existing service-card surface and themed
+`ThinkingEqualizer`, paused when offscreen or status is unconfirmed. Check pending,
+partial delivery, stale waiting, and continuation transitions in every theme.

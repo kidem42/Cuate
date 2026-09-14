@@ -368,3 +368,24 @@ will pick it up, and then an "STT/TTS on the agent's side" toggle becomes possib
 - [ ] `/v1/runs` + `/v1/runs/{id}/events` as an alternative channel (stop/approve are tied to run_id;
       run_id already arrives in every session-stream frame — stop should work as is).
 - [ ] What turns `jobs_admin`/`admin_config_rw` on for the server (env flags?) — for the "Jobs" section.
+
+
+## Background delegation lifecycle (verified 2026-09-14)
+
+Checked official Hermes source at `14efb46089` (local 0.21.3) and the deployed
+2026.9.7 transcript shape. `tools/delegate_tool_dispatch.py::_dispatched_payload`
+returns a `delegate_task` tool row with `status: dispatched`, `mode: background`,
+`count`, and `delegation_id`. Newer multi-unit dispatches also contain `units`,
+each with its own `delegation_id` and `task_indexes`. Match completion IDs per
+unit, not against the root handle. `tools/process_registry_notifications.py`
+formats user-role `[ASYNC DELEGATION BATCH COMPLETE — deleg_…]` or
+`[ASYNC DELEGATION COMPLETE — deleg_…]` reports. A parent's final acknowledgement
+is not a child completion. These are exercised by `HermesLiveTurnContractTest.py`.
+
+`gateway/platforms/api_server.py::_http_route_table` exposes session messages,
+but no session-scoped subagent roster. `subagent.list` belongs to the separate
+TUI gateway RPC (`tui_gateway/methods_subagents.py`); it is not an HTTP endpoint.
+The upstream desktop client also tracks background state separately from parent
+busy state (`apps/desktop/src/store/background-delegation.ts`). Cuate derives
+pending delivery state from persisted messages and uses the existing continuation
+consent flow after delivery; no Hermes dispatcher modification is needed.

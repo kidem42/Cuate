@@ -239,6 +239,64 @@ final class HermesAddon: ObservableObject {
     /// puts the progress pill back after a relaunch — our own slots die with
     /// the process, the gateway's run does not.
     @Published private(set) var liveTurns: [String: HermesLiveTurn] = [:]
+    @Published private(set) var continuationRequests: [String: HermesContinuationRequest] = [:]
+    @Published private(set) var backgroundWork: [String: [HermesBackgroundWork]] = [:]
+
+    func awaitsBackgroundResult(conversationKey: String) -> Bool {
+        guard let sid = settings.sessionID(forConversationKey: conversationKey) else { return false }
+        return !(backgroundWork[sid] ?? []).isEmpty || continuationRequests[sid] != nil
+    }
+
+    /// Read the completed parent's transcript before declaring its task done.
+    /// The async dispatch is a tool result, absent from its short final text.
+    func refreshBackgroundWork(conversationKey: String) async {
+        let endpoint = settings.endpointURL
+        guard let sid = settings.sessionID(forConversationKey: conversationKey),
+              let rows = try? await transport().messages(sessionID: sid),
+              !Task.isCancelled, endpoint == settings.endpointURL,
+              settings.sessionID(forConversationKey: conversationKey) == sid else { return }
+        noteLiveTurn(HermesLiveTurnDetector.detect(rows: rows), rows: rows, sessionID: sid)
+        lastSeenCounts[sid] = rows.count
+    }
+
+    private var continuationChecks: Set<String> = []
+
+    func dismissContinuation(_ request: HermesContinuationRequest) {
+        settings.continuationConsent.handle(request)
+        Diagnostics.log("hermes", "continuation.claim session=\(request.sessionID) rows=\(request.rowIDs.count)")
+        NotificationService.shared.revokeContinuation(sessionID: request.sessionID)
+        if continuationRequests[request.sessionID] == request {
+            continuationRequests.removeValue(forKey: request.sessionID)
+        }
+    }
+
+    /// Re-read before sending: another client may already have continued.
+    /// A reservation coalesces clicks/polls while that read is in flight.
+    func validateContinuation(_ request: HermesContinuationRequest) async -> Bool {
+        guard request.endpoint == settings.endpointURL, settings.enabled,
+              settings.continuationConsent.needsDecision(request),
+              continuationChecks.insert(request.id).inserted else { return false }
+        defer { continuationChecks.remove(request.id) }
+        let keys = settings.sessionMap.filter { $0.value == request.sessionID }.map(\.key)
+        guard !keys.contains(where: { isTurnActive(forConversationKey: $0) }) else { return false }
+        let client = transport()
+        if let runID = settings.activeRun(forSession: request.sessionID) {
+            switch await client.runProbe(runID: runID) {
+            case .known(let state):
+                guard ["completed", "failed", "cancelled", "canceled"].contains(state.status),
+                      state.pendingSteer == nil else { return false }
+            case .gone: break
+            case .unreachable: return false
+            }
+        }
+        guard let rows = try? await client.messages(sessionID: request.sessionID),
+              request.endpoint == settings.endpointURL else { return false }
+        noteLiveTurn(HermesLiveTurnDetector.detect(rows: rows), rows: rows, sessionID: request.sessionID)
+        return continuationRequests[request.sessionID] == request
+            && settings.continuationConsent.needsDecision(request)
+            && !keys.contains(where: { isTurnActive(forConversationKey: $0) })
+    }
+
 
     /// Publishes (or retires) the turn detected in a freshly fetched
     /// transcript. Equality-gated: an unchanged turn must not invalidate the
@@ -253,6 +311,33 @@ final class HermesAddon: ObservableObject {
     private static let growthHold: TimeInterval = 5 * 60
 
     func noteLiveTurn(_ detected: HermesLiveTurn?, rows: [HermesTranscriptMessage], sessionID: String) {
+        let work = HermesBackgroundWork.detect(rows: rows)
+        if (backgroundWork[sessionID] ?? []) != work {
+            backgroundWork[sessionID] = work.isEmpty ? nil : work
+            Diagnostics.log("hermes", "background.pending session=\(sessionID) groups=\(work.count) children=\(work.reduce(0) { $0 + $1.count })")
+        }
+        let request = HermesContinuationRequest.detect(rows: rows, endpoint: settings.endpointURL,
+                                                        sessionID: sessionID)
+        let pending = request.flatMap { settings.continuationConsent.needsDecision($0) ? $0 : nil }
+        if continuationRequests[sessionID] != pending {
+            continuationRequests[sessionID] = pending
+            Diagnostics.log("hermes", "continuation.pending session=\(sessionID) rows=\(pending?.rowIDs.count ?? 0)")
+            if let pending, !settings.continuationConsent.allowsAutomatically(pending),
+               let role = roles.first,
+               let key = settings.sessionMap.first(where: { $0.value == sessionID })?.key {
+                NotificationService.shared.postContinuationRequest(roleID: role.id, roleName: role.displayName,
+                    sessionID: sessionID, conversationKey: key)
+            } else if pending == nil {
+                NotificationService.shared.revokeContinuation(sessionID: sessionID)
+            }
+        }
+        // A delivery is waiting for consent, not running. Keep it out of
+        // Stop/steer and held-send recovery even if it is old or dismissed.
+        if request != nil {
+            settings.setLiveTurnRowCount(rows.count, forSession: sessionID)
+            apply(nil, sessionID: sessionID)
+            return
+        }
         let previous = settings.liveTurnRowCount(forSession: sessionID)
         settings.setLiveTurnRowCount(rows.count, forSession: sessionID)
 
@@ -288,11 +373,12 @@ final class HermesAddon: ObservableObject {
     }
 
     /// Called when the count gate proved the transcript did NOT grow (no
-    /// rows were fetched). Same coasting rule as above; tail-detected turns
-    /// are untouched — they expire by staleness.
+    /// rows were fetched). Apply staleness here too, so the count gate
+    /// cannot leave an expired waiting/work indicator published indefinitely.
     func noteNoGrowth(sessionID: String) {
-        guard let turn = liveTurns[sessionID], turn.source == .growth,
-              Date().timeIntervalSince(turn.lastRowAt) >= Self.growthHold else { return }
+        guard let turn = liveTurns[sessionID] else { return }
+        let limit = turn.source == .growth ? Self.growthHold : HermesLiveTurnDetector.staleAfter
+        guard Date().timeIntervalSince(turn.lastRowAt) >= limit else { return }
         apply(nil, sessionID: sessionID)
     }
 
@@ -361,6 +447,7 @@ final class HermesAddon: ObservableObject {
     private var pollTask: Task<Void, Never>?
     /// sessionID → message_count at the last look (baseline seeded silently).
     private var lastSeenCounts: [String: Int] = [:]
+    private var lastPollEndpoint: String?
 
     /// sessionID → unread VISIBLE messages (sidebar badge). The gateway's
     /// message_count includes tool rows — see `unreadCount(for:)`.
@@ -566,7 +653,7 @@ final class HermesAddon: ObservableObject {
         pollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
-                guard let self, self.isAvailable, !self.streamActive else { continue }
+                guard let self, self.isAvailable else { continue }
                 // Self-heal: a gateway restart / dropped VPN / early keyless
                 // 401 must not park the chip on red forever — re-probe until
                 // green, then watch sessions.
@@ -576,15 +663,6 @@ final class HermesAddon: ObservableObject {
                 guard self.connectionState == .connected else { continue }
                 await self.pollBoundSessions()
             }
-        }
-    }
-
-    /// Re-seeds the activity baseline after OUR OWN turn — its message-count
-    /// growth must not come back as an "outside activity" banner.
-    func reseedPollBaseline() async {
-        guard let sessions = try? await transport().sessions(limit: 50) else { return }
-        for session in sessions {
-            lastSeenCounts[session.id] = session.messageCount
         }
     }
 
@@ -757,7 +835,15 @@ final class HermesAddon: ObservableObject {
     }
 
     private func pollBoundSessions() async {
-        guard let sessions = try? await transport().sessions(limit: 50) else { return }
+        let endpoint = settings.endpointURL
+        if lastPollEndpoint != endpoint {
+            lastSeenCounts.removeAll()
+            continuationRequests.removeAll()
+            backgroundWork.removeAll()
+            lastPollEndpoint = endpoint
+        }
+        guard let sessions = try? await transport().sessions(limit: 50),
+              settings.endpointURL == endpoint else { return }
         // A session appeared or vanished on ANOTHER surface (their app,
         // CLI, Telegram) — the sidebar list must learn without a reopen.
         let ids = Set(sessions.map(\.id))
@@ -769,23 +855,29 @@ final class HermesAddon: ObservableObject {
         let bindings = settings.sessionMap // [conversationKey: sessionID]
         for session in sessions {
             let previous = lastSeenCounts[session.id]
-            lastSeenCounts[session.id] = session.messageCount
-            // First sighting seeds the baseline silently.
-            guard let previous, session.messageCount > previous else { continue }
+            // The first fetch also restores pending consent after a relaunch.
+            guard previous.map({ session.messageCount > $0 }) ?? true else { continue }
             guard let conversationKey = bindings.first(where: { $0.value == session.id })?.key,
-                  let role = roles.first else { continue }
-            // Preview: the newest assistant text from the transcript tail.
-            // (session.preview alone echoed the TITLE — a1b384d; the full
-            // fetch stays until the parse moves off the main actor.)
-            var preview = session.preview ?? ""
+                  let role = roles.first else {
+                lastSeenCounts[session.id] = session.messageCount
+                continue
+            }
+            guard !isTurnActive(forConversationKey: conversationKey) else { continue }
+            // Growth can be only a background report. A completion needs a
+            // new assistant reply; a failed fetch cannot establish that.
+            var preview: String?
             let previewStart = ContinuousClock.now
             if let rows = try? await transport().messages(sessionID: session.id) {
+                guard settings.endpointURL == endpoint else { return }
+                guard settings.sessionID(forConversationKey: conversationKey) == session.id,
+                      !isTurnActive(forConversationKey: conversationKey) else { continue }
+                lastSeenCounts[session.id] = session.messageCount
                 // Same fetch also answers "is this session working right
                 // now" for every bound session, not just the open one.
                 noteLiveTurn(HermesLiveTurnDetector.detect(rows: rows),
                              rows: rows, sessionID: session.id)
-                if let lastReply = rows.last(where: { $0.role == "assistant" && !$0.content.isEmpty }) {
-                    preview = lastReply.content
+                if (backgroundWork[session.id] ?? []).isEmpty {
+                    preview = HermesLiveTurnDetector.completionPreview(rows: rows, previousCount: previous ?? rows.count)
                 }
                 let elapsed = previewStart.duration(to: .now)
                 let ms = Int(elapsed.components.seconds) * 1000
@@ -794,15 +886,16 @@ final class HermesAddon: ObservableObject {
                     Diagnostics.log("hermes", "poll.preview session=\(session.id) rows=\(rows.count) ms=\(ms)")
                 }
             }
-            NotificationService.shared.postTurnCompleted(
-                roleID: role.id, roleName: role.displayName,
-                preview: preview, conversationKey: conversationKey
-            )
-            // The on-screen conversation refreshes through its own poll; a
-            // hidden one syncs on the next summon. Nudge listeners anyway so
-            // an open transcript updates promptly.
-            NotificationCenter.default.post(name: .hermesConnectionDidChange, object: nil)
+            if let preview {
+                NotificationService.shared.postTurnCompleted(
+                    roleID: role.id, roleName: role.displayName,
+                    preview: preview, conversationKey: conversationKey
+                )
+            }
         }
+        // Also retry consent preflights that were blocked by a busy run or
+        // unreachable gateway, even when the transcript count stayed flat.
+        NotificationCenter.default.post(name: .hermesConnectionDidChange, object: nil)
     }
 
     // MARK: - Sessions per conversation
