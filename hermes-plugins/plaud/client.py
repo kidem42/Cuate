@@ -19,6 +19,9 @@ without a fresh approval.
 from __future__ import annotations
 
 import json
+import http.client
+import ipaddress
+import socket
 import os
 import pathlib
 import threading
@@ -303,19 +306,58 @@ def resolve_content(item: Dict[str, Any]) -> Optional[str]:
     link = item.get("data_link")
     if not isinstance(link, str) or not link:
         return None
-    # The link arrives inside an API payload, and `urlopen` happily opens
-    # `file://` — a malformed or hostile response would otherwise make the
-    # plugin read the agent host's disk and hand it to the model. Plaud
-    # presigns over HTTPS only; anything else is not a content link.
-    if urllib.parse.urlparse(link).scheme != "https":
-        return None
     try:
+        parsed = urllib.parse.urlsplit(link)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or parsed.port not in (None, 443)):
+            return None
+        try:
+            ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            pass
+        else:
+            return None
+        addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
+        if not addresses or any(not _public_address(entry[4][0]) for entry in addresses):
+            return None
         content_request = urllib.request.Request(link)
         content_request.add_header("User-Agent", USER_AGENT)
-        with urllib.request.urlopen(content_request, timeout=CONTENT_TIMEOUT) as response:
-            return response.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, ValueError):
+        # A dedicated opener carries no cookies, bearer or redirect handler.
+        opener = urllib.request.build_opener(_NoContentRedirect())
+        deadline = time.monotonic() + CONTENT_TIMEOUT
+        with opener.open(content_request, timeout=CONTENT_TIMEOUT) as response:
+            if response.status != 200:
+                return None
+            length = response.headers.get("Content-Length")
+            if length and int(length) > MAX_CONTENT_BYTES:
+                return None
+            chunks, received = [], 0
+            while True:
+                if time.monotonic() >= deadline:
+                    return None
+                chunk = response.read1(min(65536, MAX_CONTENT_BYTES + 1 - received))
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > MAX_CONTENT_BYTES:
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8")
+    except (OSError, ValueError, http.client.HTTPException, urllib.error.URLError):
         return None
+
+
+MAX_CONTENT_BYTES = 20 * 1024 * 1024
+
+
+class _NoContentRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _public_address(value):
+    address = ipaddress.ip_address(value)
+    return address.is_global and not address.is_multicast and not address.is_reserved
 
 
 def is_unprocessed(file_obj: Dict[str, Any]) -> bool:

@@ -119,6 +119,12 @@ enum PlaudAddonStrings {
             .spanish: "Transcripción (limpia)",
             .russian: "Транскрипт (чистовой)"
         ],
+        "plaud.preview.mark": [.english: "Mark", .spanish: "Marca", .russian: "Отметка"],
+        "plaud.preview.markImage": [.english: "Photo", .spanish: "Foto", .russian: "Фото"],
+        "plaud.preview.markNoText": [.english: "Marked moment", .spanish: "Momento marcado", .russian: "Отмеченный момент"],
+        "plaud.preview.marksEmpty": [.english: "No marked moments in this recording.", .spanish: "No hay momentos marcados en esta grabación.", .russian: "В этой записи нет отмеченных моментов."],
+        "plaud.preview.marksUnavailable": [.english: "These marks could not be displayed. Open the recording in Plaud.", .spanish: "No se pudieron mostrar estas marcas. Abre la grabación en Plaud.", .russian: "Не удалось отобразить отметки. Откройте запись в Plaud."],
+        "plaud.preview.marksTab": [.english: "Device marks", .spanish: "Marcas del dispositivo", .russian: "Отметки диктофона"],
         "plaud.preview.outlineTab": [.english: "Outline", .spanish: "Esquema", .russian: "Оглавление"],
         "plaud.preview.audio": [.english: "Play audio", .spanish: "Reproducir audio", .russian: "Воспроизвести аудио"],
         "plaud.preview.audioPending": [

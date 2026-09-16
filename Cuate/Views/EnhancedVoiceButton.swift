@@ -2,15 +2,14 @@ import Combine
 import SwiftUI
 
 struct EnhancedVoiceButton: View {
+    @ObservedObject private var settings = AppSettings.shared
     @Binding var isRecording: Bool
     let startRecording: () -> Void
     let stopRecording: () -> Void
     let cancelRecording: () -> Void
 
     @State private var isPulsing = false
-    // No STT provider has an API key: the mic can't do anything, so it shows
-    // a badge and explains itself in a popover instead of failing on tap.
-    // Self-contained: checks on appear and re-checks on every key change.
+    // Missing STT configuration (a cloud key or a usable local audio model).
     @State private var sttKeyMissing = false
     @State private var showKeyPopover = false
     @Environment(\.themePalette) private var palette
@@ -37,6 +36,7 @@ struct EnhancedVoiceButton: View {
                 startPulse()
             }
         }
+        .onChange(of: settings.transcriptionAvailable) { _, _ in refreshKeyPresence() }
         // Cache-only check: a cold APIKeyStore cache reports "no key" and warms
         // in the background, then republishes — this re-check picks it up.
         // The notification can arrive off-main (warm/repair path).
@@ -126,14 +126,16 @@ struct EnhancedVoiceButton: View {
                     .frame(width: 230, alignment: .leading)
                 Button(L("voice.noKey.open")) {
                     showKeyPopover = false
+                    SettingsView.pendingTab = .voice
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
                     // Posted after the window request so the deep link lands on
                     // a Settings window that already exists (the gear pattern).
                     DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: .revealSpeechKeySection, object: nil)
+                        NotificationCenter.default.post(name: .selectSettingsTab, object: SettingsTab.voice.rawValue)
                     }
                 }
                 .controlSize(.small)
+                .help(L("voice.providerHelp"))
             }
             .padding(12)
         }
@@ -172,7 +174,7 @@ struct EnhancedVoiceButton: View {
     }
 
     private func refreshKeyPresence() {
-        sttKeyMissing = !STTProviderID.allCases.contains { $0.hasKey }
+        sttKeyMissing = !settings.transcriptionAvailable
     }
 
     private func startPulse() {

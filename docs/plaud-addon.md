@@ -8,8 +8,8 @@ app's side.
 
 ## The protocol (verified against a live account, 2026-07-28)
 
-The official `@plaud-ai/mcp` package is NOT an MCP proxy but a thin REST
-client. We reproduce it directly in Swift, without Node:
+The local tools in the official `@plaud-ai/mcp` package use a thin REST
+client. We reproduce those reads directly in Swift, without Node:
 
 - **API**: `https://platform.plaud.ai/developer/api`
   - `GET /open/third-party/users/current` — the profile
@@ -58,15 +58,26 @@ grant was dead, and nothing but a new browser sign-in can bring it back.
 
 - `note_list[]` — the summary tabs: `data_type` (`auto_sum_note`, `high_light`, …),
   `data_tab_name` ("Summary", "Highlights"), Markdown content.
-- `source_list[]` — three blocks, each of which may or may not be present
-  (checked against `@plaud-ai/mcp@0.3.7`, 2026-08-05): `transaction` — the
+- `source_list[]` — optional blocks (source comparison against
+  `@plaud-ai/mcp@0.3.12`, 2026-09-15): `transaction` — the
   verbatim transcript (a JSON array of `{start_time, end_time, content, speaker,
   original_speaker}` segments, in ms), `transaction_polish` — the same format
   but with the speech cleaned up by AI (about a quarter shorter), `outline` — a
   structural overview (it may arrive as prose rather than segments). Our
   `PlaudSourceBlock` holds their slugs, the tab order and the names for the
   model (`verbatim`/`clean`/`outline`); the `transaction` slug is `transcript`
-  for compatibility with the old cache.
+  for compatibility with the old cache. `mark_memo` contains device-button
+  marks (`version=marks`, cache slug `device-marks`). These are not speech
+  segments: their complete payload remains available to the model and in the
+  raw cache. The preview renders `mark_content` as readable text, `timestamp`
+  (milliseconds) through the same seek/play button as transcript rows, and
+  `picture_link` through the existing image cache and note Markdown renderer.
+  Transcript and mark rows share their list layout, padding and timecode style;
+  no custom URL scheme is needed. Internal IDs/types never appear in the preview.
+  Legacy indented-JSON caches are converted on read, including offline. Empty
+  or malformed marks show a localized message. The existing `high_light`
+  summary tab remains separate. Field names were checked against an actual
+  cached mark on 2026-09-15; tests use synthetic content only.
 - ⚠️ **Trap**: an empty `data_content` means the content is behind `data_link` —
   a presigned S3 URL that lives **~5 minutes**. The rule: `content =
   data_content || fetch(data_link)`, fetched in the same call, and the links are
@@ -90,6 +101,8 @@ grant was dead, and nothing but a new browser sign-in can bring it back.
 | `PlaudClient.swift` | actor: OAuth (PKCE, loopback callback, cancellation), REST, `data_link` resolution |
 | `PlaudAddon.swift` | singleton: connect/disconnect, `isAvailable`, deep link |
 | `PlaudToolService.swift` | the model's tools + chips + prompt hints (the CalendarToolService pattern) |
+| `PlaudReadContract.swift` | calendar dates, scan coverage, content-bound text cursors, recording-data delimiters |
+| `PlaudContentFetch.swift` | bounded unauthenticated downloads of note/source text |
 | `PlaudNoteCache.swift` | disk cache + `PlaudFormat` (durations, timecodes, transcript markdown) |
 | `PlaudNotePreview.swift` | the preview window: tabs, transcript with clickable timecodes, AVPlayer + Now Playing |
 | `PlaudChipView.swift` | the chip in the bubble + `PlaudBadge` (a black glyph on a white plate — the original livery) |
@@ -98,16 +111,38 @@ grant was dead, and nothing but a new browser sign-in can bring it back.
 
 ### The model's tools
 
-- `plaud_find(query?, date_from?, date_to?, limit?)` — there are no server-side
-  filters: with filters it paginates up to 5×100 and filters on the client (as
-  the official MCP does).
+- `plaud_find(query?, date_from?, date_to?, limit?, timezone?)` — filters run
+  locally over up to 5×100 records. Dates are validated calendar days in the
+  specified IANA timezone (default: the Mac); API timestamps without an offset
+  are interpreted as UTC. Results report scan coverage, including an empty
+  search of an incomplete library and records excluded for unreadable dates.
+  `limit` applies with or without filters (default 20, maximum 100).
 - `plaud_get_note(file_id, tab?)` — all tabs (or one), Markdown.
-- `plaud_get_transcript(file_id, version?, from_min?, to_min?)` —
-  `[MM:SS] Speaker: …`, sliced by minutes, capped at 60k characters. `version`:
-  `verbatim` (the default, word for word — for quotes and "who exactly said"),
-  `clean` (AI-cleaned, shorter — for retellings and long recordings), `outline`.
-  A missing version is not an "empty recording": the answer lists what is
-  available.
+- `plaud_get_transcript(file_id, version?, from_min?, to_min?, cursor?, page_chars?)`
+  selects `verbatim` (default), `clean`, `outline` or `marks`. Missing blocks
+  are reported separately from an unprocessed recording. Minute ranges still
+  work for timestamped speech/outline segments, including fractional minutes;
+  marks and prose reject ranges rather than silently ignoring them.
+  The response contains a recording header and JSON with `text`, `offset`,
+  `total_characters`, and `next_cursor`. Concatenate text pages until the cursor
+  is null. `page_chars` defaults to 12,000 (1–60,000); a page can split a speech
+  turn or a JSON mark. This character budget also bounds unusually long single
+  utterances and prose blocks, unlike upstream's item-count pagination.
+  Cursors bind to the selected recording, version, range and rendered content;
+  changed data requires restarting. Cursors are local to the implementation,
+  not interchangeable with upstream MCP or the other client. The preview cache
+  always receives the full block, never just the model's page.
+
+Tool results delimit recording data with a fresh random boundary and instruct
+models to treat it as data, not instructions. This is model guidance, not an
+execution sandbox. `PlaudContentFetch` bounds downloaded `data_link` text at
+20 MiB, uses a dedicated ephemeral session with no cookies or credentials,
+requires HTTPS, and refuses redirects, URL userinfo, nonstandard ports and
+literal IP hosts. DNS preflight rejects private/reserved addresses; it does
+not pin DNS to the transport connection (the same limitation as upstream).
+The native request/resource timeout is 30 seconds. Image and audio playback
+continue through their existing paths; this helper applies to note/source text.
+
 
 The prompt hint: note first, transcript only if the summary wasn't enough;
 unprocessed ones go on a separate line; what is found is attached as cards — so
@@ -120,15 +155,15 @@ the model can do tools, and (`alwaysAvailable` OR the message starts with
 - A chip is a `ChatAttachment` with its metadata **in the file path**
   (`PlaudNotes/<fileID>__<kind>__meta.json`; kind: note|unprocessed; the old
   per-tab `.md` paths from the first build are recognized too) — the SwiftData
-  schema never changed. One chip per recording per turn; `plaud_find` produces
-  chips too (an "everything about X" list is clickable without reading the
-  notes).
+  schema never changed. One chip per recording per turn; find results become
+  cards through the model's `plaud://` references without requiring note reads.
 - Delivery: the tool collects the chips → ChatService sends an
   `.attachments([ChatAttachment])` event → ChatWindow buffers until `deliver`
   (there is no bubble yet at tool time) with dedup by path.
 - The preview (`PlaudNotePreview`): opens from cache instantly plus a background
   live refresh of the whole recording (all tabs + transcript). The transcript is
-  always the leftmost tab; by default the first note tab is selected. Audio: an
+  blocks lead in clean/verbatim/outline/marks order; by default the first note
+  tab is selected. Audio: an
   AVPlayer streaming from the presigned URL (fresh for each session), Now
   Playing (media keys, seeking), clicking a segment's timecode is seek+play;
   playback stops when the window closes (the window is retained — we listen to
@@ -164,16 +199,25 @@ grant 60 days after the sign-in, asking for a new one.
 ## Legal and brand
 
 The approach is the user's personal access to their own data through Plaud's
-public API (the same mechanism their MCP server offers to desktop assistants); the wording is
+personal-account endpoints (the same mechanism their MCP tools use); the wording is
 "works with Plaud", with no implied partnership. The badge is the brand "Λ·"
 glyph in the original livery (black on white); the glyph was cut out of the
 wordmark (the favicon is opaque — template rendering produced a white square).
 The attribution lives in THIRD-PARTY-NOTICES.md.
+
+## Verification
+
+`scripts/PlaudReadContractTest.swift` exercises the actual native tool service,
+cache, read helpers and download policy with stubbed host dependencies and
+URLProtocol responses. `hermes-plugins/plaud/tests/` covers the Python twin,
+including the Hermes registration seam, dates, cursors, block selection and
+bounded downloads. Neither suite launches Cuate or accesses a Plaud account.
 
 ## Left out / what's next
 
 - **Semantic search** — the API only offers a substring match on names; a local
   summary index (NLEmbedding) is a separate phase.
 - **Mind maps** — the format has never shown up in the API; check on a real note.
-- Write operations (starting processing, speakers) — waiting for Plaud to ship a
-  write API.
+- Folder/tag listing is not exposed in the current official MCP contract.
+- Write operations (processing, speakers) are not available through this
+  personal-account integration. Plaud Embedded is a separate product and grant.

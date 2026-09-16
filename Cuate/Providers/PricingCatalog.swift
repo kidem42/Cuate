@@ -67,7 +67,8 @@ nonisolated enum PricingCatalog {
     static let sttPerMinute: [STTProviderID: Double] = [
         .mistral: 0.001,   // Voxtral mini transcribe
         .openai: 0.006,    // gpt-4o-transcribe
-        .deepgram: 0.0043  // Nova-3 pay-as-you-go
+        .deepgram: 0.0043, // Nova-3 pay-as-you-go
+        .ollama: 0        // locally executed audio model
     ]
     /// Live-streaming STT is priced separately from prerecorded — dictation's
     /// streaming mode records its spend with these (model tagged "(stream)").

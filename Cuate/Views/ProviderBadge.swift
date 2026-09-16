@@ -75,6 +75,7 @@ struct STTProviderLogo: View {
     var size: CGFloat = 16
 
     var body: some View {
-        ProviderGlyph(name: provider.rawValue, fallbackLetter: String(provider.displayName.prefix(1)), size: size)
+        ProviderGlyph(name: provider.rawValue, fallbackLetter: String(provider.displayName.prefix(1)), size: size,
+                      systemFallback: provider == .ollama ? "cpu" : nil)
     }
 }

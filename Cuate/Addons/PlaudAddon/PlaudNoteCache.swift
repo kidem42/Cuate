@@ -106,6 +106,12 @@ nonisolated enum PlaudNoteCache {
         }
     }
 
+    static func writeMarks(fileID: String, raw: String, markdown: String) {
+        let block = PlaudSourceBlock.marks
+        write(raw, relative: segmentsRelativePath(fileID: fileID, slug: block.slug))
+        writeTab(fileID: fileID, tabName: block.title, content: markdown, slug: block.slug)
+    }
+
     /// Merge-updates the recording's meta file (creating it when absent).
     static func updateMeta(
         fileID: String, name: String? = nil, day: String? = nil, duration: String? = nil,
@@ -145,12 +151,13 @@ nonisolated enum PlaudNoteCache {
 /// The blocks a recording's `source_list` can carry. `transaction` is the raw
 /// transcript (verbatim, the one to quote from), `transaction_polish` the same
 /// utterances cleaned up by Plaud's AI — shorter and far easier to read —
-/// and `outline` a structured overview. Plaud fills them per recording: a
-/// given file may have one, all three, or (unprocessed) none.
+/// `outline` a structured overview, and `mark_memo` the device-button marks.
+/// Each block is optional; marks have their own payload shape.
 nonisolated enum PlaudSourceBlock: String, CaseIterable {
     case transaction
     case transactionPolish = "transaction_polish"
     case outline
+    case marks = "mark_memo"
 
     /// Cache slug. `transaction` keeps the historical `transcript` so files
     /// written by earlier builds stay readable.
@@ -159,6 +166,7 @@ nonisolated enum PlaudSourceBlock: String, CaseIterable {
         case .transaction: return "transcript"
         case .transactionPolish: return "transcript-polish"
         case .outline: return "outline"
+        case .marks: return "device-marks"
         }
     }
 
@@ -167,12 +175,13 @@ nonisolated enum PlaudSourceBlock: String, CaseIterable {
         case .transaction: return PLL("plaud.preview.transcriptTab")
         case .transactionPolish: return PLL("plaud.preview.polishTab")
         case .outline: return PLL("plaud.preview.outlineTab")
+        case .marks: return PLL("plaud.preview.marksTab")
         }
     }
 
     /// Left-to-right tab order in the preview: the readable transcript first,
-    /// the verbatim one next to it, the overview last. Note tabs follow.
-    static let displayOrder: [PlaudSourceBlock] = [.transactionPolish, .transaction, .outline]
+    /// the verbatim one next, then overview and device marks. Note tabs follow.
+    static let displayOrder: [PlaudSourceBlock] = [.transactionPolish, .transaction, .outline, .marks]
 
     static func from(slug: String) -> PlaudSourceBlock? {
         allCases.first { $0.slug == slug }
@@ -185,6 +194,7 @@ nonisolated enum PlaudSourceBlock: String, CaseIterable {
         case .transaction: return "verbatim"
         case .transactionPolish: return "clean"
         case .outline: return "outline"
+        case .marks: return "marks"
         }
     }
 

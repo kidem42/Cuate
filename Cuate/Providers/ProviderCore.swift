@@ -225,6 +225,11 @@ struct ModelInfo: Codable, Equatable {
     /// to the model as is. Optional so caches written before 4.17 decode.
     var supportsFiles: Bool?
     var supportedParameters: [String] = []
+    /// Native Ollama cloud routing; nil in older caches until refreshed.
+    var ollamaRemote: Bool?
+    var supportsOllamaTranscription: Bool {
+        OllamaCompatibility.supportsTranscription(capabilities: supportedParameters, remote: ollamaRemote)
+    }
     /// USD per ONE token (OpenRouter reports prices in that unit), captured
     /// from the catalog so aggregator models get exact per-model pricing.
     /// nil for catalogs that don't carry prices (or older cached entries).
@@ -263,6 +268,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
     case mistral
     case openai
     case deepgram
+    case ollama
 
     var id: String { rawValue }
 
@@ -271,6 +277,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return "Mistral (Voxtral)"
         case .openai: return "OpenAI"
         case .deepgram: return "Deepgram"
+        case .ollama: return "Ollama"
         }
     }
 
@@ -279,6 +286,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return "voxtral-mini-latest"
         case .openai: return "gpt-4o-transcribe"
         case .deepgram: return "nova-3"
+        case .ollama: return ""
         }
     }
 
@@ -291,6 +299,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return APIKeyStore.hasKey(for: .mistral)
         case .openai: return APIKeyStore.hasKey(for: .openai)
         case .deepgram: return APIKeyStore.hasKey(aux: .deepgram)
+        case .ollama: return false // local availability is not key presence
         }
     }
 
@@ -299,6 +308,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return APIKeyStore.key(for: .mistral)
         case .openai: return APIKeyStore.key(for: .openai)
         case .deepgram: return APIKeyStore.key(aux: .deepgram)
+        case .ollama: return nil
         }
     }
 
@@ -308,6 +318,7 @@ enum STTProviderID: String, CaseIterable, Codable, Identifiable {
         case .mistral: return ProviderID.mistral.apiKeyURL
         case .openai: return ProviderID.openai.apiKeyURL
         case .deepgram: return URL(string: "https://console.deepgram.com/")!
+        case .ollama: return ProviderID.ollama.apiKeyURL
         }
     }
 }
@@ -655,7 +666,7 @@ enum ProviderError: LocalizedError {
         case .visionUnsupported(let provider):
             return "\(provider.displayName) does not support images. Configure a Mistral key to enable OCR fallback, or switch the chat provider."
         case .transcriptionUnavailable:
-            return "No transcription provider configured. Add a Mistral or OpenAI key in Settings."
+            return L("panel.needTranscription")
         }
     }
 

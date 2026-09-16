@@ -50,7 +50,7 @@ All of them are configurable: the app hotkeys in Settings → General, the addon
 
 **Chat with any model.** OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, Kimi and OpenRouter (any model by slug); model lists come live from each provider's API. Or run models locally through **Ollama** — free, offline, no key — with a built-in console to download, delete, load and unload them without the terminal, capability-based model selection, and Auto/Fast/Deep reasoning control for thinking models. A master switch can disable cloud providers entirely.
 
-**Talk instead of typing.** Speech-to-text via Mistral (Voxtral), OpenAI or Deepgram. System-wide dictation types your words into any text field phrase by phrase as you speak (over Deepgram it streams live, words landing while you talk), optionally cleaned up or translated on the fly by a small model of the provider you pick in Settings → Voice.
+**Talk instead of typing.** Speech-to-text via Mistral (Voxtral), OpenAI or Deepgram; on macOS, also via an installed **Ollama audio model**, selected independently of chat in Settings → Voice, with no automatic cloud fallback. The local model console shows all reported capabilities with explanations of what Cuate uses. System-wide dictation types your words into any text field phrase by phrase as you speak (over Deepgram it streams live, words landing while you talk), optionally cleaned up or translated on the fly by a small model of the provider you pick in Settings → Voice.
 
 **Feed it your screen.** Screenshots (full or area) go straight into the conversation, selected text arrives as an editable quote, and OCR extracts text from any image — on-device and free by default (Apple Vision), or through Mistral OCR for layout-aware Markdown.
 
@@ -120,6 +120,8 @@ A [Plaud](https://www.plaud.ai) recorder captures meetings and calls; its app tu
 **Sign-in is OAuth in the browser** — the app never sees your password, tokens live in the Keychain, and access is revocable any time. Access is **read-only**: Cuate can find and read, never modify.
 
 **Recordings arrive as cards.** When the assistant finds or reads one, it attaches to the reply. Open a card for a preview with every summary tab (Summary, Highlights, …), the **full transcript with clickable timecodes**, and **inline audio streamed straight from Plaud** — seek anywhere, control it from Now Playing and the media keys, or click a timestamp to play from that moment.
+
+**Read long recordings in pages**, choose verbatim speech, cleaned speech, an outline, or device-button marks with readable text, clickable times and photos. Date searches use a timezone and explain when older recordings were outside the scanned portion of the library. These read tools are also available in the Hermes Plaud plugin.
 
 **Unprocessed recordings are flagged** rather than silently skipped, and deep-link into Plaud's web app where processing starts (their API cannot start it — hence no surprise charges).
 

@@ -361,7 +361,7 @@ actor PlaudClient {
 
     /// One page of recordings, newest first (server order).
     func listFiles(page: Int = 1, pageSize: Int = 20) async throws -> [[String: Any]] {
-        let raw = try await request("/open/third-party/files/?page=\(page)&page_size=\(pageSize)")
+        let raw = try await request("/open/third-party/files/?page=\(max(1, page))&page_size=\(min(100, max(20, pageSize)))")
         // Response shape: {"type":"list","data":[...]} — tolerate both a
         // wrapped and a bare array so a server-side change degrades softly.
         if let dict = raw as? [String: Any], let list = dict["data"] as? [[String: Any]] {
@@ -394,12 +394,8 @@ actor PlaudClient {
         if let inline = item["data_content"] as? String, !inline.isEmpty {
             return inline
         }
-        guard let link = item["data_link"] as? String, let url = URL(string: link) else {
-            return nil
-        }
-        guard let (data, response) = try? await URLSession.shared.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+        guard let link = item["data_link"] as? String else { return nil }
+        guard let text = try? await PlaudContentFetch.text(link) else {
             Diagnostics.log("plaud", "content.link fetch failed")
             return nil
         }

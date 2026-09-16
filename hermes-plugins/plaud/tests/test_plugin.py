@@ -44,7 +44,7 @@ MONDAY = {
     "id": "aaa111",
     "name": "Monday sync",
     "created_at": "2026-08-10T09:00:00Z",
-    "duration": 1830,
+    "duration": 1830000,
     "note_list": [
         {"data_tab_name": "Summary", "data_content": "Decided to ship on Friday."},
         {"data_tab_name": "Highlights", "data_content": "- Friday release"},
@@ -56,7 +56,7 @@ FRIDAY = {
     "id": "bbb222",
     "name": "Friday retro",
     "created_at": "2026-08-14T15:00:00Z",
-    "duration": 900,
+    "duration": 900000,
     "note_list": [{"data_tab_name": "Summary", "data_content": "Went fine."}],
     "source_list": [{"data_content": TRANSCRIPT}],
 }
@@ -65,7 +65,7 @@ RAW = {  # recorded, not yet processed by Plaud
     "id": "ccc333",
     "name": "Voice memo",
     "created_at": "2026-08-15T20:00:00Z",
-    "duration": 60,
+    "duration": 60000,
     "note_list": [],
     "source_list": [],
 }
@@ -203,7 +203,7 @@ class Find(unittest.TestCase):
     def test_dates_and_limit_narrow_the_list(self, api):
         text = tools._handle_plaud_find({"date_from": "2026-08-12"})
         self.assertNotIn("Monday sync", text)
-        self.assertEqual(len(tools._handle_plaud_find({"limit": 1}).splitlines()[0]), len("1 recording(s):"))
+        self.assertIn("1 recording(s):", tools._handle_plaud_find({"limit": 1}))
 
     @with_api
     def test_every_hit_carries_its_reference(self, api):
@@ -220,7 +220,7 @@ class Find(unittest.TestCase):
     @with_api
     def test_page_size_stays_inside_the_accepted_window(self, api):
         tools._handle_plaud_find({})
-        self.assertTrue(all(size == client.PAGE_SIZE for size in api.page_sizes))
+        self.assertTrue(all(client.MIN_PAGE_SIZE <= size <= client.PAGE_SIZE for size in api.page_sizes))
 
     @with_api
     def test_api_failure_comes_back_as_words(self, api):

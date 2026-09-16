@@ -48,6 +48,18 @@ enum PlaudImages {
         return out
     }
 
+    /// Read-only cache resolution for preview rows loaded while offline.
+    static func cached(markdown: String, fileID: String) -> String {
+        var result = markdown
+        for path in relativeImagePaths(in: markdown) {
+            let relative = cacheRelativePath(fileID: fileID, path: normalize(path))
+            if FileManager.default.fileExists(atPath: ChatAttachment.resolveURL(relative).path) {
+                result = result.replacingOccurrences(of: "](\(path))", with: "](\(relative))")
+            }
+        }
+        return result
+    }
+
     /// Image targets that are neither absolute URLs nor already localized —
     /// the storage paths only Plaud's backend can serve.
     private static func relativeImagePaths(in markdown: String) -> [String] {
@@ -71,6 +83,7 @@ enum PlaudImages {
         var out: [String: String] = [:]
         var sources: [[String: Any]] = [file]
         sources += file["note_list"] as? [[String: Any]] ?? []
+        sources += file["source_list"] as? [[String: Any]] ?? []
         for source in sources {
             for key in ["download_link_map", "download_path_mapping"] {
                 guard let map = source[key] as? [String: String] else { continue }

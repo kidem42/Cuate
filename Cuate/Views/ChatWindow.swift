@@ -242,6 +242,7 @@ struct ChatWindow: View {
     /// origin. Captured at record start (not at send: every stop path has an
     /// async gap a fast chat switch can slip into); cleared by send/cancel.
     @State private var voiceRecordingOrigin: ChatStore.ConversationID?
+    @State private var voiceTranscriptionSelection: TranscriptionService.Selection?
     /// Imperative handle to the transcript engine (scroll-to-bottom on send
     /// and summon). @State so the instance survives view-struct re-inits.
     @State private var transcriptController = TranscriptController()
@@ -951,7 +952,9 @@ struct ChatWindow: View {
                             case .chat:
                                 streamAssistantReply()
                             case .transcription(let url):
-                                Task { await sendVoiceMessage(audioURL: url) }
+                                // A manual retry is a new attempt with the
+                                // provider/model the user has now selected.
+                                Task { await sendVoiceMessage(audioURL: url, selection: TranscriptionService.Selection()) }
                             }
                         } label: {
                             Label(L("panel.retry"), systemImage: "arrow.clockwise")
@@ -3736,7 +3739,7 @@ struct ChatWindow: View {
     // MARK: - Voice
 
     private var transcriptionAvailable: Bool {
-        STTProviderID.allCases.contains { $0.hasKey }
+        settings.transcriptionAvailable
     }
 
     private func handleVoiceRecordingStart() {
@@ -3747,6 +3750,7 @@ struct ChatWindow: View {
         // capture at send time still aimed at the NEW chat (report
         // 2026-07-31, second round: the voice bubble followed the switch).
         voiceRecordingOrigin = chatStore.conversation
+        voiceTranscriptionSelection = TranscriptionService.Selection()
         Task {
             guard transcriptionAvailable else {
                 _ = await MainActor.run {
@@ -3784,6 +3788,7 @@ struct ChatWindow: View {
 
     private func handleVoiceRecordingCancel() {
         voiceRecordingOrigin = nil
+        voiceTranscriptionSelection = nil
         audioRecorder.cancelRecording()
     }
 
@@ -3884,6 +3889,7 @@ struct ChatWindow: View {
         pendingVoiceSend?.cancel()
         pendingVoiceSend = nil
         voiceRecordingOrigin = nil
+        voiceTranscriptionSelection = nil
         audioRecorder.deleteRecording()
         chatStore.addMessage(text: L("panel.recordingCancelled"), isUser: false, messageType: .system)
     }
@@ -3891,7 +3897,7 @@ struct ChatWindow: View {
     /// Transcribes the recording locally-configured STT provider, shows the
     /// voice bubble with its transcript, and streams the assistant reply.
     @MainActor
-    private func sendVoiceMessage(audioURL: URL) async {
+    private func sendVoiceMessage(audioURL: URL, selection: TranscriptionService.Selection? = nil) async {
         guard ensureChatConfigured() else { return }
 
         // The chat the user dictated IN — captured when the mic OPENED
@@ -3903,6 +3909,8 @@ struct ChatWindow: View {
         // Hermes session (report 2026-07-31, both rounds).
         let origin = voiceRecordingOrigin ?? chatStore.conversation
         voiceRecordingOrigin = nil
+        let selection = selection ?? voiceTranscriptionSelection ?? TranscriptionService.Selection()
+        voiceTranscriptionSelection = nil
 
         // Synchronous set + status (not setLoading's async dispatch): during
         // transcription the last message is still the assistant's previous
@@ -3913,7 +3921,7 @@ struct ChatWindow: View {
         chatStore.statusText = L("panel.transcribing")
         pendingRetry = nil
         do {
-            let transcript = try await TranscriptionService.transcribe(audioURL: audioURL)
+            let transcript = try await TranscriptionService.transcribe(audioURL: audioURL, selection: selection)
             let onOrigin = chatStore.conversation == origin
             guard !transcript.isEmpty else {
                 if onOrigin {

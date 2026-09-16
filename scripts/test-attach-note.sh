@@ -103,10 +103,31 @@ xcrun swiftc -o "$tmp/ollama-test" \
     scripts/OllamaCompatibilityContractTest.swift
 "$tmp/ollama-test"
 
+echo "== Swift contract: Ollama audio =="
+xcrun swiftc -o "$tmp/ollama-audio-test" \
+    Cuate/Providers/OllamaCompatibility.swift \
+    Cuate/Providers/OllamaTranscriptionWire.swift \
+    Cuate/Providers/OllamaAudioReader.swift \
+    Cuate/Providers/OllamaTranscriptionQueue.swift \
+    scripts/OllamaAudioContractTest.swift
+"$tmp/ollama-audio-test"
+python3 scripts/OllamaTranscriptionIntegrationContractTest.py
+
+echo "== Swift contract: Plaud reads =="
+xcrun swiftc -swift-version 5 -default-isolation MainActor \
+    -enable-upcoming-feature NonisolatedNonsendingByDefault -warnings-as-errors \
+    -o "$tmp/plaud-read-test" \
+    Cuate/Addons/PlaudAddon/PlaudReadContract.swift \
+    Cuate/Addons/PlaudAddon/PlaudContentFetch.swift \
+    Cuate/Addons/PlaudAddon/PlaudNoteCache.swift \
+    Cuate/Addons/PlaudAddon/PlaudToolService.swift \
+    scripts/PlaudReadContractTest.swift
+PLAUD_TEST_CACHE="$tmp/plaud-cache" "$tmp/plaud-read-test"
+
 echo "== Python contract: Hermes Plaud plugin =="
 # The seam with Hermes (how it calls a handler, what it does with check_fn)
 # plus the tool behaviour. Pure stdlib: no network, no grant, no pytest.
-python3 hermes-plugins/plaud/tests/test_plugin.py 2>&1 | tail -3
+python3 -m unittest discover -s hermes-plugins/plaud/tests -p 'test_*.py' 2>&1 | tail -4
 
 echo "== Kotlin contract =="
 # Same JDK default as android/scripts/make-apk.sh.

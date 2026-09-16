@@ -286,6 +286,7 @@ private struct PlaudNotePreviewView: View {
     /// Utterance rows per tab — the transcript blocks render as clickable
     /// timecodes, everything else as Markdown.
     @State private var segmentsByTab: [String: [Segment]] = [:]
+    @State private var marks: [PlaudReadContract.Mark] = []
     @State private var refreshing = false
     @StateObject private var audio: PlaudAudioPlayer
 
@@ -420,7 +421,9 @@ private struct PlaudNotePreviewView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let rows = segmentsByTab[selected], !rows.isEmpty {
+        if selected == PlaudSourceBlock.marks.slug, !marks.isEmpty {
+            marksList
+        } else if let rows = segmentsByTab[selected], !rows.isEmpty {
             transcriptList(rows)
         } else if let text = contents[selected], !text.isEmpty {
             ScrollView {
@@ -454,36 +457,52 @@ private struct PlaudNotePreviewView: View {
     /// Transcript as rows with CLICKABLE timecodes — a click streams the
     /// audio from that exact moment.
     private func transcriptList(_ rows: [Segment]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(rows) { segment in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Button(PlaudFormat.clockString(ms: segment.startMs)) {
-                            audio.seek(toMs: segment.startMs)
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.accentColor)
-                        .help(PLL("plaud.preview.seekHelp"))
-                        VStack(alignment: .leading, spacing: 1) {
-                            // No speaker caption for the outline — there is
-                            // nobody speaking, only the topic of that stretch.
-                            if let speaker = segment.speaker {
-                                Text(speaker)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(.secondary)
-                            }
-                            Text(segment.text)
-                                .font(.body)
-                                .textSelection(.enabled)
-                        }
-                    }
+        timedList {
+            ForEach(rows) { segment in
+                timedRow(ms: segment.startMs, speaker: segment.speaker) {
+                    Text(segment.text).font(.body).textSelection(.enabled)
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .frame(maxWidth: 720, alignment: .topLeading)
-            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Same list and timecode control as transcript; same rich text/images as notes.
+    private var marksList: some View {
+        timedList {
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, mark in
+                timedRow(ms: mark.timeMs, speaker: nil) {
+                    MarkdownBlocksView(text: mark.markdown, linkColor: .accentColor, style: .document)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    private func timedList<Content: View>(@ViewBuilder body: () -> Content) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) { body() }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: 720, alignment: .topLeading)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func timedRow<Content: View>(ms: Double?, speaker: String?, @ViewBuilder body: () -> Content) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let ms {
+                Button(PlaudFormat.clockString(ms: ms)) { audio.seek(toMs: ms) }
+                    .buttonStyle(.borderless)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.accentColor)
+                    .help(PLL("plaud.preview.seekHelp"))
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                if let speaker {
+                    Text(speaker).font(.caption.weight(.semibold)).foregroundColor(.secondary)
+                }
+                body()
+            }
         }
     }
 
@@ -507,12 +526,20 @@ private struct PlaudNotePreviewView: View {
         var loadedContents: [String: String] = [:]
         var loadedSegments: [String: [Segment]] = [:]
         for tab in list {
-            loadedContents[tab.slug] = PlaudNoteCache.tabContent(fileID: fileID, slug: tab.slug)
+            let cached = PlaudNoteCache.tabContent(fileID: fileID, slug: tab.slug)
+            loadedContents[tab.slug] = tab.slug == PlaudSourceBlock.marks.slug
+                ? cached.map(PlaudReadContract.marksPreview) : cached
             if segmentSlugs.contains(tab.slug),
                let raw = PlaudNoteCache.segmentsRaw(fileID: fileID, slug: tab.slug) {
                 loadedSegments[tab.slug] = Self.parseSegments(raw)
             }
         }
+        let rawMarks = PlaudNoteCache.segmentsRaw(fileID: fileID, slug: PlaudSourceBlock.marks.slug)
+            ?? PlaudNoteCache.tabContent(fileID: fileID, slug: PlaudSourceBlock.marks.slug)
+        marks = rawMarks.flatMap(PlaudReadContract.marks)?.map {
+            PlaudReadContract.Mark(timeMs: $0.timeMs,
+                markdown: PlaudImages.cached(markdown: $0.markdown, fileID: fileID))
+        } ?? []
         contents = loadedContents
         segmentsByTab = loadedSegments
 
@@ -578,7 +605,11 @@ private struct PlaudNotePreviewView: View {
         for block in PlaudSourceBlock.allCases {
             guard let item = sourceList.first(where: { ($0["data_type"] as? String) == block.rawValue }),
                   let raw = await PlaudClient.resolveContent(of: item), !raw.isEmpty else { continue }
-            if let parsed = PlaudFormat.transcriptSegments(fromRaw: raw) {
+            if block == .marks {
+                let markdown = await PlaudImages.localize(markdown: PlaudReadContract.marksMarkdown(raw),
+                    fileID: fileID, file: file)
+                PlaudNoteCache.writeMarks(fileID: fileID, raw: raw, markdown: markdown)
+            } else if let parsed = PlaudFormat.transcriptSegments(fromRaw: raw) {
                 PlaudNoteCache.writeSegmentTab(
                     fileID: fileID,
                     slug: block.slug,

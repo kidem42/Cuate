@@ -924,6 +924,21 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         sttModels[provider.rawValue] = model
     }
 
+    /// Separate from chat filtering: only positively identified local audio models.
+    var ollamaTranscriptionModels: [String] {
+        guard localModelsEnabled, ollamaDetected else { return [] }
+        return ollamaCatalog.values.filter(\.supportsOllamaTranscription).map(\.id).sorted()
+    }
+
+    var localTranscriptionAvailable: Bool {
+        localEndpointVerified && ollamaTranscriptionModels.contains(sttModel(for: .ollama))
+    }
+
+    var transcriptionAvailable: Bool {
+        if sttProvider == .ollama { return localTranscriptionAvailable }
+        return STTProviderID.allCases.contains { $0.hasKey }
+    }
+
     // MARK: - Dictation cleanup model
 
     func dictationCleanupModel(for provider: ProviderID) -> String {
@@ -1016,7 +1031,10 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
             let detected = await admin.detect()
             var catalog: [String: ModelInfo] = [:]
             if detected {
-                for model in models {
+                // Keep capabilities for every installed model, including models
+                // absent from the chat endpoint (embeddings/image generation).
+                let installed = try await admin.tags().map(\.name)
+                for model in installed {
                     try Task.checkCancellation()
                     if let info = try? await admin.show(model: model) { catalog[model] = info }
                 }
@@ -1030,6 +1048,12 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
             guard localEndpointURL == endpoint else { throw CancellationError() }
             ollamaDetected = detected
             ollamaCatalog = catalog
+            // First local voice setup only. Never silently replace a removed
+            // or unsupported voice model with a different one.
+            if sttModel(for: .ollama).isEmpty,
+               let first = catalog.values.filter(\.supportsOllamaTranscription).map(\.id).sorted().first {
+                setSTTModel(first, for: .ollama)
+            }
         }
         cachedModels[provider.rawValue] = models
         // Auto-select a sensible default if none is selected or the selection

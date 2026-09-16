@@ -76,6 +76,8 @@ final class DictationService: NSObject, ObservableObject {
     private var silenceBegan: Date?
     private var processingChain: Task<Void, Never>?
     private var sessionCancelled = false
+    private var transcriptionSelection: TranscriptionService.Selection?
+    private var activeTranscriptions: [UUID: Task<String, Error>] = [:]
 
     // Streaming mode (Deepgram live WebSocket): finalized spans are inserted
     // WHILE speaking (through the same ordered cleanup chain as chunked
@@ -221,6 +223,8 @@ final class DictationService: NSObject, ObservableObject {
 
     private func start(mode: Mode) {
         self.mode = mode
+        let selection = TranscriptionService.Selection()
+        transcriptionSelection = selection
 
         // Prompt for Accessibility up front (needed to paste into other apps).
         _ = TextInserter.checkAccessibility(promptIfNeeded: true)
@@ -228,7 +232,7 @@ final class DictationService: NSObject, ObservableObject {
         // Open the TLS connection to the STT provider while the user is still
         // speaking — the first phrase's transcription then skips the ~200–500 ms
         // DNS+TCP+TLS handshake (HTTPClient.session pools the connection).
-        TranscriptionService.prewarmConnection()
+        TranscriptionService.prewarmConnection(selection: selection)
 
         // Mic already authorized (the common case): the pill appears
         // IMMEDIATELY in its warm-up state (pulsing dots) and flips to the
@@ -258,6 +262,7 @@ final class DictationService: NSObject, ObservableObject {
             chunkedMode = AppSettings.shared.dictationChunked
             sessionCancelled = false
             sessionGeneration += 1
+            let generation = sessionGeneration
             cancelPendingCaptureRetry()
             captureRetries = 0
             engineDeaths = 0
@@ -267,8 +272,11 @@ final class DictationService: NSObject, ObservableObject {
             spectrum = Array(repeating: 0, count: MicCapture.bandCount)
             streamingFailed = false
             streamEnqueuedCount = 0
-            await APIKeyStore.warmIfNeeded() // streamingConfig reads the key cache
-            if let config = streamingConfig() {
+            if selection.provider != .ollama {
+                await APIKeyStore.warmIfNeeded() // streamingConfig reads the key cache
+            }
+            guard generation == sessionGeneration, !sessionCancelled else { return }
+            if let config = streamingConfig(selection: selection) {
                 chunkedMode = false // the stream IS the realtime path
                 armStreaming(apiKey: config.apiKey, model: config.model)
             }
@@ -372,8 +380,9 @@ final class DictationService: NSObject, ObservableObject {
         // capture queue: its completion runs after the finished file's
         // handle is released, so the fragment is finalized and safe to
         // upload. The subsequent beginRecording is queued behind it.
+        let generation = sessionGeneration
         capture.endRecording(keepWarmSeconds: 0, releaseHold: false) { [weak self] in
-            if discardSalvage {
+            if discardSalvage || self?.sessionGeneration != generation {
                 try? FileManager.default.removeItem(at: finishedURL)
             } else {
                 self?.enqueueSegment(finishedURL)
@@ -407,10 +416,10 @@ final class DictationService: NSObject, ObservableObject {
     /// Streaming is an explicit opt-in and only for Deepgram Nova-3 (the one
     /// provider/model pair with a documented raw-WebSocket live API here);
     /// anything else runs the classic file paths.
-    private func streamingConfig() -> (apiKey: String, model: String)? {
+    private func streamingConfig(selection: TranscriptionService.Selection) -> (apiKey: String, model: String)? {
         let settings = AppSettings.shared
-        guard settings.dictationStreaming, settings.sttProvider == .deepgram else { return nil }
-        let model = settings.sttModel(for: .deepgram)
+        guard settings.dictationStreaming, selection.provider == .deepgram else { return nil }
+        let model = selection.models[.deepgram] ?? STTProviderID.deepgram.defaultModel
         guard model.hasPrefix("nova-3"), let apiKey = STTProviderID.deepgram.apiKey else { return nil }
         return (apiKey, model)
     }
@@ -461,9 +470,10 @@ final class DictationService: NSObject, ObservableObject {
     private func enqueueStreamText(_ text: String) {
         streamEnqueuedCount += 1
         let previous = processingChain
+        let generation = sessionGeneration
         processingChain = Task { [weak self] in
             await previous?.value
-            guard let self, !self.sessionCancelled else { return }
+            guard let self, !self.sessionCancelled, generation == self.sessionGeneration else { return }
             var output = text
             let settings = AppSettings.shared
             if self.mode == .translate || settings.dictationCleanup {
@@ -471,7 +481,7 @@ final class DictationService: NSObject, ObservableObject {
                     output = processed
                 }
             }
-            guard !self.sessionCancelled else { return }
+            guard !self.sessionCancelled, generation == self.sessionGeneration else { return }
             TextInserter.insert(output + " ")
         }
     }
@@ -546,6 +556,7 @@ final class DictationService: NSObject, ObservableObject {
     /// lost at phrase boundaries.
     private func rotateSegment() {
         guard let finishedURL = fileURL else { return }
+        let generation = sessionGeneration
         let url = Self.segmentURL()
         fileURL = url
         segmentStart = Date()
@@ -553,6 +564,10 @@ final class DictationService: NSObject, ObservableObject {
         silenceBegan = nil
         capture.rotate(to: url) { [weak self] in
             // Runs after the finished file is finalized — safe to upload.
+            guard self?.sessionGeneration == generation else {
+                try? FileManager.default.removeItem(at: finishedURL)
+                return
+            }
             self?.enqueueSegment(finishedURL)
         }
     }
@@ -565,12 +580,14 @@ final class DictationService: NSObject, ObservableObject {
     /// silently fell back to the raw unpunctuated transcript — sentences
     /// randomly lost their periods and dashes.
     private func enqueueSegment(_ url: URL) {
-        let stt = Task { await self.transcribeSegment(url) }
+        let generation = sessionGeneration
+        let selection = transcriptionSelection ?? TranscriptionService.Selection()
+        let stt = Task { await self.transcribeSegment(url, selection: selection, generation: generation) }
         let previous = processingChain
         processingChain = Task { [weak self] in
             await previous?.value
             guard let self else { return }
-            guard let transcript = await stt.value, !self.sessionCancelled else { return }
+            guard let transcript = await stt.value, !self.sessionCancelled, generation == self.sessionGeneration else { return }
             var text = transcript
             let settings = AppSettings.shared
             if self.mode == .translate || settings.dictationCleanup {
@@ -578,29 +595,32 @@ final class DictationService: NSObject, ObservableObject {
                     text = processed
                 }
             }
-            guard !self.sessionCancelled else { return }
+            guard !self.sessionCancelled, generation == self.sessionGeneration else { return }
             TextInserter.insert(text + " ")
         }
     }
 
     /// STT for one segment (parallel-safe). One retry after a short backoff:
     /// a transient 429/network hiccup must not DROP the phrase entirely.
-    private func transcribeSegment(_ url: URL) async -> String? {
+    private func transcribeSegment(_ url: URL, selection: TranscriptionService.Selection, generation: Int) async -> String? {
         defer { try? FileManager.default.removeItem(at: url) }
-        guard !sessionCancelled else { return nil }
-        if let transcript = try? await TranscriptionService.transcribe(audioURL: url),
+        guard !sessionCancelled, generation == sessionGeneration else { return nil }
+        if let transcript = try? await transcribeRecording(url, selection: selection),
            !transcript.isEmpty {
             return transcript
         }
         try? await Task.sleep(nanoseconds: 600_000_000)
-        guard !sessionCancelled else { return nil }
-        guard let transcript = try? await TranscriptionService.transcribe(audioURL: url),
+        guard !sessionCancelled, generation == sessionGeneration else { return nil }
+        guard let transcript = try? await transcribeRecording(url, selection: selection),
               !transcript.isEmpty else {
             // A phrase dropped here is invisible to the user (chunked mode
             // inserts nothing and stays silent) — leave a trace, otherwise
             // "dictation lost a sentence" is only reconstructable from the
             // duplicate spend records.
             Diagnostics.log("dictation", "stt.empty after retry — phrase dropped")
+            if selection.provider == .ollama, generation == sessionGeneration, !sessionCancelled {
+                NSSound.beep()
+            }
             return nil
         }
         return transcript
@@ -609,9 +629,10 @@ final class DictationService: NSObject, ObservableObject {
     /// One retry after a short backoff: a transient failure must not degrade
     /// a phrase to the raw unpunctuated transcript.
     private func postProcessWithRetry(_ transcript: String) async -> String? {
+        let generation = sessionGeneration
         if let processed = try? await postProcess(transcript) { return processed }
         try? await Task.sleep(nanoseconds: 600_000_000)
-        guard !sessionCancelled else { return nil }
+        guard !sessionCancelled, generation == sessionGeneration else { return nil }
         return try? await postProcess(transcript)
     }
 
@@ -620,6 +641,8 @@ final class DictationService: NSObject, ObservableObject {
         sessionGeneration += 1  // a stop in flight must not touch the pill again
         cancelPendingCaptureRetry()
         processingChain = nil
+        for task in activeTranscriptions.values { task.cancel() }
+        activeTranscriptions.removeAll()
         teardownStreaming()
         let keepWarm = TimeInterval(AppSettings.shared.dictationWarmMinutes) * 60
         if let url = fileURL {
@@ -650,6 +673,7 @@ final class DictationService: NSObject, ObservableObject {
         fileURL = nil
         phase = .processing
         let generation = sessionGeneration
+        let selection = transcriptionSelection ?? TranscriptionService.Selection()
 
         // The segment file is finalized on the capture queue — wait for that
         // before handing it to the transcriber. The unit itself either keeps
@@ -737,7 +761,7 @@ final class DictationService: NSObject, ObservableObject {
         }
 
         do {
-            let transcript = try await TranscriptionService.transcribe(audioURL: finishedURL)
+            let transcript = try await transcribeRecording(finishedURL, selection: selection)
             guard generation == sessionGeneration else { return }
             guard !transcript.isEmpty else { NSSound.beep(); return }
 
@@ -753,7 +777,19 @@ final class DictationService: NSObject, ObservableObject {
 
             TextInserter.insert(text)
         } catch {
-            NSSound.beep()
+            if generation == sessionGeneration { NSSound.beep() }
+        }
+    }
+
+    private func transcribeRecording(_ url: URL, selection: TranscriptionService.Selection) async throws -> String {
+        let id = UUID()
+        let task = Task { try await TranscriptionService.transcribe(audioURL: url, selection: selection) }
+        activeTranscriptions[id] = task
+        defer { activeTranscriptions.removeValue(forKey: id) }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 

@@ -97,6 +97,11 @@ struct LocalModelsSettingsView: View {
                 }
             }
         }
+        .onChange(of: settings.localEndpointURL) { _, _ in
+            installed = []
+            connState = .unknown
+            didInitialLoad = false
+        }
     }
 
     // MARK: Intro
@@ -201,16 +206,28 @@ struct LocalModelsSettingsView: View {
         return HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.name).font(.callout)
-                HStack(spacing: 6) {
+                let capabilities = OllamaCompatibility.displayCapabilities(info?.supportedParameters ?? [])
+                LocalModelMetadataFlow {
                     Text(byteString(model.sizeBytes))
-                    if info?.supportsVision == true { capBadge(L("local.vision")) }
-                    if info?.supportsTools == true { capBadge(L("local.tools")) }
+                        .font(.caption).foregroundColor(.secondary)
                     if loaded {
                         Label(loadedLabel(model.name), systemImage: "memorychip")
-                            .foregroundColor(.green)
+                            .font(.caption).foregroundColor(.green)
+                    }
+                    if capabilities.isEmpty {
+                        Text(L("local.cap.unknown"))
+                            .font(.caption2).foregroundColor(.secondary)
+                            .help(L("local.cap.unknownHelp"))
+                    } else {
+                        ForEach(capabilities, id: \.self) { capability in
+                            capabilityBadge(capability)
+                        }
+                    }
+                    if info?.ollamaRemote == true {
+                        capBadge(L("local.cap.cloud")).help(L("local.cap.cloudHelp"))
                     }
                 }
-                .font(.caption).foregroundColor(.secondary)
+                .lineLimit(1)
             }
             Spacer()
             if busyModel == model.name {
@@ -220,10 +237,12 @@ struct LocalModelsSettingsView: View {
                     toggleLoad(model.name, loaded: loaded)
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 Button(L("local.delete"), role: .destructive) {
                     pendingDelete = model.name
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
             }
         }
     }
@@ -233,6 +252,12 @@ struct LocalModelsSettingsView: View {
             .font(.caption2)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.15)))
+    }
+
+    private func capabilityBadge(_ capability: String) -> some View {
+        let known = ["completion", "vision", "tools", "thinking", "audio", "embedding", "insert", "image"].contains(capability)
+        return capBadge(known ? L("local.cap." + capability) : capability)
+            .help(known ? L("local.cap." + capability + "Help") : L("local.cap.otherHelp"))
     }
 
     // MARK: Pull (Ollama only)
@@ -290,16 +315,23 @@ struct LocalModelsSettingsView: View {
     }
 
     private func reloadInstalled() async {
+        let endpoint = settings.localEndpointURL
+        let service = admin
+        errorText = nil
         do {
             // Sort by name to match the status-bar submenu, which lists
             // `models(for: .ollama)` (already alphabetically sorted).
-            installed = (try await admin.tags()).sorted { $0.name < $1.name }
+            let models = (try await service.tags()).sorted { $0.name < $1.name }
+            guard settings.localEndpointURL == endpoint else { return }
+            installed = models
             // Keep the app-wide model list (chat dropdown + status-bar submenu)
             // in sync — otherwise a deleted/pulled model lingers there, since
             // those read `models(for:)`/cachedModels, not this view's `installed`.
-            try? await settings.refreshModels(for: .ollama)
-            await settings.refreshOllamaLoaded(using: admin)
+            try await settings.refreshModels(for: .ollama)
+            guard settings.localEndpointURL == endpoint else { return }
+            await settings.refreshOllamaLoaded(using: service)
         } catch {
+            guard settings.localEndpointURL == endpoint else { return }
             errorText = error.localizedDescription
         }
     }
@@ -376,5 +408,48 @@ struct LocalModelsSettingsView: View {
 
     private func byteString(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+
+/// Natural-width metadata chips, following the addon chip-flow pattern.
+/// A grid distributes columns across the row and makes compact tags look like
+/// a table. Here the file size and capabilities stay together, wrapping only
+/// when the model row actually runs out of room.
+private struct LocalModelMetadataFlow: Layout {
+    private let horizontalSpacing: CGFloat = 6
+    private let verticalSpacing: CGFloat = 3
+
+    private func positions(width: CGFloat, subviews: Subviews) -> (CGSize, [CGRect]) {
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        var frames: [CGRect] = []
+        for view in subviews {
+            let ideal = view.sizeThatFits(.unspecified)
+            let size = view.sizeThatFits(ProposedViewSize(width: min(ideal.width, width), height: nil))
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + verticalSpacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (CGSize(width: width, height: y + rowHeight), frames)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let naturalWidth = subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width }
+            + CGFloat(max(0, subviews.count - 1)) * horizontalSpacing
+        let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? naturalWidth
+        return positions(width: width, subviews: subviews).0
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = positions(width: bounds.width, subviews: subviews).1
+        for (view, frame) in zip(subviews, frames) {
+            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                       anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
     }
 }

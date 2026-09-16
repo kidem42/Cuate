@@ -270,11 +270,40 @@ these levels affect generation. The standalone `OllamaCompatibilityContractTest`
 covers stream fields, effort policy and custom model aliases without running
 the application.
 
+**Local voice recognition (macOS).** `STTProviderID.ollama` uses the existing
+`TranscriptionService` seam for voice messages and batch/phrase dictation.
+`OllamaVoiceSettingsView` selects an installed model independently of chat;
+eligibility requires native `audio` + `completion` capabilities and confirmed
+non-cloud routing. The native catalog reads every `/api/tags` model's `/api/show`,
+including non-chat models. The console displays all reported capabilities;
+tooltips distinguish integrated features from embeddings, infill, image generation
+and unknown capabilities that Cuate does not use. Older caches require a refresh
+before enabling local audio. Existing voice-provider choices are preserved.
+
+`TranscriptionService.Selection` captures the provider, model settings and endpoint
+per recording/session. Ollama never falls back to a cloud key/provider; an explicit
+manual Retry uses the user's current settings. `OllamaTranscriptionQueue` serializes
+local STT across chat and dictation, propagating cancellation to the worker and
+network task. Dictation cancels tracked STT tasks and guards queued insertion and
+retry by session generation. Capture/TCC and Deepgram live streaming stay on their
+existing paths. Chat/Hermes receive the transcript through the existing send door.
+
+`OllamaAudioReader` incrementally converts AAC recordings to mono 16 kHz PCM16 WAV
+off the main actor, with no temporary media and no changes to the original.
+Requests contain at most 30 seconds, cut near a quiet span without duplicated or
+missing samples. `OllamaTranscriptionWire` uses `/v1/chat/completions` audio input
+with transcription-only instructions, no chat history/tools, a separate output
+budget, and thinking disabled when supported. Truncated/malformed responses fail
+instead of inserting partial text. The service rechecks native model capabilities
+before upload and rejects results after endpoint changes. Local STT records zero
+cost; chat, dictation cleanup and translation retain their separate provider choices.
+See `docs/ollama-voice.md` for source receipts and verification boundaries.
+
 Other provider-side services:
 
 | Service | File | Role |
 |---|---|---|
-| Speech-to-text | `TranscriptionService` (Mistral Voxtral, OpenAI, Deepgram batch), `DeepgramLiveTranscriber` (WebSocket streaming for dictation) | `STTProviderID` |
+| Speech-to-text | `TranscriptionService` (Mistral Voxtral, OpenAI, Deepgram batch, Ollama audio), `DeepgramLiveTranscriber` (WebSocket streaming for dictation) | `STTProviderID` |
 | OCR | `OCRService` routes to `AppleOCRService` (Vision, on-device, default) or `MistralOCRService` (layout-aware Markdown) | `OCRProviderID`; images only |
 | Web | `BraveSearchService` (`web_search`, Brave aux key), `WebFetchService` (`web_fetch`, keyless, client-side) | tools |
 | Files | `OpenAIFilesService` (upload/delete), `RemoteFileJanitor` (persisted deletion queue) | documents |
@@ -401,6 +430,19 @@ secrets; a `Diagnostics` category; host mount points kept to one line each.
 | PlaudAddon | `Addons/PlaudAddon` | tab, `PlaudToolService` in `ChatService`, chips in `MessageRow`, preview window, `/plaud` command, session upkeep at launch; the Hermes agent reads Plaud through its own plugin and its own sign-in (`hermes-plugins/plaud`), nothing is handed over | Plaud tools | `docs/plaud-addon.md`, `hermes-plugins/plaud/README.md` |
 | HermesAddon | `Addons/HermesAddon` + `Addons/AgentGateway/Core` | tab, a role in the preset switcher, `AgentChatService` in `streamAssistantReply`, the detached sidebar, notifications, background polling, courier | the agent's own | `docs/hermes-vps-setup.md`, `Addons/HermesAddon/Hermes-API-Fixtures.md` |
 | TranslatorAddon | `Addons/TranslatorAddon` | `start()`, tab, toggle in General, status-menu item, `.translatorOpenInChat` (the original text quoted into the composer); reads the selection through the host's `SelectionGrabber` and its bounds through its own `SelectionLocator` (WebKit text-marker bounds for web content, `kAXBoundsForRange` for native text views, mouse fallback), translates through the dictation-cleanup provider stack in paragraph chunks, shows a non-activating bubble panel pinned to the selection (`TranslatorGeometry`, contract-tested), Esc / click elsewhere / a linger clock close it | none | `Addons/TranslatorAddon/TranslatorAddon-README.md`, `scripts/TranslatorContractTest.swift` |
+
+**Plaud read contracts.** `PlaudReadContract` owns local-calendar filtering,
+scan-coverage wording, content-bound text pagination and untrusted-data delimiters.
+`PlaudToolService` selects one source version; `mark_memo` is preserved as device
+marks, never merged into speech. Mark previews reuse the transcript list/timecode buttons and show text and
+cached images; raw JSON is retained separately, with old JSON-in-Markdown caches
+converted on read. Full blocks still populate `PlaudNoteCache` for
+the preview while the model receives bounded pages. `PlaudContentFetch` handles
+presigned note/source text with an ephemeral credential-free session, URL/DNS
+preflight, no redirects and a 20 MiB limit. Existing image/audio paths remain
+separate. The Python twin is `hermes-plugins/plaud/read_contract.py` plus its
+client/tools. Both retain their own OAuth grants; no new endpoint or token
+handover is introduced. See `docs/plaud-addon.md` for schema and limits.
 
 ## 10. Agent chats versus ordinary chats
 

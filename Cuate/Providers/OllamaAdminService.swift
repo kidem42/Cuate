@@ -121,7 +121,9 @@ struct OllamaAdminService {
             supportsVision: caps.contains("vision"),
             supportsTools: caps.contains("tools"),
             supportsReasoning: caps.contains("thinking") || caps.contains("reasoning"),
-            supportedParameters: caps
+            supportedParameters: caps,
+            ollamaRemote: !(json["remote_model"] as? String ?? "").isEmpty
+                || !(json["remote_host"] as? String ?? "").isEmpty
         )
     }
 

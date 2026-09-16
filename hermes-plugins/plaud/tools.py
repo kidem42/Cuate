@@ -10,9 +10,12 @@ through the agent. Clients that do not simply see a harmless token.
 from __future__ import annotations
 
 import os
+import json
+import functools
+import datetime as dt
 from typing import Any, Dict, List
 
-from . import client
+from . import client, read_contract as read
 
 # --------------------------------------------------------------------------
 # Schemas
@@ -30,6 +33,7 @@ PLAUD_FIND_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
+                "timezone": {"type": "string", "description": "IANA timezone for date filters. Defaults to the agent host timezone; specify the user timezone on a remote host."},
                 "query": {
                     "type": "string",
                     "description": "Case-insensitive substring of the recording name. Omit to list the newest.",
@@ -68,12 +72,15 @@ PLAUD_GET_TRANSCRIPT_SCHEMA = {
         "name": "plaud_get_transcript",
         "description": (
             "Read the verbatim transcript of a recording, as timecoded speaker turns. "
-            "Long — prefer plaud_get_note, and narrow with from_min/to_min when only part matters."
+            "Returns text and next_cursor; repeat with that cursor and unchanged selection until null. Pages may split an utterance; concatenate text in order. Prefer plaud_get_note for summaries."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "file_id": {"type": "string", "description": "Recording id from plaud_find."},
+                "version": {"type": "string", "enum": ["verbatim", "clean", "outline", "marks"], "description": "Default verbatim for quotes. Clean is AI-polished speech; outline is structure; marks are device-button highlights, not speech. Read verbatim separately for quotes."},
+                "cursor": {"type": "string", "description": "next_cursor from the previous page. Keep file_id, version and minute range unchanged."},
+                "page_chars": {"type": "integer", "description": "Maximum text characters per page (default 12000, range 1–60000)."},
                 "from_min": {"type": "number", "description": "Start of the window, in minutes."},
                 "to_min": {"type": "number", "description": "End of the window, in minutes."},
             },
@@ -89,11 +96,9 @@ PLAUD_GET_TRANSCRIPT_SCHEMA = {
 
 def _duration(raw: Any) -> str:
     try:
-        seconds = int(float(raw or 0))
-    except (TypeError, ValueError):
+        seconds = int(float(raw or 0) / 1000)
+    except (TypeError, ValueError, OverflowError):
         return "?"
-    if seconds > 100000:  # some payloads carry milliseconds
-        seconds //= 1000
     hours, remainder = divmod(seconds, 3600)
     minutes, _ = divmod(remainder, 60)
     return f"{hours}h {minutes:02d}m" if hours else f"{minutes} min"
@@ -134,7 +139,7 @@ def _headline(file_obj: Dict[str, Any]) -> str:
 def _clock(ms: Any) -> str:
     try:
         total = int(float(ms or 0) // 1000)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         total = 0
     minutes, seconds = divmod(total, 60)
     return f"{minutes:02d}:{seconds:02d}"
@@ -161,64 +166,78 @@ def _check_plaud_available() -> bool:
         return False
 
 
+def _recording_data(handler):
+    @functools.wraps(handler)
+    def wrapped(*args, **kwargs):
+        return read.untrusted(handler(*args, **kwargs))
+    return wrapped
+
+
+@_recording_data
 def _handle_plaud_find(args: Dict[str, Any] | None = None, **kwargs: Any) -> str:
     kwargs = {**(args or {}), **kwargs}
-    query = (kwargs.get("query") or "").strip().lower()
-    date_from = (kwargs.get("date_from") or "").strip()
-    date_to = (kwargs.get("date_to") or "").strip()
+    query = str(kwargs.get("query") or "").strip().lower()
+    date_from, date_to = kwargs.get("date_from"), kwargs.get("date_to")
+    for value in (date_from, date_to):
+        if value is not None and not read.valid_day(value):
+            return "Invalid date — use a valid YYYY-MM-DD date."
+    if date_from and date_to and date_from > date_to:
+        return "date_from must not be after date_to."
     try:
-        limit = max(1, min(int(kwargs.get("limit") or 10), 50))
+        zone = read.timezone(kwargs.get("timezone"))
+    except (ValueError, KeyError, TypeError):
+        return "Invalid IANA timezone."
+    try:
+        limit = max(1, min(int(kwargs.get("limit") or 10), 100))
     except (TypeError, ValueError):
         limit = 10
-
+    filtered = bool(query or date_from or date_to)
+    files = []
+    exhausted = False
     try:
-        # The API filters nothing but pagination, so the narrowing happens
-        # here — over at most five pages, as in the desktop client.
-        found: List[Dict[str, Any]] = []
-        for page in range(1, 6):
-            batch = client.list_files(page=page, page_size=client.PAGE_SIZE)
-            if not batch:
-                break
-            for item in batch:
-                name = str(item.get("name") or "")
-                day = _day(item)
-                if query and query not in name.lower():
-                    continue
-                if date_from and day and day < date_from:
-                    continue
-                if date_to and day and day > date_to:
-                    continue
-                found.append(item)
-                if len(found) >= limit:
-                    break
-            if len(found) >= limit or len(batch) < client.PAGE_SIZE:
+        size = 100 if filtered else max(20, limit)
+        for page_num in range(1, 6 if filtered else 2):
+            batch = client.list_files(page=page_num, page_size=size)
+            files.extend(batch)
+            if len(batch) < size:
+                exhausted = True
                 break
     except client.PlaudError as exc:
         return str(exc)
-
-    if not found:
-        return "No matching recordings in Plaud."
-
-    lines = [f"{len(found)} recording(s):"]
-    unprocessed: List[str] = []
-    for item in found:
-        lines.append("- " + _headline(item))
-        if client.is_unprocessed(item):
-            unprocessed.append(str(item.get("name") or item.get("id")))
-    if unprocessed:
-        lines.append(
-            "\nNot processed by Plaud yet (no summary or transcript exists): "
-            + ", ".join(unprocessed)
-            + ". Processing cannot be started through the API — mention this separately and point the user "
-            "at the Plaud app."
-        )
-    lines.append(
-        "\nKeep each recording's reference exactly as returned when you mention it — clients that "
-        "understand it render the recording with its summary, transcript and audio."
-    )
+    found = []
+    unknown_dates = 0
+    for item in files:
+        if query and query not in str(item.get("name") or "").lower():
+            continue
+        stamp = read.timestamp(item.get("created_at"))
+        if date_from or date_to:
+            if stamp is None:
+                unknown_dates += 1
+                continue
+            day = stamp.astimezone(zone).date().isoformat()
+            if date_from and day < date_from or date_to and day > date_to:
+                continue
+        found.append(item)
+    found.sort(key=lambda item: read.timestamp(item.get("created_at")) or dt.datetime.min.replace(tzinfo=dt.timezone.utc), reverse=True)
+    lines = [f"{min(limit, len(found))} recording(s):" if found else "No matching recordings in the searched portion."]
+    for item in found[:limit]:
+        stamp = read.timestamp(item.get("created_at"))
+        day = stamp.astimezone(zone).date().isoformat() if stamp else "unknown date"
+        lines.append("- " + _headline(item) + f" | local date={day}")
+        if "note_list" in item and "source_list" in item and client.is_unprocessed(item):
+            lines.append("Not processed by Plaud yet: no notes or transcript. The user starts processing in the Plaud app.")
+    lines.append(f"Searched {len(files)} recordings; dates use {zone}.")
+    if not exhausted:
+        lines.append("Results may be incomplete: older recordings were not searched. An empty result does not prove that no matching recording exists.")
+    if unknown_dates:
+        lines.append(f"{unknown_dates} recordings have unreadable dates and were excluded from the date filter.")
+    if len(found) > limit:
+        lines.append(f"Showing {limit} of {len(found)} matches; narrow the query or date range.")
+    lines.append("Keep each recording's reference exactly as returned when mentioning it; clients use it to render recording cards.")
     return "\n".join(lines)
 
 
+@_recording_data
 def _handle_plaud_get_note(args: Dict[str, Any] | None = None, **kwargs: Any) -> str:
     kwargs = {**(args or {}), **kwargs}
     file_id = str(kwargs.get("file_id") or "").strip()
@@ -242,7 +261,8 @@ def _handle_plaud_get_note(args: Dict[str, Any] | None = None, **kwargs: Any) ->
         if wanted_tab and wanted_tab not in tab_name.lower():
             continue
         content = client.resolve_content(item)
-        if not content:
+        if content is None:
+            chunks.append(f"\n## {tab_name}\nContent unavailable or failed to load; try this tab again.")
             continue
         chunks.append(f"\n## {tab_name}\n{content.strip()}")
 
@@ -251,59 +271,61 @@ def _handle_plaud_get_note(args: Dict[str, Any] | None = None, **kwargs: Any) ->
     return "\n".join(chunks)
 
 
+@_recording_data
 def _handle_plaud_get_transcript(args: Dict[str, Any] | None = None, **kwargs: Any) -> str:
     kwargs = {**(args or {}), **kwargs}
     file_id = str(kwargs.get("file_id") or "").strip()
+    versions = {"verbatim": "transaction", "clean": "transaction_polish", "outline": "outline", "marks": "mark_memo"}
+    version = kwargs.get("version", "verbatim")
+    if not isinstance(version, str) or version not in versions:
+        return "Unknown version. Use verbatim, clean, outline or marks."
     try:
-        from_min = float(kwargs["from_min"]) if kwargs.get("from_min") is not None else None
-        to_min = float(kwargs["to_min"]) if kwargs.get("to_min") is not None else None
-    except (TypeError, ValueError):
-        from_min = to_min = None
-
-    try:
+        start, end = read.minute_range(kwargs)
+        if version == "marks" and (start is not None or end is not None):
+            return "Minute filters apply to speech segments, not device marks. Read marks without a minute range."
         file_obj = client.get_file(file_id)
-    except client.PlaudError as exc:
+        if client.is_unprocessed(file_obj):
+            return _headline(file_obj) + "\nNot processed by Plaud yet. The user starts processing in the Plaud app."
+        sources = file_obj.get("source_list") or []
+        selected = next((item for item in sources if item.get("data_type") == versions[version]), None)
+        # Legacy responses without data_type: accept a single untyped source
+        # only for verbatim, never merge arbitrary blocks into speech.
+        if selected is None and version == "verbatim" and len(sources) == 1 and not sources[0].get("data_type"):
+            selected = sources[0]
+        if selected is None:
+            available = [key for key, kind in versions.items() if any(item.get("data_type") == kind for item in sources)]
+            return _headline(file_obj) + "\nRequested version unavailable. Available: " + ", ".join(available)
+        raw = client.resolve_content(selected)
+        if raw is None:
+            return _headline(file_obj) + "\nContent could not be loaded; try again."
+        text = raw
+        if version != "marks":
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
+                parsed = parsed["data"]
+            if isinstance(parsed, list):
+                lines = []
+                for segment in parsed:
+                    if not isinstance(segment, dict):
+                        continue
+                    stamp = segment.get("start_time", 0)
+                    if not isinstance(stamp, (float, int)):
+                        continue
+                    if start is not None and stamp < start * 60000 or end is not None and stamp > end * 60000:
+                        continue
+                    content = str(segment.get("content") or segment.get("topic") or segment.get("title") or "")
+                    speaker = segment.get("speaker") or segment.get("original_speaker")
+                    if not content and not speaker:
+                        continue
+                    lines.append(f"[{_clock(stamp)}] " + (f"{speaker}: " if speaker else "") + content)
+                text = "\n".join(lines)
+            elif start is not None or end is not None:
+                return "This block has no timestamped segments; omit the minute range."
+        context = f"{file_id}|{versions[version]}|{start}|{end}"
+        result = read.page(text, context, kwargs)
+        return _headline(file_obj) + f"\nVersion: {version}\n" + result
+    except (client.PlaudError, ValueError) as exc:
         return str(exc)
-
-    if client.is_unprocessed(file_obj):
-        return (
-            f"{_headline(file_obj)}\nNot processed by Plaud yet — no transcript exists. "
-            f"The user starts processing in the Plaud app: {client.deep_link(file_id)}"
-        )
-
-    segments: List[Dict[str, Any]] = []
-    for item in file_obj.get("source_list") or []:
-        content = client.resolve_content(item)
-        if not content:
-            continue
-        try:
-            import json as _json
-
-            parsed = _json.loads(content)
-        except ValueError:
-            # Plain-text transcript: hand it over as is.
-            return f"{_headline(file_obj)}\n\n{content.strip()}"
-        if isinstance(parsed, list):
-            segments.extend(segment for segment in parsed if isinstance(segment, dict))
-        elif isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
-            segments.extend(segment for segment in parsed["data"] if isinstance(segment, dict))
-
-    if not segments:
-        return f"{_headline(file_obj)}\nNo transcript content is available for this recording."
-
-    lines = [_headline(file_obj), ""]
-    for segment in segments:
-        start_ms = segment.get("start_time") or 0
-        if from_min is not None and float(start_ms) < from_min * 60000:
-            continue
-        if to_min is not None and float(start_ms) > to_min * 60000:
-            continue
-        speaker = segment.get("speaker") or segment.get("original_speaker") or "Speaker"
-        text = str(segment.get("content") or "").strip()
-        if not text:
-            continue
-        lines.append(f"[{_clock(start_ms)}] {speaker}: {text}")
-
-    if len(lines) == 2:
-        return f"{_headline(file_obj)}\nNothing was said in the requested window."
-    return "\n".join(lines)

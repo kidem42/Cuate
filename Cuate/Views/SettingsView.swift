@@ -783,15 +783,21 @@ struct SettingsView: View {
             .onChange(of: settings.sttProvider) { _, newValue in
                 sttModelInput = settings.sttModel(for: newValue)
             }
+            .help(L("voice.providerHelp"))
 
-            TextField(L("voice.sttModel"), text: $sttModelInput, prompt: Text(settings.sttProvider.defaultModel))
+            if settings.sttProvider == .ollama {
+                OllamaVoiceSettingsView()
+            } else {
+                TextField(L("voice.sttModel"), text: $sttModelInput, prompt: Text(settings.sttProvider.defaultModel))
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: sttModelInput) { _, newValue in
+                    guard settings.sttProvider != .ollama else { return }
                     settings.setSTTModel(newValue, for: settings.sttProvider)
                 }
+            }
 
             // Parameter tabs hold pickers only; keys live in the API Keys tab.
-            if !settings.sttProvider.hasKey {
+            if settings.sttProvider != .ollama && !settings.sttProvider.hasKey {
                 Text(L("voice.needKey"))
                     .font(.caption)
                     .foregroundColor(.orange)

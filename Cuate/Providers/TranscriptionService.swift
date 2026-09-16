@@ -7,12 +7,40 @@ import AVFoundation
 /// own `POST /v1/listen` with a raw binary body.
 enum TranscriptionService {
 
+    /// Capture once per recording/session; settings edits cannot redirect queued audio.
+    struct Selection {
+        let provider: STTProviderID
+        let models: [STTProviderID: String]
+        let localEndpoint: String
+
+        @MainActor init() {
+            let settings = AppSettings.shared
+            provider = settings.sttProvider
+            models = Dictionary(uniqueKeysWithValues: STTProviderID.allCases.map { ($0, settings.sttModel(for: $0)) })
+            localEndpoint = settings.localEndpointURL
+        }
+    }
+
     /// Transcribes the audio file using the configured STT provider.
-    /// Falls back to any STT provider that has a key if the preferred one doesn't.
+    /// Cloud choices retain their key-based fallback. Ollama is explicit and
+    /// never falls back to a cloud provider or inherits a cloud API key.
     @MainActor
-    static func transcribe(audioURL: URL) async throws -> String {
-        let settings = AppSettings.shared
-        let preferred = settings.sttProvider
+    static func transcribe(audioURL: URL, selection: Selection? = nil) async throws -> String {
+        try Task.checkCancellation()
+        let selection = selection ?? Selection()
+        let preferred = selection.provider
+        if preferred == .ollama {
+            let model = selection.models[.ollama] ?? ""
+            let text = try await OllamaTranscriptionService.transcribe(
+                audioURL: audioURL, endpoint: selection.localEndpoint, model: model
+            )
+            let seconds = (try? await AVURLAsset(url: audioURL).load(.duration).seconds) ?? 0
+            if seconds > 0 {
+                SpendStore.shared.record(kind: .stt, provider: preferred.rawValue, model: model,
+                                         units: seconds / 60, costUSD: 0)
+            }
+            return text
+        }
 
         // Key lookups below are cache-only (never a securityd round trip on the
         // main actor) — make sure the cache is filled first.
@@ -23,7 +51,7 @@ enum TranscriptionService {
             throw ProviderError.transcriptionUnavailable
         }
 
-        let model = settings.sttModel(for: provider)
+        let model = selection.models[provider] ?? provider.defaultModel
         // Off the main thread: a minutes-long recording is megabytes, and the
         // module defaults to MainActor — an unannotated read would block UI.
         let audioData = try await Task.detached(priority: .userInitiated) {
@@ -39,6 +67,8 @@ enum TranscriptionService {
             )
         case .deepgram:
             text = try await transcribeDeepgram(apiKey: apiKey, model: model, audioData: audioData)
+        case .ollama:
+            throw ProviderError.transcriptionUnavailable // local is explicit, never a fallback
         }
 
         // STT bills per audio minute — read the real duration off the asset.
@@ -63,8 +93,10 @@ enum TranscriptionService {
     /// first phrase's insertion latency. A cheap unauthenticated GET to the
     /// API root is enough; the response (typically 401/404) is discarded —
     /// only the pooled connection in `HTTPClient.session` matters.
-    static func prewarmConnection() {
-        let preferred = AppSettings.shared.sttProvider
+    static func prewarmConnection(selection: Selection? = nil) {
+        let preferred = (selection ?? Selection()).provider
+        // No cloud-key warmup or implicit model load for local recognition.
+        guard preferred != .ollama else { return }
         let candidates: [STTProviderID] = [preferred] + STTProviderID.allCases.filter { $0 != preferred }
         guard let provider = candidates.first(where: { $0.hasKey }) else { return }
         let host: String
@@ -72,6 +104,7 @@ enum TranscriptionService {
         case .mistral: host = "https://api.mistral.ai/v1/models"
         case .openai: host = "https://api.openai.com/v1/models"
         case .deepgram: host = "https://api.deepgram.com/v1/projects"
+        case .ollama: return
         }
         var request = URLRequest(url: URL(string: host)!)
         request.timeoutInterval = 5

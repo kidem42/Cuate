@@ -15,7 +15,36 @@ render those identifiers as full recording cards (see
 |---|---|
 | `plaud_find` | Locate recordings by name fragment and/or date range |
 | `plaud_get_note` | Read a recording's AI summary — every tab Plaud produced |
-| `plaud_get_transcript` | Read the verbatim transcript, timecoded, optionally windowed |
+| `plaud_get_transcript` | Page through verbatim/clean speech, outline or device marks; optional minute window |
+
+### Read options
+
+`plaud_find` accepts `timezone` (an IANA name such as `America/Cancun`) for
+inclusive date filters. The default is the agent host's timezone; on a remote
+host, pass the user's timezone explicitly. Invalid calendar days are rejected;
+naive API timestamps are UTC. Search scans at most 500 recordings, reports when
+older ones were not searched, and applies `limit` after filtering (default 10,
+maximum 100). Missing dates are excluded from date-filtered results and counted.
+
+`plaud_get_transcript` selects `version=verbatim|clean|outline|marks` (default
+verbatim). It never merges source blocks. `marks` preserves `mark_memo` data as
+received; these are device-button highlights, not speech. `from_min`/`to_min`
+remain available for timestamped segments, including fractional minutes.
+
+Results contain JSON with `text`, `offset`, `total_characters`, `next_cursor`.
+Repeat with the cursor and unchanged recording/version/range until it is null,
+concatenating `text` in order. `page_chars` defaults to 12,000 (1–60,000); a page
+may split an utterance or JSON item. A changed source invalidates the cursor so
+text cannot silently be skipped. Cursors are implementation-local, not upstream
+MCP cursors. Plain-text blocks are paged too; marks/prose reject minute filters.
+
+Recording results carry a random data delimiter to distinguish them from model
+instructions. Text links require HTTPS and public DNS addresses, no URL
+credentials, redirects or nonstandard ports, and downloads are capped at 20 MiB.
+The downloader has a 30-second socket timeout and elapsed-time budget; a pending
+read can finish after that budget before it is checked again. DNS preflight is
+not transport DNS pinning. Download errors are reported as unavailable content,
+not as proof of an empty recording. OAuth and account/session handling are unchanged.
 
 ## Install
 
@@ -105,7 +134,7 @@ listed under a heading.
 ## Tests
 
 ```bash
-python3 tests/test_plugin.py     # or: pytest tests
+python3 -m unittest discover -s tests -p 'test_*.py'     # or: pytest tests
 ```
 
 Standard library only — no network, no grant, no third-party runner. Besides
