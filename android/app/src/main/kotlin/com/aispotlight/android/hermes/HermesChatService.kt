@@ -34,6 +34,7 @@ object HermesChatService {
         data class Status(val text: String?) : AgentEvent()
         /** The run id, as soon as known — the stop button targets it. */
         data class Run(val runID: String) : AgentEvent()
+        object ApprovalsChanged : AgentEvent()
         /** Rolling step-journal summary (persisted on the reply message). */
         data class Steps(val summary: String) : AgentEvent()
         /** A system line to persist in the chat (courier warnings). */
@@ -212,6 +213,7 @@ object HermesChatService {
 
         val journal = StepJournal()
         var segmentStarted = false
+        var completed = false
         transport.chatStream(sessionID, transport.inputPayload(input, images), modelOptions).collect { event ->
             when (event) {
                 is HermesStreamEvent.RunStarted -> emit(AgentEvent.Run(event.runID))
@@ -256,6 +258,7 @@ object HermesChatService {
                     }
                 }
                 is HermesStreamEvent.RunCompleted -> {
+                    completed = true
                     // Usage itself is the agent's own billing — but the
                     // context fill drives the gauge. Patched gateways send
                     // the true number; the stock fallback (run-cumulative
@@ -271,10 +274,12 @@ object HermesChatService {
                 }
                 is HermesStreamEvent.Done -> { }
                 is HermesStreamEvent.Unknown -> {
+                    if (event.event == "approval.request" || event.event == "approval.changed") emit(AgentEvent.ApprovalsChanged)
                     Diagnostics.log("hermes", "sse.unknown ${event.event}")
                 }
             }
         }
+        if (!completed) throw java.io.IOException("Hermes stream ended before run.completed")
         journal.summary()?.let { emit(AgentEvent.Steps(it)) }
     }
 
@@ -551,6 +556,7 @@ object HermesChatService {
          * never read) must not fire while the agent may still read them.
          */
         onRunOver: suspend (HermesRunState?) -> Unit = {},
+        onRunState: suspend (HermesRunState) -> Unit = {},
         onPartial: suspend (RecoveredTurn) -> Unit,
     ): RecoveredTurn? {
         val settings = AppSettings.current
@@ -570,6 +576,7 @@ object HermesChatService {
             statusRoute?.let { id ->
                 try {
                     val state = transport(settings).runState(id)
+                    onRunState(state)
                     when {
                         state.isTerminal -> {
                             terminal = state.status
@@ -587,7 +594,7 @@ object HermesChatService {
                 } catch (e: Exception) {
                     // 404 = the gateway restarted and forgot the run (the map
                     // is in-memory); transient errors just skip one check.
-                    if ((e as? HermesTransportException)?.status == 404) {
+                    if ((e as? HermesTransportException)?.isMissingRun == true) {
                         statusRoute = null
                         forgotten = true
                     }
@@ -732,7 +739,7 @@ object HermesChatService {
             } catch (e: Exception) {
                 // 404 = the gateway restarted and forgot the run — the tail
                 // decides. Anything else is "offline": no verdict.
-                if ((e as? HermesTransportException)?.status != 404) return null
+                if ((e as? HermesTransportException)?.isMissingRun != true) return null
             }
         }
         return try {

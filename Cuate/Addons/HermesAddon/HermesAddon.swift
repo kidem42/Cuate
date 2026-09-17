@@ -84,6 +84,82 @@ final class HermesAddon: ObservableObject {
         activeTurnKeys[key] != nil
     }
 
+    // Approvals use the existing run-status and session polling paths. No
+    // transcript rows or consent decisions are persisted as authority.
+    @Published private(set) var approvalLedgers: [String: HermesApprovalLedger] = [:]
+    @Published private(set) var approvalUnavailable: Set<String> = []
+    private var approvalReads: Set<String> = []
+    private var approvalTerminalRuns: [String: String] = [:]
+
+    func refreshApprovals(sessionID: String, manual: Bool = false) async {
+        guard let runID = settings.activeRun(forSession: sessionID),
+              approvalReads.insert(sessionID).inserted else { return }
+        defer { approvalReads.remove(sessionID) }
+        let endpoint = settings.endpointURL
+        let revision = approvalLedgers[sessionID]?.revision ?? 0
+        let probe = await transport().runProbe(runID: runID)
+        guard endpoint == settings.endpointURL,
+              settings.activeRun(forSession: sessionID) == runID,
+              (approvalLedgers[sessionID]?.revision ?? 0) == revision else { return }
+        switch probe {
+        case .known(let state):
+            if state.isTerminal { approvalTerminalRuns[sessionID] = runID }
+            else { approvalTerminalRuns.removeValue(forKey: sessionID) }
+            var ledger = approvalLedgers[sessionID] ?? HermesApprovalLedger()
+            let requests = state.status == "waiting_for_approval" ? state.approvals.compactMap {
+                HermesApproval.parse($0, endpoint: endpoint, sessionID: sessionID, runID: runID)
+            } : []
+            ledger.reconcile(requests)
+            if manual { ledger.allowManualRetry() }
+            approvalLedgers[sessionID] = ledger
+            if state.status == "waiting_for_approval" && requests.isEmpty {
+                approvalUnavailable.insert(sessionID)
+            } else { approvalUnavailable.remove(sessionID) }
+            if state.isTerminal && state.pendingSteer == nil {
+                settings.setActiveRun(nil, forSession: sessionID)
+                markTailDead(sessionID: sessionID)
+            }
+        case .gone:
+            settings.setActiveRun(nil, forSession: sessionID)
+            markTailDead(sessionID: sessionID)
+            approvalLedgers.removeValue(forKey: sessionID)
+            approvalUnavailable.remove(sessionID)
+        case .unreachable:
+            // Keep the run and cards. Submission always performs a fresh read.
+            approvalUnavailable.insert(sessionID)
+        }
+    }
+
+    func resolveApproval(_ request: HermesApproval, approve: Bool) async {
+        guard request.endpoint == settings.endpointURL,
+              settings.activeRun(forSession: request.sessionID) == request.runID,
+              stopTasks[request.runID] == nil,
+              var ledger = approvalLedgers[request.sessionID], ledger.begin(request) else { return }
+        approvalLedgers[request.sessionID] = ledger
+        let client = transport()
+        var accepted = false
+        // A stale card must never address the next request or a different run.
+        if case .known(let state) = await client.runProbe(runID: request.runID),
+           state.status == "waiting_for_approval",
+           state.approvals.contains(where: {
+               HermesApproval.parse($0, endpoint: request.endpoint, sessionID: request.sessionID,
+                                    runID: request.runID) == request
+           }), request.endpoint == settings.endpointURL,
+           settings.activeRun(forSession: request.sessionID) == request.runID,
+           stopTasks[request.runID] == nil {
+            do {
+                try await client.resolveApproval(runID: request.runID, approvalID: request.requestID, approve: approve)
+                accepted = true
+            } catch {
+                // The POST may have reached Hermes. Never resend automatically.
+                Diagnostics.log("hermes", "approval.unconfirmed")
+            }
+        }
+        guard request.endpoint == settings.endpointURL else { return }
+        approvalLedgers[request.sessionID]?.finish(request, accepted: accepted)
+        await refreshApprovals(sessionID: request.sessionID)
+    }
+
     // MARK: - Stopping a run
 
     /// What a stop request came to, as the chat reports it.
@@ -158,7 +234,7 @@ final class HermesAddon: ObservableObject {
                 polls += 1
                 switch await transport.runProbe(runID: runID) {
                 case .known(let state):
-                    if !state.isRunning {
+                    if state.isTerminal {
                         outcome = .stopped(status: state.status)
                         break confirm
                     }
@@ -435,6 +511,12 @@ final class HermesAddon: ObservableObject {
     }
 
     func liveTurn(sessionID: String) -> HermesLiveTurn? {
+        // A known run remains busy until an authoritative terminal result.
+        // Transcript silence, including a long human approval wait, is not completion.
+        if let runID = settings.activeRun(forSession: sessionID) {
+            if approvalTerminalRuns[sessionID] == runID { return nil }
+            return HermesLiveTurn(steps: liveTurns[sessionID]?.steps ?? [], lastRowAt: Date())
+        }
         guard let turn = liveTurns[sessionID],
               Date().timeIntervalSince(turn.lastRowAt) < HermesLiveTurnDetector.staleAfter,
               deadTailMarks[sessionID].map({ turn.lastRowAt > $0 }) ?? true
@@ -838,9 +920,15 @@ final class HermesAddon: ObservableObject {
         let endpoint = settings.endpointURL
         if lastPollEndpoint != endpoint {
             lastSeenCounts.removeAll()
+            approvalLedgers.removeAll()
+            approvalUnavailable.removeAll()
+            approvalTerminalRuns.removeAll()
             continuationRequests.removeAll()
             backgroundWork.removeAll()
             lastPollEndpoint = endpoint
+        }
+        for sessionID in Set(settings.sessionMap.values) {
+            await refreshApprovals(sessionID: sessionID)
         }
         guard let sessions = try? await transport().sessions(limit: 50),
               settings.endpointURL == endpoint else { return }

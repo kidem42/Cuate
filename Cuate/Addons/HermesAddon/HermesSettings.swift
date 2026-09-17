@@ -504,10 +504,16 @@ final class HermesSettings: ObservableObject {
     }
 
     func activeRun(forSession sessionID: String) -> String? {
-        activeRunBySession[sessionID]
+        let endpoints = defaults.dictionary(forKey: "hermes.activeRunEndpoints") as? [String: String] ?? [:]
+        guard endpoints[sessionID] == endpointURL else { return nil }
+        return activeRunBySession[sessionID]
     }
 
     func setActiveRun(_ runID: String?, forSession sessionID: String) {
+        var endpoints = defaults.dictionary(forKey: "hermes.activeRunEndpoints") as? [String: String] ?? [:]
+        if runID != nil { endpoints[sessionID] = endpointURL }
+        else { endpoints.removeValue(forKey: sessionID) }
+        defaults.set(endpoints, forKey: "hermes.activeRunEndpoints")
         if let runID {
             activeRunBySession[sessionID] = runID
         } else {
@@ -569,5 +575,10 @@ final class HermesSettings: ObservableObject {
         sessionMap = (defaults.dictionary(forKey: "hermes.sessionMap") as? [String: String]) ?? [:]
         activeRunBySession = (defaults.dictionary(forKey: "hermes.activeRunBySession") as? [String: String]) ?? [:]
         heldSendsByConversation = (defaults.dictionary(forKey: "hermes.heldSends") as? [String: [String]]) ?? [:]
+        // Existing run IDs belong to the configured endpoint at migration time.
+        // Keep the IDs/history; changing endpoints must not transfer approval authority.
+        if defaults.dictionary(forKey: "hermes.activeRunEndpoints") == nil {
+            defaults.set(activeRunBySession.mapValues { _ in endpointURL }, forKey: "hermes.activeRunEndpoints")
+        }
     }
 }

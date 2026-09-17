@@ -120,3 +120,7 @@ private/
 *.certSigningRequest
 *.p8
 keystore.properties
+
+# Hermes test subjects belong in an external checkout, never vendored here.
+/scripts/fixtures/hermes-approval/*.py
+/scripts/fixtures/hermes-approval/LICENSE*

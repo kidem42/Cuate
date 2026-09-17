@@ -389,3 +389,20 @@ The upstream desktop client also tracks background state separately from parent
 busy state (`apps/desktop/src/store/background-delegation.ts`). Cuate derives
 pending delivery state from persisted messages and uses the existing continuation
 consent flow after delivery; no Hermes dispatcher modification is needed.
+
+## Native action approvals — source contract, 2026-09-16
+
+Source verification: Hermes revision `1ab32b212b`, `api_server_runs.py`,
+`tools/approval.py`, `tools/approval_gateway_wait.py` and `tools/approval_context.py`.
+This is a local source receipt, not a live VPS probe. `POST /v1/runs/{run_id}/approval`
+uses `request_id` and `choice` (`once` or `deny` for Cuate). Responses echo both
+identities and the choice, with `resolved: 1`. Stale IDs return 409.
+
+Native `_run_agent` does not register a notifier in this source; additionally,
+`api_server` is classified as unattended by the presence gate. Cuate gateway
+patch v6 enrolls only a native run with its own active notifier, without changing
+the session platform or global policies. GET run status adds `approvals: [...]`
+from the actual queue and `cuate_approval_version: 1`. `approval.changed` on the
+existing native SSE stream triggers a fresh snapshot. Multiple unresolved
+requests each carry their own `request_id`; a single saved last event is not a
+complete recovery snapshot. See `docs/hermes-approvals.md`.

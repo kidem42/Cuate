@@ -578,6 +578,27 @@ from another client between the fresh read and POST. Automatic continuation
 requires Cuate running. The standalone `HermesLiveTurnContractTest.py` covers
 transcript classification and the consent ledger without building the app.
 
+**Action approvals (macOS and Android).** `HermesApproval` and
+`HermesApprovalLedger` scope cards to endpoint/session/run/request and retain an
+unconfirmed submission until an explicit status check. The existing session
+stream's `approval.changed` event and run recovery/polling read the authoritative
+pending snapshot. Only `request_id` + `choice: once/deny` is sent; a fresh read
+precedes POST, and a lost response never triggers a retry. `waiting_for_approval`
+is busy; saved run IDs survive unknown/disconnected status. Stop requires terminal
+confirmation and retires native waiters without granting permission. Saved run
+IDs are endpoint-scoped, preserving existing bindings/history. Tool consent never
+uses the separate continuation consent ledger.
+
+Gateway patch v6 enrolls native `_run_agent` calls in the existing approval queue,
+adds complete pending snapshots to GET run status, and enables human presence
+only for an API run with its own active notifier. The session platform, background
+policy and ordinary chat route remain unchanged. Canonical Python lives in
+`scripts/hermes/native_approval_patch.py`; the generator pins all existing local,
+remote, Android and guide representations. Unsupported or foreign native approval
+implementations are refused. See `docs/hermes-approvals.md` for compatibility and
+verification boundaries; `scripts/test-hermes-approvals.py` runs standalone
+Swift/Kotlin and isolated Python contracts without application targets.
+
 **Gateway compatibility repair.** `HermesGatewayPatch` handles the gateway
 text edits and the known stale catalog import after Hermes split out
 `hermes_cli.models_pricing`: move `_format_price_per_mtok` out of an old
@@ -589,6 +610,12 @@ the authenticated model catalog. The VPS command, embedded guide and Android
 asset carry the same repair. `HermesCatalogPatchContractTest.py` exercises all
 four paste-blocks and compares their output with Swift, reproducing the runtime
 ImportError without real credentials or provider calls.
+The generated v6 transform also compares the installed skills helper signature
+with the retained `/v1/skills` call. It removes the known unsupported
+`include_editorial` keyword for older helpers, preserves newer helpers and rejects
+unknown call shapes. `HermesSkillsCatalogContractTest.py` covers both signatures,
+runtime catalog preservation and idempotence; the same transform ships in all
+Cuate installers, so this repair serves the desktop, Android and web catalogs.
 
 **Connection guide (macOS).** `HermesSettingsView` starts with a collapsed
 "Connect Hermes" guide: domain/HTTPS or no-domain/SSH, four short steps, and

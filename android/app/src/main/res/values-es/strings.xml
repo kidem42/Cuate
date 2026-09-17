@@ -231,8 +231,8 @@
     <string name="hermes_dashboard_hint">Los archivos adjuntos (salvo imágenes) llegan al host del agente por la API de archivos del panel de Hermes (su propia URL y token). Las imágenes siempre viajan inline, sin panel.</string>
     <string name="hermes_setup">Configurar gateway remoto (SSH)</string>
     <string name="hermes_lock_rerouted">⚠️ El gateway redirigió el bloqueo: pediste %1$s, pero su configuración fija este modelo a otro proveedor — la sesión ahora usa %2$s vía %3$s.</string>
-    <string name="hermes_patch_title">Parche del gateway: medidor de contexto honesto</string>
-    <string name="hermes_patch_hint">Pega esto en la terminal del host del agente tras actualizar Hermes. Añade usage.context_tokens y context_window — el llenado real del contexto que la API omite, para que el medidor deje de estimar. Los mensajes durante el turno no necesitan parche: Hermes reciente trae su propia ruta y la app la usa sola. Copia de seguridad junto al archivo; se niega ante estructuras desconocidas. Se puede repetir; repítelo tras cada actualización de Hermes.</string>
+    <string name="hermes_patch_title">Parche del gateway v6: contexto y permisos</string>
+    <string name="hermes_patch_hint">Añade permisos de acciones en sesiones nativas, recuperación, métricas de contexto y tareas independientes. Valida las fuentes antes de guardar copias; rechaza implementaciones desconocidas. Ejecútalo en el servidor y reinicia el gateway. Comprueba de nuevo tras actualizar Hermes.</string>
     <string name="hermes_setup_hint">Ejecuta en la máquina del agente (VPS, nube, un Mac en casa) y pega arriba la API_SERVER_KEY impresa. API_SERVER_HOST=0.0.0.0 es obligatorio: por defecto el servidor escucha solo en loopback.</string>
 
     <!-- Costs (spend analytics) -->
@@ -312,4 +312,10 @@
     <string name="or_not_allowed">Está en el catálogo, pero tus ajustes de privacidad de OpenRouter no le dejan ningún endpoint — la petición fallará. Elige otro modelo o cambia los ajustes en openrouter.ai.</string>
     <string name="or_not_allowed_detail">Sin endpoint con tus ajustes de privacidad de OpenRouter.</string>
     <string name="or_routing_hint">OpenRouter no encontró ningún endpoint para este modelo con las restricciones actuales (tus ajustes de privacidad en openrouter.ai, la regla sin recogida de datos para documentos o el interruptor ZDR en Ajustes). Elige otro modelo en el explorador del catálogo o relaja una restricción.</string>
+    <string name="hermes_approval_title">Permiso para una acción del agente</string>
+    <string name="hermes_approval_once">Permitir una vez</string>
+    <string name="hermes_approval_deny">Denegar</string>
+    <string name="hermes_approval_refresh">Consultar estado de la solicitud</string>
+    <string name="hermes_approval_uncertain">Decisión no confirmada. Consulta el estado antes de volver a elegir. No se reintenta automáticamente.</string>
+    <string name="hermes_approval_unavailable">No se pueden consultar los permisos pendientes. Comprueba la conexión y la compatibilidad del parche de Cuate.</string>
 </resources>

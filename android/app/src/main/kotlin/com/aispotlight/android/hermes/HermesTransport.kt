@@ -5,6 +5,9 @@ import com.aispotlight.android.BuildConfig
 import com.aispotlight.android.core.HttpClient
 import com.aispotlight.android.core.TokenUsage
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import okhttp3.HttpUrl
@@ -150,10 +153,15 @@ sealed class HermesStreamEvent {
 }
 
 class HermesTransportException(val status: Int, body: String) :
-    Exception("Hermes API error (HTTP $status): ${body.take(200)}")
+    Exception("Hermes API error (HTTP $status): ${body.take(200)}") {
+    val isMissingRun: Boolean = status == 404 && runCatching {
+        JSONObject(body).optJSONObject("error")?.optString("code") == "run_not_found"
+    }.getOrDefault(false)
+}
 
 /** `GET /v1/runs/{id}` as the client reads it: the status and the steer the run never read. */
-data class HermesRunState(val status: String, val pendingSteer: String?) {
+data class HermesRunState(val status: String, val pendingSteer: String?,
+    val approvals: List<Pair<String, String>> = emptyList()) {
     val isTerminal: Boolean get() = status == "completed" || status == "failed" || status == "cancelled"
     val isLive: Boolean get() = status == "queued" || status == "running" ||
         status == "waiting_for_approval" || status == "stopping"
@@ -172,6 +180,16 @@ private val sseClient: okhttp3.OkHttpClient by lazy {
     HttpClient.client.newBuilder()
         .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
         .callTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+}
+
+/** Control decisions must not follow redirects or retry a lost POST. */
+private val runControlClient: okhttp3.OkHttpClient by lazy {
+    HttpClient.client.newBuilder()
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .callTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 }
 
@@ -206,10 +224,44 @@ class HermesTransport(
     /** Runs a request and returns the parsed JSON object (non-2xx → exception). */
     private suspend fun json(method: String, path: String, body: JSONObject? = null,
                              query: Map<String, String> = emptyMap()): JSONObject {
-        val text = HttpClient.json(request(method, path, body, query))
+        val req = request(method, path, body, query)
+        val text = if (path.startsWith("v1/runs/")) runControlJSON(req) else HttpClient.json(req)
         return try { JSONObject(text) } catch (_: Exception) {
             throw HermesTransportException(0, "not a JSON object at $path")
         }
+    }
+
+    private suspend fun runControlJSON(request: Request): String = suspendCancellableCoroutine { continuation ->
+        val original = request.body
+        // OkHttp also has response-code follow-ups. A one-shot body forbids
+        // replay even for a 503/Retry-After response after the server acted.
+        val body = original?.let { delegate -> object : okhttp3.RequestBody() {
+            override fun contentType() = delegate.contentType()
+            override fun contentLength() = delegate.contentLength()
+            override fun isOneShot() = true
+            override fun writeTo(sink: okio.BufferedSink) = delegate.writeTo(sink)
+        } }
+        val single = if (body != null) request.newBuilder().method(request.method, body).build() else request
+        val call = runControlClient.newCall(single)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, error: java.io.IOException) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                response.use {
+                    try {
+                        val text = it.body?.string().orEmpty()
+                        if (continuation.isActive) {
+                            if (it.isSuccessful) continuation.resume(text)
+                            else continuation.resumeWithException(HermesTransportException(it.code, text))
+                        }
+                    } catch (error: java.io.IOException) {
+                        if (continuation.isActive) continuation.resumeWithException(error)
+                    }
+                }
+            }
+        })
     }
 
     // MARK: Probe & discovery
@@ -486,7 +538,32 @@ class HermesTransport(
         return HermesRunState(
             status = obj.optString("status", ""),
             pendingSteer = obj.optString("pending_steer", "").ifEmpty { null },
+            approvals = runApprovals(obj, runID),
         )
+    }
+
+    private fun runApprovals(obj: JSONObject, runID: String): List<Pair<String, String>> {
+        val array = obj.optJSONArray("approvals") ?: org.json.JSONArray().also { array ->
+            obj.optJSONObject("approval")?.let { array.put(it) }
+        }
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.opt("request_id") as? String ?: return@mapNotNull null
+            val command = item.opt("command") as? String ?: return@mapNotNull null
+            if (id.isBlank() || id != id.trim() || id.length > 256 || command.isEmpty() ||
+                (item.has("run_id") && item.optString("run_id") != runID)) null else id to command
+        }
+    }
+
+    suspend fun resolveApproval(runID: String, requestID: String, approve: Boolean) {
+        require(requestID.isNotBlank())
+        val choice = if (approve) "once" else "deny"
+        val reply = json("POST", "v1/runs/$runID/approval",
+            JSONObject().put("request_id", requestID).put("choice", choice))
+        check(reply.optString("run_id") == runID && reply.optString("request_id") == requestID &&
+            reply.optString("choice") == choice && reply.optInt("resolved") == 1) {
+            "Approval response not confirmed"
+        }
     }
 
     // MARK: File upload (dashboard server)

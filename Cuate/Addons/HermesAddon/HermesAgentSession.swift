@@ -151,6 +151,7 @@ final class HermesAgentSession: AgentSession {
                     let modelOptions: [String: Any]? = effort.isEmpty
                         ? nil : ["reasoning_effort": effort]
                     var deltaCount = 0
+                    var runCompleted = false
                     var runningTool: (name: String, preview: String?, started: Date)?
 
                     for try await event in transport.chatStream(sessionID: sessionID, input: input,
@@ -221,6 +222,7 @@ final class HermesAgentSession: AgentSession {
                             // way out (live 2026-07-29: quota cooldown).
                             continuation.yield(.finalText(Self.annotateGatewayFailure(content)))
                         case .runCompleted(let usage, let contextTokens, let windowTokens, let pendingSteer):
+                            runCompleted = true
                             // The agent's own effective window (OAuth caps
                             // included) — tier 0 of the gauge denominator.
                             if let windowTokens {
@@ -261,25 +263,14 @@ final class HermesAgentSession: AgentSession {
                         case .done:
                             break
                         case .unknown(let name, let payload):
-                            // `approval_events` is advertised by capabilities
-                            // but 0.19.0 emits no such frames (probed live) —
-                            // this best-effort mapping arms the UI for the
-                            // Hermes version that starts sending them.
-                            if name.localizedCaseInsensitiveContains("approval"),
-                               let approvalID = (payload["approval_id"] ?? payload["id"]) as? String {
-                                let subject = (payload["command"] ?? payload["preview"] ?? payload["gist"] ?? payload["subject"]) as? String
-                                let approval = AgentApproval(
-                                    id: approvalID,
-                                    subject: subject ?? name,
-                                    toolName: payload["tool_name"] as? String,
-                                    hostDescription: self.settings.baseURL.host,
-                                    supportsAlways: false
-                                )
-                                continuation.yield(.approvalRequested(approval))
+                            if name == "approval.request" || name == "approval.changed" {
+                                // Re-read the authoritative queue; no callback captures a mutable run ID.
+                                await self.addon.refreshApprovals(sessionID: sessionID)
                             }
                             Diagnostics.log("hermes", "sse.unknown \(name) keys=\(payload.keys.sorted().joined(separator: ","))")
                         }
                     }
+                    if !runCompleted && !Task.isCancelled { throw URLError(.networkConnectionLost) }
                     let ended = self.currentRunID
                     self.currentRunID = nil
                     self.addon.clearRun(conversationKey: self.conversationKey)
@@ -289,7 +280,7 @@ final class HermesAgentSession: AgentSession {
                     // here or never (see stopAbandonedRun).
                     if Task.isCancelled, let ended {
                         self.stopAbandonedRun(ended)
-                    } else if self.settings.activeRun(forSession: sessionID) == ended {
+                    } else if runCompleted, self.settings.activeRun(forSession: sessionID) == ended {
                         // Over for good — a stop keeps the record until the
                         // gateway confirms (HermesAddon.performStop).
                         self.settings.setActiveRun(nil, forSession: sessionID)
@@ -320,7 +311,7 @@ final class HermesAgentSession: AgentSession {
                         // and this is the last place to collect it — the
                         // phone lost messages exactly this way (2026-09-06).
                         let state = await self.addon.transport().runState(runID: orphaned)
-                        if !(state?.isRunning ?? false) {
+                        if state?.isTerminal == true {
                             self.addon.markTailDead(sessionID: sessionID)
                             if self.settings.activeRun(forSession: sessionID) == orphaned {
                                 self.settings.setActiveRun(nil, forSession: sessionID)
@@ -370,10 +361,12 @@ final class HermesAgentSession: AgentSession {
     }
 
     func resolveApproval(id: String, decision: AgentApprovalDecision) async throws {
-        guard let runID = currentRunID else { return }
-        try await addon.transport().resolveApproval(
-            runID: runID, approvalID: id,
-            approve: decision != .deny
-        )
+        guard decision != .approveAlways, let sid = boundSessionID,
+              let request = addon.approvalLedgers[sid]?.entries.first(where: { $0.request.requestID == id })?.request
+        else { throw AgentDiagnostic(message: HL("hermes.approval.unavailable")) }
+        await addon.resolveApproval(request, approve: decision == .approve)
+        if addon.approvalLedgers[sid]?.entries.contains(where: {
+            $0.request == request && $0.phase == .uncertain
+        }) == true { throw AgentDiagnostic(message: HL("hermes.approval.uncertain")) }
     }
 }

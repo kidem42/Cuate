@@ -24,6 +24,10 @@ struct HermesGatewayPatchContractTest {
         }
 
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--approval-program"] {
+            print(P.approvalProgram)
+            return
+        }
         if arguments.count == 4, arguments[0] == "--catalog" {
             do {
                 let inventory = try String(contentsOfFile: arguments[1], encoding: .utf8)

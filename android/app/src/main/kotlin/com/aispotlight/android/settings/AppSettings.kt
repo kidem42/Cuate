@@ -379,7 +379,18 @@ class AppSettings private constructor(context: Context) {
     private val _hermesActiveRuns = MutableStateFlow(readStringMap("hermesActiveRuns"))
     val hermesActiveRuns: StateFlow<Map<String, String>> = _hermesActiveRuns
 
+    private var hermesActiveRunEndpoints = readStringMap("hermesActiveRunEndpoints").let { saved ->
+        if (prefs.contains("hermesActiveRunEndpoints")) saved else
+            _hermesActiveRuns.value.mapValues { _hermesEndpoint.value }.also { writeStringMap("hermesActiveRunEndpoints", it) }
+    }
+
+    fun hermesActiveRun(sessionId: String): String? =
+        _hermesActiveRuns.value[sessionId].takeIf { hermesActiveRunEndpoints[sessionId] == _hermesEndpoint.value }
+
     fun setHermesActiveRun(sessionId: String, runId: String?) {
+        hermesActiveRunEndpoints = if (runId == null) hermesActiveRunEndpoints - sessionId
+            else hermesActiveRunEndpoints + (sessionId to _hermesEndpoint.value)
+        writeStringMap("hermesActiveRunEndpoints", hermesActiveRunEndpoints)
         val next = if (runId == null) _hermesActiveRuns.value - sessionId
             else _hermesActiveRuns.value + (sessionId to runId)
         if (next == _hermesActiveRuns.value) return

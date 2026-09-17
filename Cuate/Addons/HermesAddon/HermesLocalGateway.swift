@@ -97,7 +97,8 @@ enum HermesLocalGateway {
     static func contextPatchState() async -> ContextPatchState {
         guard let file = await apiServerFile(),
               let src = try? String(contentsOf: file, encoding: .utf8) else { return .unavailable }
-        if catalogRepair(beside: file) != nil { return .patchable }
+        guard let approvedSource = try? await approvalCandidate(src, beside: file) else { return .unavailable }
+        if approvedSource != src || catalogRepair(beside: file) != nil { return .patchable }
         return HermesGatewayPatch.state(of: src)
     }
 
@@ -121,7 +122,12 @@ enum HermesLocalGateway {
               let src = try? String(contentsOf: file, encoding: .utf8) else {
             throw SetupError.patchFailed("api_server.py not found")
         }
-        let outcome = HermesGatewayPatch.apply(to: src)
+        var outcome = HermesGatewayPatch.apply(to: src)
+        let approvedSource = try await approvalCandidate(outcome?.source ?? src, beside: file)
+        if approvedSource != src {
+            if outcome == nil { outcome = HermesGatewayPatch.Outcome(source: approvedSource) }
+            else { outcome?.source = approvedSource }
+        }
         let catalog = catalogRepair(beside: file)
         guard outcome != nil || catalog != nil else {
             // Nothing applied. Distinguish "already done" (fine, no-op)
@@ -147,6 +153,26 @@ enum HermesLocalGateway {
         }
         Diagnostics.log("hermes", "patch.gateway applied context=\(outcome?.contextSites ?? 0) upgraded=\(outcome?.upgradedSites ?? 0) window=\(outcome?.windowSites ?? 0) detached=\(outcome?.detachedSites ?? 0) catalog=\(catalog != nil) file=\(file.path)")
         return true
+    }
+
+    /// Run the SAME v6 transform shipped in the remote/Android commands.
+    /// Candidate-only: the interpreter reads sources and writes temporary files.
+    private static func approvalCandidate(_ source: String, beside file: URL) async throws -> String {
+        let python = ["/usr/bin/python3", "/opt/homebrew/bin/python3"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let python else { throw SetupError.patchFailed("python3 not found") }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("cuate-approval-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let program = temp.appendingPathComponent("patch.py")
+        let original = temp.appendingPathComponent("original.py")
+        let output = temp.appendingPathComponent("candidate.py")
+        try HermesGatewayPatch.approvalProgram.write(to: program, atomically: true, encoding: .utf8)
+        try source.write(to: original, atomically: true, encoding: .utf8)
+        let root = file.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let result = await run(python, ["-B", program.path, root.path, original.path, output.path], timeout: 20)
+        guard result.completed else { throw SetupError.patchFailed("approval compatibility: " + result.tail) }
+        return try String(contentsOf: output, encoding: .utf8)
     }
 
     /// `ast.parse` gate before the patched source may replace the original —
@@ -183,6 +209,8 @@ enum HermesLocalGateway {
         // Exercise the same authenticated endpoint the model picker uses.
         do { _ = try await HermesAddon.shared.transport().modelOptions() }
         catch { throw SetupError.patchFailed("model catalog check failed: " + error.localizedDescription) }
+        do { _ = try await HermesAddon.shared.transport().skills() }
+        catch { throw SetupError.patchFailed("skills catalog check failed: " + error.localizedDescription) }
     }
 
     /// Brings the local gateway up and returns the (port, key) to connect

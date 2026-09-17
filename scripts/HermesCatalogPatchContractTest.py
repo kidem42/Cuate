@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from hermes.approval_fixture import make_install, SERVER
+from hermes.native_approval_patch import transform
 
 swift_test = Path(sys.argv[1]).resolve()
 root = Path(sys.argv[2]).resolve()
@@ -46,7 +48,7 @@ single = broken.replace('from hermes_cli.models import (\n        _format_price_
                         'from hermes_cli.models import _format_price_per_mtok')
 fixed = broken.replace('    from hermes_cli.models import (\n        _format_price_per_mtok,\n',
                        '    from hermes_cli.models_pricing import _format_price_per_mtok\n    from hermes_cli.models import (\n')
-gateway = 'usage = {"context_tokens": 1, "context_window": 10}\n# continues detached\n'
+gateway = SERVER
 cases = [
     ("broken group", broken, models, formatter, True),
     ("broken single", single, models, formatter, True),
@@ -66,8 +68,9 @@ for name, script in scripts.items():
     for case, inventory, model_source, pricing_source, changed in cases:
         with tempfile.TemporaryDirectory() as directory:
             install = Path(directory)
+            make_install(install)
             server = install / "gateway/platforms/api_server.py"
-            server.parent.mkdir(parents=True)
+            server.parent.mkdir(parents=True, exist_ok=True)
             server.write_text(gateway)
             cli = install / "hermes_cli"
             cli.mkdir()
@@ -86,7 +89,7 @@ for name, script in scripts.items():
             env = dict(os.environ, HERMES_DIR=str(install))
             subprocess.run([sys.executable, "-B", "-c", script], env=env, check=True, capture_output=True)
             assert inv.read_text() == Path(str(inv) + ".swift-patched").read_text(), (name, case, "Swift parity")
-            assert server.read_text() == gateway
+            assert server.read_text() == transform(gateway, install)
             assert "# Keep this local customization." in inv.read_text()
             assert (cli / "models.py").read_text() == model_source
             assert (cli / "models_pricing.py").read_text() == pricing_source

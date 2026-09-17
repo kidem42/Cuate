@@ -138,6 +138,12 @@ val LocalChatContentWidth = androidx.compose.runtime.compositionLocalOf { 400.dp
 @Composable
 fun ChatScreen(
     messages: List<ChatMessage>,
+    approvals: List<com.aispotlight.android.hermes.HermesApprovalLedger.Entry> = emptyList(),
+    approvalUnavailable: Boolean = false,
+    onApprovalStatusRefresh: () -> Unit = {},
+    approvalsStopping: Boolean = false,
+    onApproval: (com.aispotlight.android.hermes.HermesApproval, Boolean) -> Unit = { _, _ -> },
+    onApprovalRefresh: (com.aispotlight.android.hermes.HermesApproval) -> Unit = {},
     isLoading: Boolean,
     statusText: String?,
     hasOlderMessages: Boolean,
@@ -457,6 +463,20 @@ fun ChatScreen(
                     // Smooth appearance/reorder — the mac panel's insert animation.
                     modifier = Modifier.animateItem(),
                 )
+            }
+            items(approvals, key = { "approval-" + it.request.id }) { entry ->
+                HermesApprovalCard(entry, approvalsStopping, { onApproval(entry.request, it) },
+                    { onApprovalRefresh(entry.request) })
+            }
+            if (approvalUnavailable) {
+                item(key = "approval-unavailable") {
+                    Column {
+                        Text(stringResource(R.string.hermes_approval_unavailable), style = MaterialTheme.typography.bodySmall)
+                        androidx.compose.material3.TextButton(onClick = onApprovalStatusRefresh) {
+                            Text(stringResource(R.string.hermes_approval_refresh))
+                        }
+                    }
+                }
             }
             if (statusText != null) {
                 item(key = "thinking") { ThinkingIndicator(statusText) }

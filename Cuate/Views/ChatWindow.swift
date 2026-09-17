@@ -572,6 +572,42 @@ struct ChatWindow: View {
             })
         }
 
+        if let sid = hermesSettings.sessionID(forConversationKey: chatStore.conversation.storageKey),
+           hermesSettings.activeRun(forSession: sid) != nil {
+            for entry in hermesAddon.approvalLedgers[sid]?.entries ?? []
+                where entry.phase != .accepted && entry.request.endpoint == hermesSettings.endpointURL
+                    && entry.request.runID == hermesSettings.activeRun(forSession: sid) {
+                let request = entry.request
+                var hasher = Hasher()
+                hasher.combine(baseRevision)
+                hasher.combine(Localization.currentLanguage)
+                hasher.combine(entry.phase.rawValue)
+                hasher.combine(request)
+                hasher.combine(stoppingConversations.contains(chatStore.conversation))
+                let stopping = stoppingConversations.contains(chatStore.conversation)
+                items.append(TranscriptItem(id: "hermes-approval-" + request.id, revision: hasher.finalize()) { [palette] in
+                    AnyView(HermesApprovalCard(entry: entry, stopping: stopping,
+                        resolve: { approve in Task { await hermesAddon.resolveApproval(request, approve: approve) } },
+                        refresh: { Task { await hermesAddon.refreshApprovals(sessionID: sid, manual: true) } })
+                        .environment(\.themePalette, palette)
+                        .frame(width: rowWidth, alignment: .leading))
+                })
+            }
+            if hermesAddon.approvalUnavailable.contains(sid) {
+                var hasher = Hasher()
+                hasher.combine(baseRevision)
+                hasher.combine(Localization.currentLanguage)
+                items.append(TranscriptItem(id: "hermes-approval-unavailable-" + sid, revision: hasher.finalize()) {
+                    AnyView(VStack(alignment: .leading) {
+                        Text(HL("hermes.approval.unavailable")).font(.caption)
+                        Button(HL("hermes.approval.refresh")) {
+                            Task { await hermesAddon.refreshApprovals(sessionID: sid, manual: true) }
+                        }.help(HL("hermes.approval.refresh"))
+                    }.frame(width: rowWidth, alignment: .leading))
+                })
+            }
+        }
+
         if let pending = pendingAgentApproval {
             let approval = pending.approval
             let resolve = pending.resolve
@@ -1296,19 +1332,34 @@ struct ChatWindow: View {
                 // Cold start: the history may finish loading BEFORE the
                 // handler above attaches — without this the sync never ran
                 // until the user re-entered the conversation (e2e 2026-07-25).
-                .onAppear { catchUp() }
+                .onAppear {
+                    catchUp()
+                    if let sid = HermesSettings.shared.sessionID(forConversationKey: conversationKey) {
+                        Task { await HermesAddon.shared.refreshApprovals(sessionID: sid) }
+                    }
+                }
                 // Every summon re-syncs — the agent kept working while the
                 // panel was hidden.
                 .onReceive(NotificationCenter.default.publisher(for: .chatWindowDidBecomeVisible)) { _ in
                     catchUp()
+                    if let sid = HermesSettings.shared.sessionID(forConversationKey: conversationKey) {
+                        Task { await HermesAddon.shared.refreshApprovals(sessionID: sid) }
+                    }
                 }
                 // On-screen poll (skipped while our own stream runs — its
                 // events are live). Restarts per conversation via task(id:).
                 .task(id: conversationKey) {
                     guard isAgent else { return }
+                    if let sid = HermesSettings.shared.sessionID(forConversationKey: conversationKey) {
+                        await HermesAddon.shared.refreshApprovals(sessionID: sid)
+                    }
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 20_000_000_000)
-                        guard !Task.isCancelled, canPoll() else { continue }
+                        guard !Task.isCancelled else { continue }
+                        if let sid = HermesSettings.shared.sessionID(forConversationKey: conversationKey) {
+                            await HermesAddon.shared.refreshApprovals(sessionID: sid)
+                        }
+                        guard canPoll() else { continue }
                         catchUp()
                     }
                 }

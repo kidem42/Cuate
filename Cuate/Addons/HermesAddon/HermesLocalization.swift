@@ -10,6 +10,36 @@ func HL(_ key: String) -> String {
 
 enum HermesAddonStrings {
     static let table: [String: [AppLanguage: String]] = [
+        "hermes.approval.title": [
+            .english: "Permission for an agent action",
+            .spanish: "Permiso para una acción del agente",
+            .russian: "Согласование действия агента"
+        ],
+        "hermes.approval.once": [
+            .english: "Allow once",
+            .spanish: "Permitir una vez",
+            .russian: "Разрешить один раз"
+        ],
+        "hermes.approval.deny": [
+            .english: "Deny",
+            .spanish: "Denegar",
+            .russian: "Отказать"
+        ],
+        "hermes.approval.refresh": [
+            .english: "Check request status",
+            .spanish: "Consultar estado de la solicitud",
+            .russian: "Проверить состояние запроса"
+        ],
+        "hermes.approval.uncertain": [
+            .english: "Decision not confirmed. Check status before choosing again. Nothing is retried automatically.",
+            .spanish: "Decisión no confirmada. Consulta el estado antes de volver a elegir. No se reintenta automáticamente.",
+            .russian: "Решение не подтверждено. Проверьте состояние перед повторным выбором. Автоматической повторной отправки нет."
+        ],
+        "hermes.approval.unavailable": [
+            .english: "Cannot retrieve pending approvals. Check the connection and Cuate gateway patch compatibility.",
+            .spanish: "No se pueden consultar los permisos pendientes. Comprueba la conexión y la compatibilidad del parche de Cuate.",
+            .russian: "Не удалось получить ожидающие согласования. Проверьте связь и совместимость патча Gateway Cuate."
+        ],
         "hermes.background.title": [
             .english: "Background work · %d subagents",
             .spanish: "Trabajo en segundo plano · %d subagentes",
@@ -693,9 +723,9 @@ enum HermesAddonStrings {
             .russian: "Применяю исправления совместимости гейтвея…"
         ],
         "hermes.patch.found": [
-            .english: "This gateway needs compatibility fixes for the context gauge, background runs or model catalog. Cuate will back up the affected files, apply the matching fixes and restart the gateway. After an update, this offer may appear again.",
-            .spanish: "Este gateway necesita correcciones de compatibilidad para el contexto, las tareas en segundo plano o el catálogo de modelos. Cuate guardará copias de los archivos afectados, aplicará las correcciones y reiniciará el gateway. Tras una actualización, esta opción puede reaparecer.",
-            .russian: "Этому гейтвею нужны исправления совместимости для индикатора контекста, фоновых задач или списка моделей. Cuate сохранит копии затронутых файлов, применит подходящие исправления и перезапустит гейтвей. После обновления это предложение может появиться снова."
+            .english: "This gateway needs compatibility fixes for the context gauge, background runs, action approvals or model catalog. Cuate will back up the affected files, apply the matching fixes and restart the gateway. After an update, this offer may appear again.",
+            .spanish: "Este gateway necesita correcciones de compatibilidad para el contexto, las tareas en segundo plano, los permisos de acciones o el catálogo de modelos. Cuate guardará copias de los archivos afectados, aplicará las correcciones y reiniciará el gateway. Tras una actualización, esta opción puede reaparecer.",
+            .russian: "Этому гейтвею нужны исправления совместимости для индикатора контекста, фоновых задач, согласований действий или списка моделей. Cuate сохранит копии затронутых файлов, применит подходящие исправления и перезапустит гейтвей. После обновления это предложение может появиться снова."
         ],
         "hermes.patch.run": [
             .english: "Apply gateway fixes",
@@ -718,14 +748,14 @@ enum HermesAddonStrings {
             .russian: "Не удалось пропатчить гейтвей:"
         ],
         "hermes.setup.patch.title": [
-            .english: "Gateway patch: honest context gauge",
-            .spanish: "Parche del gateway: medidor de contexto honesto",
-            .russian: "Патч гейтвея: честный гейдж контекста"
+            .english: "Gateway patch v6: context and action approvals",
+            .spanish: "Parche del gateway v6: contexto y permisos",
+            .russian: "Патч гейтвея v6: контекст и согласования"
         ],
         "hermes.setup.patch.caption": [
-            .english: "Paste into the remote machine's terminal after a Hermes update. One anchored edit to api_server.py: usage.context_tokens / context_window — the real context fill, which the API otherwise omits, so the gauge stops estimating. Mid-turn follow-ups need no patch: recent Hermes ships its own route and Cuate uses it automatically. Backup next to the file; refuses on unknown layouts without touching anything. Safe to re-run; repeat after every Hermes update.",
-            .spanish: "Pega esto en la terminal de la máquina remota tras actualizar Hermes. Una edición anclada en api_server.py: usage.context_tokens / context_window — el llenado real del contexto que la API omite, para que el medidor deje de estimar. Los mensajes durante el turno no necesitan parche: Hermes reciente trae su propia ruta y Cuate la usa sola. Copia de seguridad junto al archivo; se niega ante estructuras desconocidas sin tocar nada. Se puede repetir; repítelo tras cada actualización de Hermes.",
-            .russian: "Вставьте в терминал удалённой машины после обновления Hermes. Одна правка по якорю в api_server.py: usage.context_tokens / context_window — реальное заполнение контекста, которого нет в API, чтобы индикатор не гадал. Досылка сообщений патча не требует: в свежем Hermes есть своя ручка, и Cuate использует её сама. Бэкап рядом с файлом; на незнакомой структуре откажется, ничего не тронув. Повторный запуск безопасен; после каждого обновления Hermes — повторить."
+            .english: "Apply on the agent host after reviewing compatibility. Patch v6 adds action approvals for native sessions, recovery, context metrics and detached runs. Unknown or foreign native approval implementations are refused before writes. Backups are saved beside the files. Recheck after Hermes updates.",
+            .spanish: "Aplica en el servidor tras revisar la compatibilidad. El parche v6 añade permisos de acciones en sesiones nativas, recuperación, métricas de contexto y tareas independientes. Rechaza implementaciones desconocidas antes de escribir. Guarda copias junto a los archivos. Comprueba tras actualizar Hermes.",
+            .russian: "Применяйте на хосте агента после проверки совместимости. Патч v6 добавляет согласования действий в обычных сессиях, восстановление, метрики контекста и независимые запуски. Неизвестные или сторонние реализации отклоняются до записи. Резервные копии сохраняются рядом с файлами. Проверяйте после обновлений Hermes."
         ],
         "hermes.auto.step.reload": [
             .english: "Starting the gateway…",

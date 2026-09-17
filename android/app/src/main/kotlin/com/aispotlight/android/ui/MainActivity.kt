@@ -193,6 +193,11 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     val hermesSessionModels by settings.hermesSessionModels.collectAsStateWithLifecycle()
     val hermesSessionEfforts by settings.hermesSessionEfforts.collectAsStateWithLifecycle()
     val hermesCreating by viewModel.hermesCreating.collectAsStateWithLifecycle()
+    val approvalLedgers by viewModel.hermesApprovals.collectAsStateWithLifecycle()
+    val approvalUnavailable by viewModel.approvalUnavailable.collectAsStateWithLifecycle()
+    val stoppingIds by viewModel.stoppingIds.collectAsStateWithLifecycle()
+    val activeRuns by settings.hermesActiveRuns.collectAsStateWithLifecycle()
+    val approvalSession = conversations.firstOrNull { it.id == activeId }?.hermesSessionId
 
     // The Hermes sessions sidebar (desktop 4.0 parity: create / rename /
     // pin / color / delete / unread) lives in a drawer; the hamburger and
@@ -237,6 +242,15 @@ private fun AppRoot(viewModel: ChatViewModel, sharedTextFlow: MutableStateFlow<S
     val chatPane: @Composable (Modifier) -> Unit = { chatModifier ->
         ChatScreen(
             messages = messages,
+            approvals = approvalLedgers[approvalSession]?.entries.orEmpty().filter {
+                it.request.endpoint == hermesEndpoint && it.request.runID == activeRuns[approvalSession] &&
+                    it.phase != com.aispotlight.android.hermes.HermesApprovalLedger.Phase.ACCEPTED
+            },
+            approvalUnavailable = approvalSession in approvalUnavailable && approvalSession?.let { settings.hermesActiveRun(it) } != null,
+            approvalsStopping = activeId in stoppingIds,
+            onApproval = viewModel::resolveApproval,
+            onApprovalRefresh = viewModel::refreshApproval,
+            onApprovalStatusRefresh = { approvalSession?.let(viewModel::refreshApprovalStatus) },
             isLoading = isLoading,
             statusText = statusText,
             hasOlderMessages = hasOlder,

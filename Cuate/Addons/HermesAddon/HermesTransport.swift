@@ -206,7 +206,9 @@ nonisolated struct HermesTransport {
             comps.queryItems = query
             req.url = comps.url
         }
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let isApproval = path.hasSuffix("/approval")
+        let session = isApproval ? HermesApprovalHTTP.session : URLSession.shared
+        let (data, response) = try await session.data(for: isApproval ? HermesApprovalHTTP.oneShot(req) : req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(status) else {
             throw HermesTransportError.http(status: status, body: String(data: data, encoding: .utf8) ?? "")
@@ -526,7 +528,7 @@ nonisolated struct HermesTransport {
         do {
             _ = try await json("POST", "v1/runs/\(runID)/stop")
             return .stopping
-        } catch HermesTransportError.http(let status, _) where status == 404 {
+        } catch HermesTransportError.http(let status, let body) where HermesApproval.isMissingRun(status: status, body: body) {
             return .notFound
         }
     }
@@ -556,7 +558,9 @@ nonisolated struct HermesTransport {
     struct RunState {
         let status: String
         let pendingSteer: String?
-        var isRunning: Bool { status == "running" || status == "queued" || status == "stopping" }
+        var approvals: [[String: Any]] = []
+        var isTerminal: Bool { ["completed", "failed", "cancelled", "canceled"].contains(status) }
+        var isRunning: Bool { status == "running" || status == "queued" || status == "stopping" || status == "waiting_for_approval" }
     }
 
     func runState(runID: String) async -> RunState? {
@@ -581,19 +585,25 @@ nonisolated struct HermesTransport {
             let object = try await json("GET", "v1/runs/\(runID)")
             guard let status = object["status"] as? String else { return .unreachable }
             let pending = (object["pending_steer"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            return .known(RunState(status: status, pendingSteer: pending))
-        } catch HermesTransportError.http(let status, _) where status == 404 {
+            let approvals = object["approvals"] as? [[String: Any]]
+                ?? (object["approval"] as? [String: Any]).map { [$0] } ?? []
+            return .known(RunState(status: status, pendingSteer: pending, approvals: approvals))
+        } catch HermesTransportError.http(let status, let body) where HermesApproval.isMissingRun(status: status, body: body) {
             return .gone
         } catch {
             return .unreachable
         }
     }
 
-    /// Body shape to be pinned against the live gateway in stage 6 (the
-    /// endpoint is advertised by capabilities; docs give no schema).
+    /// Hermes exact-request contract. A lost response is never retried here.
     func resolveApproval(runID: String, approvalID: String, approve: Bool) async throws {
-        _ = try await json("POST", "v1/runs/\(runID)/approval",
-                           body: ["approval_id": approvalID, "approved": approve])
+        guard !approvalID.isEmpty else { throw URLError(.badServerResponse) }
+        let reply = try await json("POST", "v1/runs/\(runID)/approval",
+                                   body: HermesApproval.body(requestID: approvalID, approve: approve))
+        guard reply["request_id"] as? String == approvalID,
+              reply["run_id"] as? String == runID,
+              reply["choice"] as? String == (approve ? "once" : "deny"),
+              reply["resolved"] as? Int == 1 else { throw URLError(.badServerResponse) }
     }
 
     // MARK: Chat stream (SSE)

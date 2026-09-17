@@ -14,6 +14,8 @@ import com.aispotlight.android.data.ImageStore
 import com.aispotlight.android.data.MessageEntity
 import com.aispotlight.android.data.toDomain
 import com.aispotlight.android.data.toEntity
+import com.aispotlight.android.hermes.HermesApproval
+import com.aispotlight.android.hermes.HermesApprovalLedger
 import com.aispotlight.android.hermes.HermesChatService
 import com.aispotlight.android.hermes.HermesRunState
 import com.aispotlight.android.hermes.HermesSteer
@@ -116,11 +118,98 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Stop BEHIND the "stopped" run (desktop, 2026-09-07 14:49).
      */
     private val _stoppingIds = MutableStateFlow<Set<String>>(emptySet())
+    val stoppingIds: StateFlow<Set<String>> = _stoppingIds
+
+    private val _hermesApprovals = MutableStateFlow<Map<String, HermesApprovalLedger>>(emptyMap())
+    val hermesApprovals: StateFlow<Map<String, HermesApprovalLedger>> = _hermesApprovals
+    private val _approvalUnavailable = MutableStateFlow<Set<String>>(emptySet())
+    val approvalUnavailable: StateFlow<Set<String>> = _approvalUnavailable
+    private val approvalReads = mutableSetOf<String>()
+
+    private suspend fun noteApprovals(sessionID: String, runID: String, endpoint: String,
+                                     state: HermesRunState, manual: Boolean = false) = withContext(Dispatchers.Main) {
+        if (endpoint != settings.hermesEndpoint.value || settings.hermesActiveRun(sessionID) != runID) return@withContext
+        val requests = if (state.status == "waiting_for_approval") state.approvals.map { (id, command) ->
+            HermesApproval(endpoint, sessionID, runID, id, command)
+        } else emptyList()
+        var ledger = (_hermesApprovals.value[sessionID] ?: HermesApprovalLedger()).reconcile(requests)
+        if (manual) ledger = ledger.allowManualRetry()
+        _hermesApprovals.value = _hermesApprovals.value + (sessionID to ledger)
+        _approvalUnavailable.value = if (state.status == "waiting_for_approval" && requests.isEmpty())
+            _approvalUnavailable.value + sessionID else _approvalUnavailable.value - sessionID
+    }
+
+    private suspend fun refreshApprovals(sessionID: String, manual: Boolean = false) = withContext(Dispatchers.Main) {
+        val runID = settings.hermesActiveRun(sessionID) ?: return@withContext
+        if (!approvalReads.add(sessionID)) return@withContext
+        val endpoint = settings.hermesEndpoint.value
+        val revision = _hermesApprovals.value[sessionID]?.revision ?: 0
+        try {
+            val state = HermesChatService.transport(settings).runState(runID)
+            if ((_hermesApprovals.value[sessionID]?.revision ?: 0) == revision)
+                noteApprovals(sessionID, runID, endpoint, state, manual)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (endpoint == settings.hermesEndpoint.value && settings.hermesActiveRun(sessionID) == runID) {
+                if ((e as? com.aispotlight.android.hermes.HermesTransportException)?.isMissingRun == true) {
+                    _hermesApprovals.value = _hermesApprovals.value - sessionID
+                    _approvalUnavailable.value = _approvalUnavailable.value - sessionID
+                } else _approvalUnavailable.value = _approvalUnavailable.value + sessionID
+            }
+        } finally { approvalReads.remove(sessionID) }
+    }
+
+    fun refreshApprovalStatus(sessionID: String) {
+        viewModelScope.launch { refreshApprovals(sessionID, manual = true) }
+    }
+
+    fun refreshApproval(request: HermesApproval) {
+        if (request.endpoint != settings.hermesEndpoint.value) return
+        viewModelScope.launch { refreshApprovals(request.sessionID, manual = true) }
+    }
+
+    fun resolveApproval(request: HermesApproval, approve: Boolean) {
+        viewModelScope.launch {
+            val sessionID = request.sessionID
+            val conversationID = dao.conversationForHermesSession(sessionID)?.id ?: return@launch
+            if (request.endpoint != settings.hermesEndpoint.value ||
+                settings.hermesActiveRun(sessionID) != request.runID || conversationID in _stoppingIds.value) return@launch
+            val ledger = _hermesApprovals.value[sessionID]?.begin(request) ?: return@launch
+            _hermesApprovals.value = _hermesApprovals.value + (sessionID to ledger)
+            val client = HermesChatService.transport(settings)
+            var accepted = false
+            try {
+                val state = client.runState(request.runID)
+                if (state.status == "waiting_for_approval" &&
+                    state.approvals.contains(request.requestID to request.command) &&
+                    request.endpoint == settings.hermesEndpoint.value &&
+                    settings.hermesActiveRun(sessionID) == request.runID && conversationID !in _stoppingIds.value) {
+                    client.resolveApproval(request.runID, request.requestID, approve)
+                    accepted = true
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                com.aispotlight.android.core.Diagnostics.log("hermes", "approval.unconfirmed")
+            } finally {
+                if (request.endpoint == settings.hermesEndpoint.value) {
+                    _hermesApprovals.value[sessionID]?.let {
+                        _hermesApprovals.value = _hermesApprovals.value + (sessionID to it.finish(request, accepted))
+                    }
+                }
+            }
+            refreshApprovals(sessionID)
+        }
+    }
 
     /** isLoading == the ACTIVE conversation has a running stream, or a Stop settling. */
     private fun refreshLoading() {
         val active = _activeConversationId.value
-        _isLoading.value = active in streamingIds.value || active in _stoppingIds.value
+        _isLoading.value = active in streamingIds.value || active in _stoppingIds.value ||
+            activeConversation?.takeIf { it.id == active }?.hermesSessionId?.let {
+                settings.hermesActiveRun(it) != null
+            } == true
         if (!_isLoading.value) _statusText.value = null
     }
 
@@ -1304,7 +1393,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // only the transcript-tail guess, which reads a run killed mid-tool
         // as "live" for the whole staleness window.
         val runId = hermesRunIds[conversationId]
-            ?: sessionId?.let { settings.hermesActiveRuns.value[it] }
+            ?: sessionId?.let { settings.hermesActiveRun(it) }
         val stoppable = sessionId != null && runId != null
         if (stoppable) {
             // Busy until confirmed — set before the cancel so the loading
@@ -1343,7 +1432,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: com.aispotlight.android.hermes.HermesTransportException) {
-                    if (e.status == 404) return@withContext HermesStopOutcome.GONE
+                    if (e.isMissingRun) return@withContext HermesStopOutcome.GONE
                     com.aispotlight.android.core.Diagnostics.log("hermes", "stop.fail http=${e.status}")
                     return@withContext HermesStopOutcome.FAILED
                 } catch (e: Exception) {
@@ -1362,7 +1451,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: com.aispotlight.android.hermes.HermesTransportException) {
-                        if (e.status == 404) {
+                        if (e.isMissingRun) {
                             result = HermesStopOutcome.GONE
                             break
                         }
@@ -1375,7 +1464,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             com.aispotlight.android.core.Diagnostics.log("hermes", "stop.outcome run=$runId $outcome")
             if (outcome == HermesStopOutcome.STOPPED || outcome == HermesStopOutcome.GONE) {
-                if (settings.hermesActiveRuns.value[sessionId] == runId) {
+                if (runId != null && settings.hermesActiveRun(sessionId) == runId) {
                     settings.setHermesActiveRun(sessionId, null)
                 }
                 hermesRunIds.remove(conversationId)
@@ -1434,9 +1523,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val hermesAttaching = mutableSetOf<String>()
 
     /** Terminal bookkeeping: forget the run locally AND in the persisted map. */
-    private fun clearHermesRun(conversationId: String, sessionId: String) {
+    private fun clearHermesRun(conversationId: String, sessionId: String, confirmed: Boolean = false) {
         hermesRunIds.remove(conversationId)
-        settings.setHermesActiveRun(sessionId, null)
+        if (confirmed) {
+            settings.setHermesActiveRun(sessionId, null)
+            _hermesApprovals.value = _hermesApprovals.value - sessionId
+            _approvalUnavailable.value = _approvalUnavailable.value - sessionId
+            refreshLoading()
+        }
     }
 
     /** Where a steer's record lives: the run it went into, or the session when no run id was known. */
@@ -1498,6 +1592,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         if (runId != null) state?.pendingSteer?.let { queueRecoveredSteer(conversationId, runId, it, via) }
         reconcileSteers(conversationId, sessionId, runId)
+        withContext(Dispatchers.Main) {
+            if (runId != null && settings.hermesActiveRun(sessionId) == runId) {
+                clearHermesRun(conversationId, sessionId, confirmed = true)
+            }
+        }
     }
 
     /** Files of the chat (agent-side paths + attachments the user sent). */
@@ -1680,6 +1779,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val transport = HermesChatService.transport(settings)
                 val remote = transport.sessions(limit = 50)
+                for (session in remote) {
+                    if (settings.hermesActiveRun(session.id) != null) refreshApprovals(session.id)
+                }
                 // Context window of the agent's model, resolved by Hermes
                 // itself — the gauge's authoritative source. The route lives
                 // on the DASHBOARD server only (public path — the courier
@@ -2088,7 +2190,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             ?.takeIf { it.id == conversationId }?.hermesSessionId ?: return
         viewModelScope.launch {
             val joined = held.joinToString("\n\n")
-            val runId = hermesRunIds[conversationId] ?: settings.hermesActiveRuns.value[sessionId]
+            val runId = hermesRunIds[conversationId] ?: settings.hermesActiveRun(sessionId)
             val activity = withContext(Dispatchers.IO) {
                 HermesChatService.sessionActivity(sessionId, runId)
             }
@@ -2131,6 +2233,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // the next delivery opportunity.
                 }
                 "idle" -> {
+                    if (runId != null && settings.hermesActiveRun(sessionId) == runId) {
+                        clearHermesRun(conversationId, sessionId, confirmed = true)
+                    }
                     if (held.isNotEmpty()) {
                         settings.setHermesPendingFollowUps(conversationId, emptyList())
                         hermesDispatch(
@@ -2192,17 +2297,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 withContext(Dispatchers.IO) {
                     val transport = HermesChatService.transport(settings)
-                    val storedRun = settings.hermesActiveRuns.value[sessionId]
+                    val storedRun = settings.hermesActiveRun(sessionId)
+                    val approvalEndpoint = settings.hermesEndpoint.value
                     var forgotten = false
                     if (storedRun != null) {
                         val state = try {
-                            transport.runState(storedRun)
+                            transport.runState(storedRun).also { noteApprovals(sessionId, storedRun, approvalEndpoint, it) }
                         } catch (e: Exception) {
                             // 404 = the gateway restarted and forgot the run
                             // map — fall through to the transcript tail. Any
                             // other failure: offline, try again next open.
                             val http = e as? com.aispotlight.android.hermes.HermesTransportException
-                            if (http?.status == 404) { forgotten = true; null } else return@withContext
+                            if (http?.isMissingRun == true) { forgotten = true; null } else return@withContext
                         }
                         when {
                             state == null -> { } // forgotten — the tail decides below
@@ -2215,7 +2321,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             // run never read goes back into the queue.
                             state.isTerminal -> {
                                 onHermesRunOver(conversationId, sessionId, storedRun, state, via = "resume")
-                                settings.setHermesActiveRun(sessionId, null)
                             }
                             // Unknown: KEEP the id (clearing it on a
                             // transient oddity lost the re-attach route) —
@@ -2301,9 +2406,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // messages already — the bubble must render only the new.
                 val watermark = dao.conversation(conversationId)?.hermesSyncedSeq ?: 0
                 val recovered = try {
+                    val approvalEndpoint = settings.hermesEndpoint.value
                     HermesChatService.recoverTurn(
                         dao, conversationId, sessionId, userText = "",
                         runID = runId, anchorOverride = watermark,
+                        onRunState = { state -> if (runId != null) noteApprovals(sessionId, runId, approvalEndpoint, state) },
                         onRunOver = { state ->
                             onHermesRunOver(conversationId, sessionId, runId, state, via = "attach")
                         },
@@ -2382,6 +2489,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // A Stop is settling: nothing may start (or steer into) the run
             // being killed — held until the gateway confirms.
             hermesHold(userMessage, conversationId)
+            return
+        }
+        if (conversationId !in streamingIds.value && settings.hermesActiveRun(sessionId) != null) {
+            if (!alreadyPosted) hermesHold(userMessage, conversationId)
+            maybeResumeHermesTurn(conversationId, sessionId)
             return
         }
         if (conversationId in streamingIds.value) {
@@ -2472,6 +2584,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     getApplication(), sessionId, userMessage.text, userMessage.attachments,
                 ).collect { event ->
                     when (event) {
+                        is HermesChatService.AgentEvent.ApprovalsChanged -> refreshApprovals(sessionId)
                         is HermesChatService.AgentEvent.Run -> {
                             hermesRunIds[conversationId] = event.runID
                             // Persisted: a relaunched process re-attaches to
@@ -2553,7 +2666,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // showed in its transcript were never read (a session-route
                 // steer has no run id and no `pending_steer` to collect).
                 reconcileSteers(conversationId, sessionId, hermesRunIds[conversationId])
-                clearHermesRun(conversationId, sessionId)
+                clearHermesRun(conversationId, sessionId, confirmed = true)
                 markStreaming(conversationId, false)
                 // A reply that landed out of sight: unread badge + banner.
                 if (!isActive()) {
@@ -2584,9 +2697,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     recovered = try {
                         val runId = hermesRunIds[conversationId]
+                        val approvalEndpoint = settings.hermesEndpoint.value
                         HermesChatService.recoverTurn(
                             dao, conversationId, sessionId, userMessage.text,
                             runID = runId,
+                            onRunState = { state -> if (runId != null) noteApprovals(sessionId, runId, approvalEndpoint, state) },
                             onRunOver = { state ->
                                 onHermesRunOver(conversationId, sessionId, runId, state, via = "recover")
                             },

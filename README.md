@@ -99,6 +99,8 @@ The agent stays a black box with its own configuration — Cuate never injects p
 
 **While it works.** Tool runs appear live in the status pill and stay as a collapsible step journal — expand a step for the command, its output, exit code and touched paths. A context gauge shows how full the model's window actually is, and clicking it compacts the conversation on the agent's side.
 
+**Action approvals.** On macOS and Android, each pending action has its own Allow once / Deny card. Known runs restore pending requests after reconnecting; an unconfirmed decision is never resent automatically. Native sessions use the compatible Cuate gateway patch v6. Tool consent is separate from background continuation consent. See [the approval contract](docs/hermes-approvals.md).
+
 **The sidebar.** Sessions (create, rename, pin, color, delete, unread badges), the agent's skills and toolsets, and its runtime passport: which model it is on and which host actually executes its commands.
 
 **Files both ways.** Anything you attach is couriered onto the agent's host, so a file you added on the phone is real for the agent too. Files it creates come back the same way: HTML and Markdown arrive as artifact cards with in-app preview, other files download on click, and paths in its replies are clickable. A folder button lists everything exchanged in the conversation.
