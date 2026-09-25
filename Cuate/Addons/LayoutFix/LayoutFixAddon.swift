@@ -213,7 +213,7 @@ enum LayoutSmartFixer {
         let model: String
         let apiKey: String
         if let mistralKey = APIKeyStore.key(for: .mistral) {
-            provider = OpenAICompatibleProvider.mistral
+            provider = ProviderRegistry.provider(for: .mistral)
             model = "mistral-small-latest"
             apiKey = mistralKey
         } else if let chatKey = APIKeyStore.key(for: settings.chatProvider),
@@ -237,7 +237,7 @@ The text below was typed with the keyboard in the wrong layout (Russian ЙЦУК
             messages: [LLMMessage(role: .user, text: prompt)],
             model: model,
             systemPrompt: nil,
-            options: ChatRequestOptions(maxTokens: 1024, reasoning: .fast),
+            options: ChatRequestOptions(spendKind: .layoutFix, maxTokens: 1024, reasoning: .fast),
             apiKey: apiKey
         )
         for try await event in stream {

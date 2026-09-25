@@ -77,6 +77,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import com.aispotlight.android.chat.PinNavigationPolicy
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -489,33 +491,45 @@ fun ChatScreen(
         // off-screen the first tap brings you TO it; cycling to the next pin
         // only starts once the current target is in view. ✕ unpins the shown
         // one. Pins outside the loaded window page themselves in.
-        if (pinnedMessages.isNotEmpty()) {
-            var pinCursor by remember(pinnedMessages.size) { mutableStateOf(0) }
-            val cursorIndex = pinCursor % pinnedMessages.size
-            val currentPin = pinnedMessages[cursorIndex]
-            val pinScope = rememberCoroutineScope()
+        val chronologicalPins = remember(pinnedMessages) { PinNavigationPolicy.ordered(pinnedMessages) }
+        var selectedPinID by remember(conversationKey) { mutableStateOf<String?>(null) }
+        var pendingPinID by remember(conversationKey) { mutableStateOf<String?>(null) }
+        val dragging by listState.interactionSource.collectIsDraggedAsState()
+        LaunchedEffect(dragging) {
+            if (dragging) { selectedPinID = null; pendingPinID = null }
+        }
+        val messageByID = remember(messages) { messages.associateBy { it.id } }
+        val nearestPinID by remember(chronologicalPins, messageByID) {
+            derivedStateOf {
+                val anchor = listState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull {
+                    (it.key as? String)?.let { id -> messageByID[id]?.timestamp }
+                }
+                PinNavigationPolicy.nearest(chronologicalPins, anchor)
+            }
+        }
+        LaunchedEffect(conversationKey, pendingPinID) {
+            val target = pendingPinID ?: return@LaunchedEffect
+            if (onLocatePin(target) < 0) pendingPinID = null
+        }
+        // Materialization and scrolling are separate effects: a DB load is not a laid-out row.
+        LaunchedEffect(conversationKey, pendingPinID, messages, hasOlderMessages) {
+            val target = pendingPinID ?: return@LaunchedEffect
+            val index = messages.indexOfFirst { it.id == target }
+            if (index < 0) return@LaunchedEffect
+            androidx.compose.runtime.withFrameNanos { }
+            listState.scrollToItem(index + if (hasOlderMessages) 1 else 0)
+            selectedPinID = target
+            pendingPinID = null
+        }
+        if (chronologicalPins.isNotEmpty()) {
+            val cursorIndex = chronologicalPins.indexOfFirst { it.id == (selectedPinID ?: nearestPinID) }.coerceAtLeast(0)
+            val currentPin = chronologicalPins[cursorIndex]
             Surface(
                 onClick = {
-                    pinScope.launch {
-                        val index = onLocatePin(currentPin.id)
-                        if (index < 0) return@launch
-                        val layoutIndex = index + if (hasOlderMessages) 1 else 0
-                        val visible = listState.layoutInfo.visibleItemsInfo
-                            .any { it.index == layoutIndex }
-                        if (visible && pinnedMessages.size > 1) {
-                            val next = (cursorIndex + 1) % pinnedMessages.size
-                            val nextIndex = onLocatePin(pinnedMessages[next].id)
-                            if (nextIndex >= 0) {
-                                listState.animateScrollToItem(
-                                    nextIndex + if (hasOlderMessages) 1 else 0
-                                )
-                            }
-                            pinCursor = next
-                        } else {
-                            listState.animateScrollToItem(layoutIndex)
-                            pinCursor = cursorIndex
-                        }
-                    }
+                    val visible = listState.layoutInfo.visibleItemsInfo.any { it.key == currentPin.id }
+                    val target = PinNavigationPolicy.target(chronologicalPins, cursorIndex, visible)
+                    selectedPinID = target
+                    pendingPinID = target
                 },
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -537,7 +551,13 @@ fun ChatScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        currentPin.text.replace("\n", " ").take(80),
+                        remember(currentPin.text) {
+                            val styled = inlineMarkdown(currentPin.text.replace("\n", " "),
+                                androidx.compose.ui.graphics.Color.Unspecified,
+                                androidx.compose.ui.graphics.Color.Transparent)
+                            // Keep styles, drop link annotations: the entire bar navigates to the message.
+                            androidx.compose.ui.text.AnnotatedString(styled.text, styled.spanStyles, styled.paragraphStyles)
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -556,7 +576,8 @@ fun ChatScreen(
                         IconButton(
                             onClick = {
                                 toggle(currentPin)
-                                pinCursor = 0
+                                selectedPinID = null
+                                pendingPinID = null
                             },
                             modifier = Modifier.size(32.dp),
                         ) {
@@ -584,6 +605,8 @@ fun ChatScreen(
             val scope = rememberCoroutineScope()
             Surface(
                 onClick = {
+                    pendingPinID = null
+                    selectedPinID = null
                     scope.launch {
                         val lastIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
                         listState.animateScrollToItem(lastIndex)

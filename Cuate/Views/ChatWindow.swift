@@ -72,9 +72,10 @@ struct ChatWindow: View {
     @State private var pendingAgentFilePaths: [String] = []
     /// A drag hovers over the panel (drop-zone highlight).
     @State private var isDropTargeted = false
-    /// Pinned-message navigation: which pin the bar targets next (cycles,
-    /// Telegram-style; resets on conversation switch via task(id:)).
-    @State private var pinCycleIndex = 0
+    /// Explicit pin cycle overrides nearest-to-viewport selection until
+    /// manual scrolling or a conversation switch resets it.
+    @State private var selectedPinnedID: UUID?
+    @State private var pinViewportAnchor: String?
 
     /// Pinned messages of the OPEN agent conversation that are actually in
     /// the loaded window (stale ids — cleared chats — drop out silently).
@@ -82,9 +83,8 @@ struct ChatWindow: View {
         guard chatStore.conversation.isAgent else { return [] }
         let ids = hermesSettings.pinnedMessages(forConversationKey: chatStore.conversation.storageKey)
         guard !ids.isEmpty else { return [] }
-        return ids.compactMap { id in
-            chatStore.messages.first { $0.id.uuidString == id }
-        }
+        let pinned = Set(ids)
+        return chatStore.messages.reversed().filter { pinned.contains($0.id.uuidString) }
     }
 
     /// Telegram-style bar over the transcript: shows the target pin, click
@@ -93,7 +93,10 @@ struct ChatWindow: View {
     private var pinnedMessagesBar: some View {
         let pins = resolvedPinnedMessages
         if !pins.isEmpty {
-            let index = pinCycleIndex % pins.count
+            let anchor = chatStore.messages.firstIndex { $0.id.uuidString == pinViewportAnchor }
+                ?? max(0, chatStore.messages.count - 1)
+            let index = selectedPinnedID.flatMap { selected in pins.firstIndex { $0.id == selected } }
+                ?? nearestPinnedIndex(pins, anchor: anchor)
             let target = pins[index]
             HStack(spacing: 8) {
                 Image(systemName: "pin.fill")
@@ -110,17 +113,21 @@ struct ChatWindow: View {
                                 .foregroundColor(palette.secondaryText)
                         }
                     }
-                    Text(target.text.replacingOccurrences(of: "\n", with: " "))
+                    MarkdownText(target.text.replacingOccurrences(of: "\n", with: " "),
+                                 linkColor: palette.ink)
                         .font(.system(size: 11))
                         .foregroundColor(palette.primaryText)
                         .lineLimit(1)
+                        // The whole preview navigates to the pin; inline links
+                        // must not intercept that click.
+                        .allowsHitTesting(false)
                 }
                 Spacer(minLength: 8)
                 Button {
                     hermesSettings.toggleMessagePin(
                         target.id.uuidString,
                         conversationKey: chatStore.conversation.storageKey)
-                    pinCycleIndex = 0
+                    selectedPinnedID = nil
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .semibold))
@@ -138,11 +145,11 @@ struct ChatWindow: View {
                 // starts once the current target is in view.
                 if transcriptController.isRowVisible(id: target.id.uuidString) {
                     let next = (index + 1) % pins.count
-                    transcriptController.scrollTo(id: pins[next].id.uuidString)
-                    pinCycleIndex = next
+                    jumpToPinnedMessage(pins[next].id)
+                    selectedPinnedID = pins[next].id
                 } else {
-                    transcriptController.scrollTo(id: target.id.uuidString)
-                    pinCycleIndex = index
+                    jumpToPinnedMessage(target.id)
+                    selectedPinnedID = target.id
                 }
             }
             .background(Color.secondary.opacity(0.07))
@@ -272,7 +279,7 @@ struct ChatWindow: View {
     private static let historyPageSize = 30
 
     /// How many extra working rounds one reply may request with a trailing
-    /// `<continue/>` marker (each round gets a fresh tool budget). Bounds
+    /// `<continue/>` marker (rounds share the answer’s tool budget). Bounds
     /// the auto-continuation so a marker-happy model can't loop forever.
     private static let maxAutoContinues = 3
 
@@ -837,6 +844,10 @@ struct ChatWindow: View {
                         controller: transcriptController,
                         onNearBottomChange: { isNearBottom = $0 },
                         onViewportWidthChange: { updateContainerWidth($0) },
+                        onUserScroll: { id in
+                            pinViewportAnchor = id
+                            selectedPinnedID = nil
+                        },
                         onNeedOlder: { loadOlderMessages() },
                         onNeedNewer: { restoreNewerRows() }
                     )
@@ -1168,6 +1179,9 @@ struct ChatWindow: View {
     /// Conversation-routing handlers (presets, agent roles, mirror sync).
     private func applyConversationHandlers<V: View>(_ view: V) -> some View {
         view
+        .onReceive(SpendStore.shared.$latestBudgetWarning.dropFirst().compactMap { $0 }.removeDuplicates()) { warning in
+            chatStore.addMessage(text: warning, isUser: false, messageType: .system)
+        }
         // The switcher's provider list is state, not a body computation — keep
         // it in step with the things it depends on.
         .onReceive(NotificationCenter.default.publisher(for: .apiKeysDidChange)) { _ in
@@ -2285,6 +2299,8 @@ struct ChatWindow: View {
     private func syncConversation() {
         let target = targetConversation()
         guard target != chatStore.conversation else { return }
+        selectedPinnedID = nil
+        pinViewportAnchor = nil
         chatStore.switchConversation(to: target)
         // The just-opened agent thread is read NOW — its badge must not
         // wait for the sidebar's 30s watermark poll (report 2026-07-31).
@@ -2422,6 +2438,31 @@ struct ChatWindow: View {
     private var externalTurn: HermesLiveTurn? {
         guard chatStore.conversation.isAgent, currentStreamSlot == nil else { return nil }
         return hermesAddon.liveTurn(forConversationKey: chatStore.conversation.storageKey)
+    }
+
+    private func nearestPinnedIndex(_ pins: [ChatMessage], anchor: Int) -> Int {
+        let positions = Dictionary(uniqueKeysWithValues: chatStore.messages.enumerated().map { ($0.element.id, $0.offset) })
+        return TranscriptNavigationWindow.nearestPin(
+            positions: pins.map { positions[$0.id] ?? 0 }, anchor: anchor) ?? 0
+    }
+
+    /// Reveal a loaded pin before asking AppKit to navigate. Commands are
+    /// consumed after the bridge applies the new rows, not after an arbitrary delay.
+    private func jumpToPinnedMessage(_ id: UUID) {
+        guard let index = chatStore.messages.firstIndex(where: { $0.id == id }) else { return }
+        if visibleMessages.contains(where: { $0.id == id }), transcriptController.hasRow(id: id.uuidString) {
+            transcriptController.scrollTo(id: id.uuidString)
+            return
+        }
+        guard let window = TranscriptNavigationWindow.range(target: index,
+                                                           total: chatStore.messages.count,
+                                                           pageSize: Self.historyPageSize) else { return }
+        transcriptController.requestNavigation(id: id.uuidString,
+                                               conversation: chatStore.conversation.storageKey)
+        // Changing the window invalidates any older backfill trickle.
+        bottomDropCount = chatStore.messages.count - window.upperBound
+        visibleCount = window.count
+        isBackfilling = false
     }
 
     /// Widens the history window by one page when the user nears the top
@@ -3119,8 +3160,9 @@ struct ChatWindow: View {
                 // prompt rules) — "I need another working round". The marker
                 // is stripped, a hidden "Continue." user turn is appended to
                 // the REQUEST (never to the chat), and the next round streams
-                // into the SAME bubble with a fresh tool budget. Bounded so a
+                // into the SAME bubble with its existing tool state. Bounded so a
                 // marker-happy model can't loop forever.
+                let turnState = ChatService.TurnState()
                 var requestHistory = history
                 var round = 0
                 var lastRoundText = ""
@@ -3134,7 +3176,7 @@ struct ChatWindow: View {
                     stream = AgentChatService.streamReply(role: agentRole, conversation: origin,
                                                           history: requestHistory, store: chatStore)
                 } else {
-                    stream = try await ChatService.streamReply(history: requestHistory, summary: summary, store: chatStore)
+                    stream = try await ChatService.streamReply(history: requestHistory, summary: summary, store: chatStore, state: turnState)
                 }
                 for try await event in stream {
                     switch event {

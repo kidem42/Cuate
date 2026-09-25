@@ -139,9 +139,11 @@ class OpenAICompatibleProvider(
                 }
             }
 
+            if (providerID == ProviderID.OPENROUTER && model.startsWith("anthropic/")) PromptCache.anthropic(apiMessages)
             val body = JSONObject().apply {
                 put("model", model)
                 put("messages", apiMessages)
+                if (providerID == ProviderID.MISTRAL) options.cacheKey?.let { put("prompt_cache_key", it) }
                 put("stream", true)
                 put("max_tokens", options.maxTokens)
                 if (options.tools.isNotEmpty()) {
@@ -225,6 +227,7 @@ class OpenAICompatibleProvider(
             data class Pending(var id: String = "", var name: String = "", val args: StringBuilder = StringBuilder())
             val pendingCalls = sortedMapOf<Int, Pending>()
             var usage = TokenUsage()
+            var completed = false
 
             HttpClient.sseStream(request).collect { payload ->
                 val json = try { JSONObject(payload) } catch (_: Exception) { return@collect }
@@ -240,9 +243,18 @@ class OpenAICompatibleProvider(
 
                 // Usage rides on the final chunk, whose `choices` is empty —
                 // must be read BEFORE the choice guard below skips it.
-                json.optJSONObject("usage")?.let { usage = parseChatCompletionsUsage(it) }
+                json.optJSONObject("usage")?.let {
+                    usage = parseChatCompletionsUsage(it)
+                    if (listOf("prompt_tokens", "completion_tokens", "prompt_cache_hit_tokens", "cost").any(it::has)) {
+                        val hasInput = it.has("prompt_tokens") || (it.has("prompt_cache_hit_tokens") && it.has("prompt_cache_miss_tokens"))
+                        options.reportUsage?.invoke(usage, hasInput && it.has("completion_tokens"))
+                    }
+                }
 
                 val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return@collect
+                if (!choice.isNull("finish_reason") && choice.has("finish_reason")) {
+                    completed = choice.optString("finish_reason") in listOf("stop", "tool_calls", "function_call")
+                }
                 val delta = choice.optJSONObject("delta") ?: return@collect
                 val content = delta.optString("content")
                 if (content.isNotEmpty()) emit(LLMStreamEvent.Text(content))
@@ -274,6 +286,7 @@ class OpenAICompatibleProvider(
                     }
                 }
             }
+            options.reportOutcome?.invoke(completed)
             if (pendingCalls.isNotEmpty()) {
                 emit(LLMStreamEvent.ToolCalls(pendingCalls.values.map { entry ->
                     ToolCall(
@@ -305,13 +318,15 @@ class OpenAICompatibleProvider(
             TokenUsage(inputTokens = miss, outputTokens = completion,
                 cacheReadTokens = hit, reasoningTokens = reasoning)
         } else {
-            val cached = u.optJSONObject("prompt_tokens_details")?.optInt("cached_tokens") ?: 0
-            TokenUsage(inputTokens = (prompt - cached).coerceAtLeast(0), outputTokens = completion,
-                cacheReadTokens = cached, reasoningTokens = reasoning)
+            val details = u.optJSONObject("prompt_tokens_details")
+            val cached = (details?.optInt("cached_tokens", u.optInt("cached_tokens")) ?: u.optInt("cached_tokens")).coerceIn(0, prompt.coerceAtLeast(0))
+            val written = (details?.optInt("cache_write_tokens") ?: 0).coerceIn(0, (prompt - cached).coerceAtLeast(0))
+            TokenUsage(inputTokens = (prompt - cached - written).coerceAtLeast(0), outputTokens = completion,
+                cacheReadTokens = cached, cacheWriteTokens = written, reasoningTokens = reasoning)
         }
         // OpenRouter: the exact charge and the server-tool counters.
         return base.copy(
-            exactCostUSD = if (u.has("cost")) u.optDouble("cost") else null,
+            exactCostUSD = if (!u.isNull("cost")) u.optDouble("cost").takeIf { it.isFinite() && it >= 0 } else null,
             serverSearchRequests = u.optJSONObject("server_tool_use")?.optInt("web_search_requests") ?: 0,
         )
     }
@@ -441,6 +456,7 @@ class OpenAICompatibleProvider(
             }
         }
 
+        PromptCache.openAI(body, options)
         val request = Request.Builder()
             .url("$baseURL/responses")
             .header("Content-Type", "application/json")
@@ -450,21 +466,25 @@ class OpenAICompatibleProvider(
 
         val pendingCalls = mutableListOf<ToolCall>()
         var usage = TokenUsage()
+        var completed = false
         HttpClient.sseStream(request).collect { payload ->
             val json = try { JSONObject(payload) } catch (_: Exception) { return@collect }
-            when (json.optString("type")) {
+            val eventType = json.optString("type")
+            if (eventType in listOf("response.completed", "response.incomplete", "response.failed")) {
+                json.optJSONObject("response")?.optJSONObject("usage")?.let { u ->
+                    val details = u.optJSONObject("input_tokens_details")
+                    val total = u.optInt("input_tokens").coerceAtLeast(0)
+                    val cached = (details?.optInt("cached_tokens") ?: 0).coerceIn(0, total)
+                    val written = (details?.optInt("cache_write_tokens") ?: 0).coerceIn(0, total - cached)
+                    usage = TokenUsage(total - cached - written, u.optInt("output_tokens"), cached, written,
+                        u.optJSONObject("output_tokens_details")?.optInt("reasoning_tokens") ?: 0)
+                    if (u.has("input_tokens") || u.has("output_tokens"))
+                        options.reportUsage?.invoke(usage, u.has("input_tokens") && u.has("output_tokens"))
+                }
+            }
+            when (eventType) {
                 "response.completed" -> {
-                    // Whole-response usage arrives on the terminal event.
-                    json.optJSONObject("response")?.optJSONObject("usage")?.let { u ->
-                        val input = u.optInt("input_tokens")
-                        val cached = u.optJSONObject("input_tokens_details")?.optInt("cached_tokens") ?: 0
-                        usage = TokenUsage(
-                            inputTokens = (input - cached).coerceAtLeast(0),
-                            outputTokens = u.optInt("output_tokens"),
-                            cacheReadTokens = cached,
-                            reasoningTokens = u.optJSONObject("output_tokens_details")?.optInt("reasoning_tokens") ?: 0,
-                        )
-                    }
+                    completed = true
                 }
                 "response.output_text.delta" -> {
                     val delta = json.optString("delta")
@@ -487,13 +507,15 @@ class OpenAICompatibleProvider(
                 "response.failed", "response.incomplete" -> {
                     val message = json.optJSONObject("response")
                         ?.optJSONObject("error")?.optString("message")
-                    if (!message.isNullOrEmpty()) throw ProviderException.http(200, message)
+                    if (eventType == "response.incomplete") options.reportOutcome?.invoke(false)
+                    throw ProviderException.http(200, message?.takeIf { it.isNotEmpty() } ?: eventType)
                 }
                 "error" -> {
                     throw ProviderException.http(200, json.optString("message").ifEmpty { "Unknown streaming error" })
                 }
             }
         }
+        options.reportOutcome?.invoke(completed)
         if (pendingCalls.isNotEmpty()) {
             emit(LLMStreamEvent.ToolCalls(pendingCalls))
         }

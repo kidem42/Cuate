@@ -126,12 +126,19 @@ class GeminiProvider : LLMProvider {
 
         val pendingCalls = mutableListOf<ToolCall>()
         var usage = TokenUsage()
+        var completed = false
+        var sawUsage = false
+        var fullUsage = false
         HttpClient.sseStream(request).collect { payload ->
             val json = try { JSONObject(payload) } catch (_: Exception) { return@collect }
             // usageMetadata is cumulative and rides on stream chunks; the final
             // one can be usage-only (no candidates/parts), so it must be read
             // BEFORE the content guard below skips the frame.
+            val candidate = json.optJSONArray("candidates")?.optJSONObject(0)
+            if (candidate?.has("finishReason") == true) completed = candidate.optString("finishReason") == "STOP"
             json.optJSONObject("usageMetadata")?.let { meta ->
+                sawUsage = true
+                fullUsage = meta.has("promptTokenCount") && meta.has("candidatesTokenCount")
                 val prompt = meta.optInt("promptTokenCount")
                 val cached = meta.optInt("cachedContentTokenCount")
                 val thoughts = meta.optInt("thoughtsTokenCount")
@@ -143,6 +150,8 @@ class GeminiProvider : LLMProvider {
                     cacheReadTokens = cached,
                     reasoningTokens = thoughts,
                 )
+                options.reportUsage?.invoke(usage, completed && fullUsage)
+
             }
             val parts = json.optJSONArray("candidates")?.optJSONObject(0)
                 ?.optJSONObject("content")?.optJSONArray("parts") ?: return@collect
@@ -162,6 +171,11 @@ class GeminiProvider : LLMProvider {
                     }
                 }
             }
+        }
+        options.reportOutcome?.invoke(completed)
+        if (sawUsage) {
+            options.reportUsage?.invoke(usage, completed && fullUsage)
+            emit(LLMStreamEvent.Usage(usage))
         }
         if (pendingCalls.isNotEmpty()) {
             emit(LLMStreamEvent.ToolCalls(pendingCalls))

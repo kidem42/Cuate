@@ -45,7 +45,7 @@ data class ChatMessage(
     val agentSteps: String? = null,
     /** Pinned by the user (pin bar above the transcript). */
     val pinned: Boolean = false,
-    /** When it was pinned — the bar cycles in pin order. */
+    /** When it was pinned; the bar navigates by message chronology. */
     val pinnedAt: Long = 0,
 ) {
     enum class Type(val raw: String) {

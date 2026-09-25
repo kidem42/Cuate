@@ -93,8 +93,11 @@ fun CostsTab(settings: AppSettings) {
     var byModel by rememberSaveable { mutableStateOf(false) }
     var reloadTick by remember { mutableStateOf(0) }
 
+    val ledgerRevision by SpendTracker.revision.collectAsState()
+    val failedWrites by SpendTracker.failedWrites.collectAsState()
+    val budgetNotice by SpendTracker.budgetNotice.collectAsState()
     LaunchedEffect(Unit) { SpendTracker.refreshTotals() }
-    LaunchedEffect(selectedMonthStart, reloadTick) {
+    LaunchedEffect(selectedMonthStart, reloadTick, ledgerRevision) {
         val dao = AppDatabase.get(context).spendDao()
         earliest = dao.earliestTimestamp()
         records = dao.recordsBetween(selectedMonthStart, nextMonthStart(selectedMonthStart))
@@ -102,46 +105,26 @@ fun CostsTab(settings: AppSettings) {
         currentMonthChats = dao.recordsBetween(curStart, curEnd).filter { it.kind == SpendKind.CHAT.raw }
     }
 
-    val openRouterCatalog by settings.openRouterCatalog.collectAsState()
-    // Display cost: fixed at write time, or a live re-quote for records that
-    // had no known price back then (model added to the catalog later).
-    fun displayCost(record: SpendRecordEntity): Double? {
-        record.costUSD?.let { return it }
-        if (record.kind != SpendKind.CHAT.raw && record.kind != SpendKind.SUMMARY.raw) return null
-        val provider = ProviderID.fromId(record.provider) ?: return null
-        if (provider == ProviderID.OPENROUTER) {
-            val info = openRouterCatalog[record.model]
-            val p = info?.promptPricePerToken
-            val c = info?.completionPricePerToken
-            if (p != null && c != null) {
-                return record.usage.inputTokens * p + record.usage.outputTokens * c +
-                    record.usage.cacheReadTokens * p + record.usage.cacheWriteTokens * p
-            }
-        }
-        return PricingCatalog.pricing(provider, record.model)?.cost(record.usage)
-    }
+    // Historical receipts keep their write-time price; unknown remains unknown.
+    fun displayCost(record: SpendRecordEntity): Double? = record.costUSD
 
     // ── Aggregates ─────────────────────────────────────────────────────────
-    val modelLines = remember(records, openRouterCatalog) {
+    val modelLines = remember(records) {
         buildModelLines(records) { displayCost(it) }
     }
     val providerGroups = remember(modelLines, records) {
         buildProviderGroups(modelLines, records)
     }
-    val dailySlices = remember(records, byModel, openRouterCatalog) {
+    val dailySlices = remember(records, byModel) {
         buildDailySlices(records, byModel) { displayCost(it) }
     }
-    val avg = remember(currentMonthChats, records) {
-        // Current-month chats; falls back to the selected month's records when
-        // the dedicated query hasn't landed yet (or the user browses history).
-        val chats = currentMonthChats.ifEmpty {
-            records.filter { it.kind == SpendKind.CHAT.raw }
+    val avg = remember(currentMonthChats) {
+        com.aispotlight.android.data.SpendAnalytics.perAnswer(currentMonthChats)?.let {
+            Triple(it.input, it.output, it.count)
         }
-        if (chats.isEmpty()) null else Triple(
-            chats.sumOf { it.inputTokens + it.cacheReadTokens + it.cacheWriteTokens } / chats.size,
-            chats.sumOf { it.outputTokens } / chats.size,
-            chats.size,
-        )
+    }
+    val requestAverage = remember(currentMonthChats) {
+        com.aispotlight.android.data.SpendAnalytics.perRequest(currentMonthChats)
     }
 
     // Width-capped, centered content — phones use full width, tablets and
@@ -156,6 +139,16 @@ fun CostsTab(settings: AppSettings) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             summaryGroup(sessionUSD, todayUSD, monthUSD, budget, avg, ecl)
+            requestAverage?.let {
+                SettingsFootnote(stringResource(R.string.costs_avg_request, it.input, it.output, it.count))
+            }
+            SettingsFootnote(stringResource(R.string.costs_purpose_totals,
+                SpendTracker.usd(records.filter { it.kind == SpendKind.CHAT.raw }.sumOf { it.costUSD ?: 0.0 }),
+                SpendTracker.usd(records.filter { it.kind == SpendKind.SUMMARY.raw }.sumOf { it.costUSD ?: 0.0 })))
+            SettingsFootnote(stringResource(R.string.costs_receipt_quality,
+                records.count { it.costUSD == null },
+                records.count { it.usageState == "missing" || it.usageState == "partial" }, failedWrites))
+            budgetNotice?.let { SettingsFootnote(it) }
 
             if (records.isEmpty()) {
                 SettingsGroup { item { Text(stringResource(R.string.costs_empty), color = ecl.sub) } }

@@ -240,7 +240,7 @@
     <string name="costs_session">Esta sesión</string>
     <string name="costs_today">Hoy</string>
     <string name="costs_month">Este mes</string>
-    <string name="costs_avg_per_message">Tokens promedio por mensaje</string>
+    <string name="costs_avg_per_message">Promedio de tokens por respuesta</string>
     <string name="costs_period">Período</string>
     <string name="costs_daily_chart">Gasto diario</string>
     <string name="costs_by_providers">Por proveedor</string>
@@ -318,4 +318,11 @@
     <string name="hermes_approval_refresh">Consultar estado de la solicitud</string>
     <string name="hermes_approval_uncertain">Decisión no confirmada. Consulta el estado antes de volver a elegir. No se reintenta automáticamente.</string>
     <string name="hermes_approval_unavailable">No se pueden consultar los permisos pendientes. Comprueba la conexión y la compatibilidad del parche de Cuate.</string>
+    <string name="compression_title">Compresión del contexto</string>
+    <string name="compression_threshold">Umbral (tokens)</string>
+    <string name="compression_apply">Aplicar</string>
+    <string name="compression_hint">Por defecto: 7 000; rango: 1 000–200 000. Se comprueba tras cada respuesta, incluyendo el resumen anterior. Se conservan intercambios recientes completos; el último siempre. Los originales permanecen en el dispositivo. Resumir cuesta tokens y puede perder detalles. Prompts, herramientas y un intercambio grande pueden superar el umbral.</string>
+    <string name="costs_receipt_quality">Sin precio: %1$d · Datos de tokens incompletos: %2$d · Registros sin guardar en la sesión: %3$d. El promedio por respuesta agrupa sus llamadas y excluye respuestas con uso incompleto. Las estimaciones antiguas conservan su marca.</string>
+    <string name="costs_avg_request">Por llamada al modelo este mes: %1$d entrada · %2$d salida (%3$d llamadas con datos completos; agregados antiguos excluidos).</string>
+    <string name="costs_purpose_totals">Periodo seleccionado, costes registrados: chat %1$s · resúmenes %2$s.</string>
 </resources>

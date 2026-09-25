@@ -39,17 +39,39 @@ struct TranscriptItem {
 /// not state, and must not trigger SwiftUI invalidation.
 final class TranscriptController {
     weak var engine: TranscriptEngineView?
+    private var pendingNavigation: (id: String, conversation: String)?
+
+    /// The requested row may not have a hosting view until SwiftUI applies
+    /// the newly selected history window. Consume only after that apply.
+    func requestNavigation(id: String, conversation: String) {
+        pendingNavigation = (id, conversation)
+    }
+
+    func didApplyRows(ids: [String], conversation: String) {
+        guard let request = pendingNavigation else { return }
+        guard request.conversation == conversation else {
+            pendingNavigation = nil
+            return
+        }
+        guard ids.contains(request.id), let engine else { return }
+        pendingNavigation = nil
+        engine.scrollTo(id: request.id, animated: true)
+    }
 
     func scrollToBottom(animated: Bool) {
+        pendingNavigation = nil
         engine?.scrollToBottom(animated: animated)
     }
 
     /// Scrolls a specific row (message id) into view — pinned-message
     /// navigation. Drops the bottom pin like a manual scroll would.
     func scrollTo(id: String, animated: Bool = true) {
+        pendingNavigation = nil
         if engine == nil { Diagnostics.log("transcript", "scrollTo no-engine id=\(id)") }
         engine?.scrollTo(id: id, animated: animated)
     }
+
+    func hasRow(id: String) -> Bool { engine?.hasRow(id: id) ?? false }
 
     /// Whether the row is meaningfully on screen right now. The pinned bar
     /// uses it for Telegram-style clicks: jump to the shown pin first, and
@@ -78,6 +100,7 @@ final class TranscriptEngineView: NSScrollView {
 
     // MARK: Callbacks (wired by the representable)
 
+    var onUserScroll: ((String) -> Void)?
     var onNearBottomChange: ((Bool) -> Void)?
     var onContentFitsChange: ((Bool) -> Void)?
     var onViewportWidthChange: ((CGFloat) -> Void)?
@@ -524,6 +547,8 @@ final class TranscriptEngineView: NSScrollView {
         reflectScrolledClipView(contentView)
     }
 
+    func hasRow(id: String) -> Bool { rows.contains { $0.id == id } }
+
     /// A row counts as visible when a meaningful slice of it (32pt, or the
     /// whole row if shorter) is inside the viewport — a sliver peeking from
     /// an edge shouldn't satisfy "I'm looking at it".
@@ -611,6 +636,11 @@ final class TranscriptEngineView: NSScrollView {
             return
         }
         guard programmaticScrollDepth == 0 else { return }
+        if originMoved, let row = rows.first(where: {
+            !$0.host.frame.intersection(contentView.documentVisibleRect).isNull
+        }) {
+            onUserScroll?(row.id)
+        }
         if isPinnedToBottom {
             // Unpin needs BOTH: the viewport actually moved (the user's
             // hand) AND it ended far from the bottom. Distance alone also

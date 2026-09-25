@@ -32,6 +32,17 @@ class AppSettings private constructor(context: Context) {
         val current: AppSettings get() = instance!!
     }
 
+    /** Global trigger for rolling history compression, not a full request limit. */
+    private val _compressionThreshold = MutableStateFlow(
+        prefs.getInt("compressionThreshold", 7_000).coerceIn(1_000, 200_000)
+    )
+    val compressionThreshold: StateFlow<Int> = _compressionThreshold
+
+    fun setCompressionThreshold(value: Int) {
+        _compressionThreshold.value = value.coerceIn(1_000, 200_000)
+        prefs.edit().putInt("compressionThreshold", _compressionThreshold.value).apply()
+    }
+
     // MARK: - Chat provider & models
 
     private val _chatProvider = MutableStateFlow(

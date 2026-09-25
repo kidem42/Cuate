@@ -40,6 +40,7 @@ struct CostsSettingsView: View {
                 dailyChartSection(model)
                 modelChartSection(model)
                 breakdownSection(model)
+                purposeSection
             }
             budgetSection
         }
@@ -72,6 +73,13 @@ struct CostsSettingsView: View {
             }
             .padding(.leading, 16)
             .help(String(format: L("costs.avgHelp"), store.currentMonthAvg?.count ?? 0))
+            if store.failedWrites > 0 {
+                Text(String(format: L("costs.failedWrites"), store.failedWrites))
+                    .foregroundStyle(.red)
+            }
+            if let warning = store.latestBudgetWarning {
+                Text(warning).foregroundStyle(.orange)
+            }
             if store.monthlyBudgetUSD > 0 {
                 ProgressView(
                     value: min(store.currentMonthUSD, store.monthlyBudgetUSD),
@@ -323,7 +331,7 @@ struct CostsSettingsView: View {
 
     private func modelRow(_ line: ModelLine, _ model: ChartModel) -> some View {
         LabeledContent {
-            Text(line.hasPrice ? SpendStore.usd(line.cost) : L("costs.noPrice"))
+            Text(line.hasPrice ? (line.hasUnknownCost ? "≥ " : "") + SpendStore.usd(line.cost) : L("costs.noPrice"))
                 .foregroundStyle(line.hasPrice ? .primary : .secondary)
         } label: {
             VStack(alignment: .leading, spacing: 1) {
@@ -384,6 +392,7 @@ struct CostsSettingsView: View {
         var cost: Double = 0
         var hasPrice = false
         var hasEstimates = false
+        var hasUnknownCost = false
 
         var shortLabel: String {
             // Trim vendor prefixes ("anthropic/claude-…" → "claude-…") and
@@ -414,27 +423,42 @@ struct CostsSettingsView: View {
         }
     }
 
-    /// Cost of one record for DISPLAY: what was fixed at write time, or —
-    /// when the record was written without a known price (e.g. the model was
-    /// added to the catalog later) — a live re-quote from the current catalog.
+    /// Preserve the quote recorded with the request. Repricing unknown rows
+    /// here would make charts disagree with the durable monthly total.
     private func displayCost(_ record: SpendRecordValue) -> Double? {
-        if let cost = record.costUSD { return cost }
-        guard record.kind == .chat || record.kind == .summary,
-              let provider = ProviderID(rawValue: record.provider) else { return nil }
-        return PricingCatalog.pricing(provider: provider, model: record.model)?
-            .cost(for: record.usage)
+        record.costUSD
+    }
+
+    private var purposeSection: some View {
+        Section(L("costs.byPurpose")) {
+            ForEach(SpendKind.allCases.filter(\.isModelCall), id: \.rawValue) { kind in
+                let rows = store.selectedMonthRecords.filter { $0.kind == kind }
+                if !rows.isEmpty {
+                    let unknown = rows.filter { $0.costUSD == nil }.count
+                    let partial = rows.filter { $0.usageState == "partial" || $0.usageState == "missing" }.count
+                    VStack(alignment: .leading, spacing: 3) {
+                        LabeledContent(L("costs.kind.\(kind.rawValue)"),
+                            value: (unknown > 0 ? "≥ " : "") + SpendStore.usd(rows.reduce(0) { $0 + ($1.costUSD ?? 0) }))
+                        Text(String(format: L("costs.coverage"), rows.count, unknown, partial))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Text(L("costs.receiptHelp")).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     /// Chat+summary records rolled up per provider+model, ordered by cost.
     private var modelLines: [ModelLine] {
         var lines: [String: ModelLine] = [:]
-        for record in store.selectedMonthRecords where record.kind == .chat || record.kind == .summary {
+        for record in store.selectedMonthRecords where record.kind.isModelCall {
             let key = "\(record.provider)|\(record.model)"
             var line = lines[key] ?? ModelLine(id: key, provider: record.provider, model: record.model)
             line.usage = line.usage.merged(with: record.usage)
             let cost = displayCost(record)
             line.cost += cost ?? 0
             line.hasPrice = line.hasPrice || cost != nil
+            line.hasUnknownCost = line.hasUnknownCost || cost == nil
             line.hasEstimates = line.hasEstimates || record.isEstimate
             lines[key] = line
         }
@@ -480,7 +504,7 @@ struct CostsSettingsView: View {
                 label = L("costs.searchLine"); detail = "\(Int(entry.units))"
             case .image:
                 label = L("costs.imageLine"); detail = "\(Int(entry.units)) · \(key.model)"
-            case .chat, .summary:
+            case .chat, .summary, .dictation, .translation, .layoutFix:
                 continue
             }
             g.serviceLines.append(ServiceLine(

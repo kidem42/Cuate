@@ -3,8 +3,7 @@ import Foundation
 /// The translation run: the selection in chunks, each streamed through the
 /// resolved provider with the addon's prompt, the replies shaped before they
 /// reach the bubble. Reuses the host's provider stack exactly like
-/// `DictationService.postProcess`; nothing is recorded in the spend ledger,
-/// the same as the dictation pass.
+/// `DictationService.postProcess`; each chunk receives a separate spend receipt.
 @MainActor
 enum TranslatorService {
     enum Event {
@@ -41,6 +40,7 @@ enum TranslatorService {
         Diagnostics.log("translator", "run \(choice.provider.rawValue)/\(choice.model) chars=\(text.count) chunks=\(chunks.count)")
         handle(.started(chunks: chunks.count))
 
+        let operationID = UUID().uuidString
         let started = Date()
         for (index, chunk) in chunks.enumerated() {
             if Task.isCancelled { return }
@@ -50,7 +50,7 @@ enum TranslatorService {
                 messages: [LLMMessage(role: .user, text: TranslatorPrompt.userMessage(chunk))],
                 model: choice.model,
                 systemPrompt: system,
-                options: ChatRequestOptions(maxTokens: 4096, reasoning: .fast, preferNoReasoning: true),
+                options: ChatRequestOptions(spendKind: .translation, operationID: operationID, maxTokens: 4096, reasoning: .fast, preferNoReasoning: true),
                 apiKey: apiKey
             )
             do {

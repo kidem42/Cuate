@@ -11,12 +11,22 @@ import SwiftData
 
 /// What a spend record paid for.
 enum SpendKind: String, CaseIterable {
-    case chat      // a model turn in the panel (incl. agentic tool loop)
+    case chat      // one model request; operationID groups a displayed answer
+    case dictation
+    case translation
+    case layoutFix
     case summary   // context-compression summarization call
     case ocr       // Mistral OCR (per page)
     case stt       // speech-to-text (per minute)
     case search    // Brave web search (per query; billed by plan, cost 0)
     case image     // ImageAddon cloud operation (fal.ai)
+
+    var isModelCall: Bool {
+        switch self {
+        case .chat, .summary, .dictation, .translation, .layoutFix: return true
+        case .ocr, .stt, .search, .image: return false
+        }
+    }
 }
 
 @Model
@@ -35,15 +45,22 @@ final class SDSpendRecord {
     var units: Double
     /// nil = tokens recorded but no price known for the model at write time.
     var costUSD: Double?
-    /// true when the stream ended without provider usage (cancel/error) and
-    /// the tokens are a script-aware estimate, not an API-reported count.
+    /// Legacy rows may contain character estimates. New rows use usageState
+    /// to distinguish complete, partial and missing provider counters.
     var isEstimate: Bool
+    // Optional for lightweight migration; old aggregate rows remain unchanged.
+    var operationID: String?
+    var usageState: String?
+    var costBasis: String?
+    var completionState: String?
 
     init(id: UUID = UUID(), timestamp: Date = Date(), kindRaw: String,
          provider: String, model: String,
          inputTokens: Int = 0, outputTokens: Int = 0, cacheReadTokens: Int = 0,
          cacheWriteTokens: Int = 0, reasoningTokens: Int = 0,
-         units: Double = 0, costUSD: Double? = nil, isEstimate: Bool = false) {
+         units: Double = 0, costUSD: Double? = nil, isEstimate: Bool = false,
+         operationID: String? = nil, usageState: String? = nil,
+         costBasis: String? = nil, completionState: String? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.kindRaw = kindRaw
@@ -57,6 +74,10 @@ final class SDSpendRecord {
         self.units = units
         self.costUSD = costUSD
         self.isEstimate = isEstimate
+        self.operationID = operationID
+        self.usageState = usageState
+        self.costBasis = costBasis
+        self.completionState = completionState
     }
 }
 
@@ -71,6 +92,10 @@ struct SpendRecordValue: Identifiable {
     let units: Double
     let costUSD: Double?
     let isEstimate: Bool
+    var operationID: String? = nil
+    var usageState: String? = nil
+    var costBasis: String? = nil
+    var completionState: String? = nil
 }
 
 // MARK: - Ledger (persistence)
@@ -101,18 +126,39 @@ nonisolated enum SpendLedger {
     /// Appends one record. Fire-and-forget from any thread.
     static func append(kind: SpendKind, provider: String, model: String,
                        usage: TokenUsage = TokenUsage(), units: Double = 0,
-                       costUSD: Double?, isEstimate: Bool = false) {
+                       costUSD: Double?, isEstimate: Bool = false,
+                       id: UUID = UUID(), timestamp: Date = Date(),
+                       operationID: String? = nil, usageState: String? = nil,
+                       costBasis: String? = nil, completionState: String? = nil,
+                       attempt: Int = 0, completion: @escaping (Bool) -> Void) {
         queue.async {
             let ctx = ModelContext(container)
             ctx.insert(SDSpendRecord(
-                kindRaw: kind.rawValue, provider: provider, model: model,
+                id: id, timestamp: timestamp, kindRaw: kind.rawValue, provider: provider, model: model,
                 inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
                 cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens,
                 reasoningTokens: usage.reasoningTokens,
-                units: units, costUSD: costUSD, isEstimate: isEstimate
+                units: units, costUSD: costUSD, isEstimate: isEstimate,
+                operationID: operationID, usageState: usageState,
+                costBasis: costBasis, completionState: completionState
             ))
-            try? ctx.save()
-            Diagnostics.log("spend", "append kind=\(kind.rawValue) provider=\(provider) model=\(model) cost=\(costUSD.map { String(format: "%.6f", $0) } ?? "nil") est=\(isEstimate)")
+            do {
+                try ctx.save()
+                Diagnostics.log("spend", "append kind=\(kind.rawValue) provider=\(provider) model=\(model) cost=\(costUSD.map { String(format: "%.6f", $0) } ?? "nil") est=\(isEstimate)")
+                completion(true)
+            } catch {
+                Diagnostics.log("spend", "save.failed attempt=\(attempt + 1)")
+                guard attempt < 2 else { completion(false); return }
+                // Retry the same unique ID, never invent another charge.
+                queue.asyncAfter(deadline: .now() + Double(attempt + 1)) {
+                    append(kind: kind, provider: provider, model: model, usage: usage,
+                           units: units, costUSD: costUSD, isEstimate: isEstimate,
+                           id: id, timestamp: timestamp, operationID: operationID,
+                           usageState: usageState, costBasis: costBasis,
+                           completionState: completionState, attempt: attempt + 1,
+                           completion: completion)
+                }
+            }
         }
     }
 
@@ -147,7 +193,9 @@ nonisolated enum SpendLedger {
                         cacheReadTokens: row.cacheReadTokens, cacheWriteTokens: row.cacheWriteTokens,
                         reasoningTokens: row.reasoningTokens
                     ),
-                    units: row.units, costUSD: row.costUSD, isEstimate: row.isEstimate
+                    units: row.units, costUSD: row.costUSD, isEstimate: row.isEstimate,
+                    operationID: row.operationID, usageState: row.usageState,
+                    costBasis: row.costBasis, completionState: row.completionState
                 )
             })
         }
@@ -189,6 +237,8 @@ final class SpendStore: ObservableObject {
 
     /// Spend since app launch (all kinds), not persisted.
     @Published private(set) var sessionUSD: Double = 0
+    @Published private(set) var failedWrites: Int = 0
+    @Published private(set) var latestBudgetWarning: String?
     /// Current-calendar-month totals (kept fresh by record()/refresh()).
     @Published private(set) var currentMonthUSD: Double = 0
     @Published private(set) var todayUSD: Double = 0
@@ -213,22 +263,29 @@ final class SpendStore: ObservableObject {
     // MARK: Recording façade
 
     /// Central entry point every spend site calls: appends to the ledger,
-    /// updates the live counters, kicks the weekly price refresh, and returns
-    /// the budget-warning text to surface (nil when no threshold was crossed).
+    /// updates counters only after saving, and kicks the weekly price refresh.
+    /// Budget warnings are published asynchronously after the durable read.
     @discardableResult
     func record(kind: SpendKind, provider: String, model: String,
                 usage: TokenUsage = TokenUsage(), units: Double = 0,
-                costUSD: Double?, isEstimate: Bool = false) -> String? {
+                costUSD: Double?, isEstimate: Bool = false,
+                id: UUID = UUID(), timestamp: Date = Date(), operationID: String? = nil,
+                usageState: String? = nil, costBasis: String? = nil,
+                completionState: String? = nil) -> String? {
         SpendLedger.append(kind: kind, provider: provider, model: model,
-                           usage: usage, units: units, costUSD: costUSD, isEstimate: isEstimate)
+                           usage: usage, units: units, costUSD: costUSD, isEstimate: isEstimate,
+                           id: id, timestamp: timestamp, operationID: operationID,
+                           usageState: usageState, costBasis: costBasis ?? "catalog",
+                           completionState: completionState) { saved in
+            DispatchQueue.main.async {
+                guard saved else { self.failedWrites += 1; return }
+                let cost = costUSD ?? 0
+                self.sessionUSD += cost
+                self.refresh()
+            }
+        }
         PricingCatalog.refreshIfStale()
-
-        let cost = costUSD ?? 0
-        sessionUSD += cost
-        let before = currentMonthUSD
-        currentMonthUSD += cost
-        todayUSD += cost
-        return budgetWarning(before: before, after: currentMonthUSD)
+        return nil
     }
 
     /// One warning per threshold per month: 80% and 100% of the budget.
@@ -262,12 +319,18 @@ final class SpendStore: ObservableObject {
             // Ø tokens per chat message, current month (summary row scope —
             // deliberately NOT the picker-selected month).
             let chats = records.filter { $0.kind == .chat }
+            // New rows are requests grouped by operation; legacy rows have
+            // no linkage and retain their original one-record denominator.
+            let count = Set(chats.map { $0.operationID ?? $0.id.uuidString }).count
             let avg: AvgStats? = chats.isEmpty ? nil : AvgStats(
-                input: chats.reduce(0) { $0 + $1.usage.inputTokens + $1.usage.cacheReadTokens + $1.usage.cacheWriteTokens } / chats.count,
-                output: chats.reduce(0) { $0 + $1.usage.outputTokens } / chats.count,
-                count: chats.count
+                input: chats.reduce(0) { $0 + $1.usage.inputTokens + $1.usage.cacheReadTokens + $1.usage.cacheWriteTokens } / count,
+                output: chats.reduce(0) { $0 + $1.usage.outputTokens } / count,
+                count: count
             )
             DispatchQueue.main.async {
+                if let warning = self.budgetWarning(before: self.currentMonthUSD, after: total) {
+                    self.latestBudgetWarning = warning
+                }
                 self.currentMonthUSD = total
                 self.todayUSD = today
                 self.currentMonthAvg = avg

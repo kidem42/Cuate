@@ -463,7 +463,7 @@ struct ToolCall {
 /// bills at different rates (Anthropic: write ×1.25, read ×0.1; DeepSeek:
 /// hit ≈ 1/50 of miss). `reasoningTokens` are informational — providers that
 /// report them (OpenAI, Gemini) already include them in `outputTokens`.
-struct TokenUsage {
+nonisolated struct TokenUsage {
     var inputTokens = 0
     var outputTokens = 0
     var cacheReadTokens = 0
@@ -490,8 +490,7 @@ struct TokenUsage {
             cacheReadTokens: cacheReadTokens + other.cacheReadTokens,
             cacheWriteTokens: cacheWriteTokens + other.cacheWriteTokens,
             reasoningTokens: reasoningTokens + other.reasoningTokens,
-            exactCostUSD: (exactCostUSD == nil && other.exactCostUSD == nil)
-                ? nil : (exactCostUSD ?? 0) + (other.exactCostUSD ?? 0),
+            exactCostUSD: exactCostUSD.flatMap { a in other.exactCostUSD.map { a + $0 } },
             serverSearchRequests: serverSearchRequests + other.serverSearchRequests
         )
     }
@@ -518,8 +517,8 @@ enum LLMStreamEvent {
     /// digest; the model itself is asked to cite inline.
     case citations([WebCitation])
     /// Emitted once per model call, right before the stream finishes, when the
-    /// provider reported token usage. Absent on interrupted streams — callers
-    /// fall back to an estimate.
+    /// provider reported token usage. Accounting uses reportUsage snapshots
+    /// separately so interruption cannot discard already received counters.
     case usage(TokenUsage)
 }
 
@@ -542,6 +541,14 @@ enum ReasoningMode: String, CaseIterable, Codable, Identifiable {
 
 /// Per-request options resolved from settings.
 struct ChatRequestOptions {
+    /// Accounting scope is independent of the user's prompt or preset name.
+    var spendKind: SpendKind = .chat
+    var operationID: String? = nil
+    var cacheKey: String? = nil
+    /// Provider snapshots bypass the UI stream so cancellation cannot discard
+    /// usage already received. Counts are cumulative within ONE request.
+    var reportUsage: ((TokenUsage, Bool) -> Void)? = nil
+    var reportOutcome: ((String) -> Void)? = nil
     var maxTokens: Int = 8192
     var reasoning: ReasoningMode = .auto
     var tools: [ToolSpec] = []
@@ -569,6 +576,8 @@ struct ChatRequestOptions {
     /// the model documents an off switch (see `supportsNoReasoning`);
     /// elsewhere the request falls back to the lowest effort it does accept.
     var preferNoReasoning: Bool = false
+    /// Transient app context, separate from the reusable instruction prefix.
+    var requestContext: String? = nil
 }
 
 // MARK: - Protocols

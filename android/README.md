@@ -85,10 +85,11 @@ Added in 2.2 (Hermes Agent — a port of desktop 4.0–4.2):
   chips (there is nothing to download). Without a dashboard the old fallback
   applies: "tap = copy the path". ⋮ → "Files in this chat" collects every path in
   the conversation plus a "Sent by you" group.
-- **Pinned messages** (all chats, the desktop mechanics 1:1): pin by long tap, a
-  bar with a snippet and k/n, a tap goes to the pin being shown and only then
-  cycles, ✕ unpins; the order is the order of pinning; pins outside the window
-  load themselves.
+- **Pinned messages** in all chats: formatted Markdown preview and k/n; the
+  nearest pin to the reading position appears first. Tap jumps to it; once
+  visible, another tap selects an older pin, wrapping at the end. Pins outside
+  the window load before scrolling; a conversation switch cancels the jump.
+  Equal timestamps use a stable database cursor; ✕ unpins the shown message.
 - **Sessions**: titles from the first message (on the gateway too), the list is
   mirrored (including sessions created from Telegram/CLI), unread dots on threads
   with external activity, and the `hermesSyncedSeq` watermark keeps our own turns
@@ -198,10 +199,28 @@ Ported from the macOS version (`../Cuate`, Swift → Kotlin):
   (chat/completions), Gemini (streamGenerateContent). SSE streaming through
   OkHttp, function calling, reasoning modes (auto/fast/deep) — a 1:1 port of
   `Providers/*.swift`.
-- **ChatService** — the web_search agent loop (Brave, up to 4 iterations),
-  context compression (a rolling summary: a 24k-token threshold, script-aware
-  estimation, the last 12 messages verbatim, a merge-style prompt), and
-  tool-context grounding on the last reply.
+- **ChatService** — a configurable tool-round budget shared across automatic
+  continuations, retaining the complete tool-call/result transcript. Provider,
+  model and request options stay fixed for one displayed answer.
+- **Context compression** — Settings → Chat, default 7,000 estimated tokens,
+  adjustable from 1,000 to 200,000. The previous summary counts toward the
+  trigger. Recent complete user turns stay verbatim, always including the
+  newest. Validated structured notes fold previous notes and new history
+  together, including cached OCR and tool context; originals remain on-device.
+  Per-conversation single-flight and transactional snapshot checks reject stale
+  results after edits, clearing or deletion. Compression is lossy, costs tokens,
+  and does not cap full requests (instructions, tools and a large latest turn
+  can exceed the threshold). There is no header or per-chat compression control.
+- **Model costs** — one durable receipt per provider call, including failed and
+  cancelled calls, with cumulative usage captured before interruption. Missing
+  usage stays unknown; exact OpenRouter charges include tools only once.
+  Historical prices remain fixed; Costs distinguishes averages per request and
+  per answer, summary costs, missing data and failed ledger writes. Room 5→6
+  preserves existing chats and cost records. Hermes gateway turns do not pass through this wrapper.
+- **Prompt caching** — stable Mistral/legacy OpenAI keys, block-level OpenRouter
+  Anthropic breakpoints, and GPT-5.6/GPT-6 summary requests caching only reusable
+  instructions. Ordinary OpenAI chats keep implicit caching with transient date
+  context after history. Cache hits and a fixed savings percentage are not guaranteed.
 - **Storage** — Room (conversations + messages, windowed loading 120 at a time),
   API keys in the Android Keystore (AES/GCM), settings in SharedPreferences.
 - **UI** — Jetpack Compose + Material 3 (dynamic color), Markdown rendering
@@ -262,3 +281,11 @@ app/src/main/kotlin/com/aispotlight/android/
 ```
 
 License: AGPL-3.0 (see `../LICENSE`).
+
+### Isolated cost and context contracts
+
+From the repository root, `python3 scripts/test-android-costs.py` uses cached Kotlin dependencies and fake
+network/storage seams to exercise the actual providers, accounting, compression
+and continuation code. It also checks ledger migration SQL and parses Kotlin
+syntax. It does not build an APK, compile Compose UI, launch the app or call a
+model. Installed-device layout/navigation acceptance remains a manual check.

@@ -2,6 +2,7 @@ package com.aispotlight.android.chat
 
 import android.app.Application
 import android.net.Uri
+import androidx.room.withTransaction
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aispotlight.android.data.AppDatabase
@@ -22,6 +23,7 @@ import com.aispotlight.android.hermes.HermesSteer
 import com.aispotlight.android.hermes.HermesTransport
 import com.aispotlight.android.providers.TranscriptionService
 import com.aispotlight.android.settings.AppSettings
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
@@ -427,7 +429,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** Maps message rows to domain values with their attachments joined in. */
     private suspend fun withAttachments(rows: List<MessageEntity>): List<ChatMessage> {
         if (rows.isEmpty()) return emptyList()
-        val attachments = dao.attachments(rows.map { it.id })
+        val attachments = rows.map { it.id }.chunked(900).flatMap { dao.attachments(it) }
             .groupBy({ it.messageId }, { it.toDomain() })
         return rows.map { it.toDomain(attachments[it.id] ?: emptyList()) }
     }
@@ -460,13 +462,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val id = _activeConversationId.value ?: return
         val oldest = _messages.value.firstOrNull() ?: return
         viewModelScope.launch {
-            val older = withAttachments(dao.olderMessages(id, oldest.timestamp, windowSize).reversed())
+            val older = withAttachments(dao.messagesBefore(id, oldest.id, windowSize).reversed())
             if (_activeConversationId.value != id) return@launch
             if (older.isEmpty()) {
                 _hasOlderMessages.value = false
                 return@launch
             }
-            _messages.value = older + _messages.value
+            _messages.value = (older + _messages.value).distinctBy { it.id }
             _hasOlderMessages.value = totalMessageCount > _messages.value.size
         }
     }
@@ -1203,17 +1205,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // mandatory prompt rules) — "I need another working round".
                 // The marker is stripped, a hidden "Continue." user turn is
                 // appended to the REQUEST (never to the chat or the DB), and
-                // the next round streams into the SAME bubble with a fresh
+                // the next round streams into the SAME bubble with a shared
                 // tool budget. Bounded so a marker-happy model can't loop.
-                var requestHistory = history
+                val turnState = ChatService.TurnState()
                 var round = 0
                 while (true) {
                 val roundStart = replyText.length
                 ChatService.streamReply(
                     context = getApplication(),
-                    history = requestHistory,
+                    history = history,
                     summary = summary,
                     presetSystemPrompt = presetPrompt,
+                    turn = turnState,
                     onAttachmentRemote = { messageId, attachmentId, fileId, provider, expiresAt ->
                         // Persist the provider-side copy onto its attachment
                         // (row + loaded window) so later turns never re-upload.
@@ -1307,11 +1310,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     replyText.append(roundStripped).append("\n\n")
                     pushReply()
                     if (isActive()) _statusText.value = "Thinking…"
-                    // Hidden request-only turns: this round's text and the
-                    // continuation nudge. Never shown, never persisted.
-                    requestHistory = requestHistory +
-                        ChatMessage(text = roundStripped, isUser = false) +
-                        ChatMessage(text = "Continue.", isUser = true)
+                    // TurnState retains the complete provider transcript and adds the hidden nudge.
                 }
                 if (replyText.isNotEmpty()) {
                     pushReply()
@@ -1358,7 +1357,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 markStreaming(conversationId, false)
-                if (isActive()) runCompression(conversationId)
+                viewModelScope.launch { runCompression(conversationId) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Stop button: keep whatever streamed so far.
                 if (replyText.isNotEmpty() && !persisted) {
@@ -1977,14 +1976,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun ensurePinLoaded(messageId: String): Boolean {
         val id = _activeConversationId.value ?: return false
-        var guard = 0
-        while (_messages.value.none { it.id == messageId } && guard < 40) {
+        while (_messages.value.none { it.id == messageId }) {
+            if (_activeConversationId.value != id) return false
             val oldest = _messages.value.firstOrNull() ?: return false
-            val older = withAttachments(dao.olderMessages(id, oldest.timestamp, windowSize).reversed())
-            if (older.isEmpty()) return false
-            _messages.value = older + _messages.value
+            val older = withAttachments(dao.messagesBefore(id, oldest.id, windowSize).reversed())
+            if (_activeConversationId.value != id || older.isEmpty()) return false
+            _messages.value = (older + _messages.value).distinctBy { it.id }
             _hasOlderMessages.value = totalMessageCount > _messages.value.size
-            guard++
         }
         return _messages.value.any { it.id == messageId }
     }
@@ -2769,26 +2767,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // MARK: - Compression
 
+    private val compressingConversations = mutableSetOf<String>()
+
     private suspend fun runCompression(conversationId: String) {
-        val conversation = activeConversation ?: return
-        val coversCount = conversation.summaryCoversCount
-        val windowStart = totalMessageCount - _messages.value.size
-        val skip = (coversCount - windowStart).coerceIn(0, _messages.value.size)
-        val active = _messages.value.drop(skip)
-        val result = ChatService.compressHistoryIfNeeded(
-            activeMessages = active,
-            totalMessageCount = totalMessageCount,
-            existingSummary = conversation.summary,
-        ) ?: return
-        // The user may have switched conversations while the summary call ran —
-        // the result still belongs to the conversation it was computed FOR.
-        dao.setSummary(conversationId, result.summary, result.coversCount)
-        if (_activeConversationId.value == conversationId) {
-            activeConversation = conversation.copy(
-                summary = result.summary, summaryCoversCount = result.coversCount
-            )
-        }
+        if (!compressingConversations.add(conversationId)) return
+        try {
+            val db = AppDatabase.get(getApplication())
+            val snapshot = db.withTransaction {
+                val conversation = dao.conversation(conversationId) ?: return@withTransaction null
+                if (conversation.hermesSessionId != null) return@withTransaction null
+                val rows = dao.allMessages(conversationId)
+                Triple(conversation, rows, withAttachments(rows))
+            } ?: return
+            val (conversation, rows, messages) = snapshot
+            val result = ChatService.compressHistoryIfNeeded(
+                messages.drop(conversation.summaryCoversCount), rows.size, conversation.summary
+            ) ?: return
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val applied = db.withTransaction {
+                val current = dao.conversation(conversationId) ?: return@withTransaction false
+                if (current.summary != conversation.summary ||
+                    current.summaryCoversCount != conversation.summaryCoversCount) return@withTransaction false
+                val currentRows = dao.allMessages(conversationId).take(rows.size)
+                // Includes identity, text, tool context and attachment/OCR revisions.
+                if (currentRows != rows || withAttachments(currentRows) != messages) return@withTransaction false
+                dao.setSummary(conversationId, result.summary, result.coversCount)
+                true
+            }
+            if (applied && _activeConversationId.value == conversationId) {
+                activeConversation = activeConversation?.copy(
+                    summary = result.summary, summaryCoversCount = result.coversCount
+                )
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+        } catch (_: Exception) {
+            com.aispotlight.android.core.Diagnostics.log("chat", "compression.storage.failed")
+        } finally { compressingConversations.remove(conversationId) }
     }
+
 }
 
 /** How long a Stop waits for `GET /v1/runs/{id}` to read terminal. */

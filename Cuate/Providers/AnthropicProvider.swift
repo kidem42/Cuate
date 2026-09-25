@@ -139,6 +139,8 @@ struct AnthropicProvider: LLMProvider {
             let task = Task {
                 var pendingCalls: [Int: (id: String, name: String, args: String)] = [:]
                 var usage = TokenUsage()
+                var hasUsage = false
+                var terminal = false
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
@@ -154,13 +156,25 @@ struct AnthropicProvider: LLMProvider {
                                 usage.inputTokens = u["input_tokens"] as? Int ?? 0
                                 usage.cacheWriteTokens = u["cache_creation_input_tokens"] as? Int ?? 0
                                 usage.cacheReadTokens = u["cache_read_input_tokens"] as? Int ?? 0
+                                usage.outputTokens = u["output_tokens"] as? Int ?? 0
+                                hasUsage = true
+                                options.reportUsage?(usage, false)
                             }
                         case "message_delta":
                             // Cumulative output count — keep the latest value.
                             if let u = json["usage"] as? [String: Any],
                                let output = u["output_tokens"] as? Int {
                                 usage.outputTokens = output
+                                hasUsage = true
+                                options.reportUsage?(usage, false)
                             }
+                            if let delta = json["delta"] as? [String: Any],
+                               delta["stop_reason"] as? String == "max_tokens" {
+                                options.reportOutcome?("incomplete")
+                            }
+                        case "message_stop":
+                            terminal = true
+                            if hasUsage { options.reportUsage?(usage, true) }
                         case "content_block_start":
                             if let index = json["index"] as? Int,
                                let block = json["content_block"] as? [String: Any],
@@ -200,9 +214,10 @@ struct AnthropicProvider: LLMProvider {
                         }
                         continuation.yield(.toolCalls(calls))
                     }
-                    if !usage.isEmpty {
+                    if hasUsage {
                         continuation.yield(.usage(usage))
                     }
+                    if !terminal { options.reportOutcome?("incomplete") }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

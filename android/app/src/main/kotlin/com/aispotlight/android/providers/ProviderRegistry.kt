@@ -8,7 +8,9 @@ object ProviderRegistry {
     private val anthropic = AnthropicProvider()
     private val gemini = GeminiProvider()
 
-    fun provider(id: ProviderID): LLMProvider = when (id) {
+    fun provider(id: ProviderID): LLMProvider = AccountingProvider(rawProvider(id))
+
+    private fun rawProvider(id: ProviderID): LLMProvider = when (id) {
         ProviderID.ANTHROPIC -> anthropic
         ProviderID.GEMINI -> gemini
         ProviderID.OPENAI -> OpenAICompatibleProvider.openAI

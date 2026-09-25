@@ -15,6 +15,7 @@ struct ChatTranscriptView: NSViewRepresentable {
     var onNearBottomChange: (Bool) -> Void = { _ in }
     var onContentFitsChange: (Bool) -> Void = { _ in }
     var onViewportWidthChange: (CGFloat) -> Void = { _ in }
+    var onUserScroll: (String) -> Void = { _ in }
     var onNeedOlder: () -> Void = {}
     var onNeedNewer: () -> Void = {}
 
@@ -22,6 +23,7 @@ struct ChatTranscriptView: NSViewRepresentable {
         var onNearBottomChange: (Bool) -> Void = { _ in }
         var onContentFitsChange: (Bool) -> Void = { _ in }
         var onViewportWidthChange: (CGFloat) -> Void = { _ in }
+        var onUserScroll: (String) -> Void = { _ in }
         var onNeedOlder: () -> Void = {}
         var onNeedNewer: () -> Void = {}
         // Latest row set waiting for the deferred apply (see updateNSView).
@@ -47,6 +49,9 @@ struct ChatTranscriptView: NSViewRepresentable {
         }
         engine.onViewportWidthChange = { value in
             DispatchQueue.main.async { coordinator.onViewportWidthChange(value) }
+        }
+        engine.onUserScroll = { id in
+            DispatchQueue.main.async { coordinator.onUserScroll(id) }
         }
         engine.onNeedOlder = {
             DispatchQueue.main.async { coordinator.onNeedOlder() }
@@ -81,6 +86,7 @@ struct ChatTranscriptView: NSViewRepresentable {
         coordinator.onNearBottomChange = onNearBottomChange
         coordinator.onContentFitsChange = onContentFitsChange
         coordinator.onViewportWidthChange = onViewportWidthChange
+        coordinator.onUserScroll = onUserScroll
         coordinator.onNeedOlder = onNeedOlder
         coordinator.onNeedNewer = onNeedNewer
         // Apply OUTSIDE the SwiftUI update transaction. `apply` builds
@@ -102,6 +108,8 @@ struct ChatTranscriptView: NSViewRepresentable {
             guard let engine else { return }
             engine.apply(items: coordinator.pendingItems,
                          resetToken: coordinator.pendingResetToken)
+            controller.didApplyRows(ids: coordinator.pendingItems.map(\.id),
+                                    conversation: coordinator.pendingResetToken)
         }
     }
 }

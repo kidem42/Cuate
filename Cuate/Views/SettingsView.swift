@@ -256,7 +256,7 @@ struct SettingsView: View {
     private var detail: some View {
         Group {
             switch selectedTab {
-            case .chat: tab { chatSection; parametersSection; ocrSection }
+            case .chat: tab { chatSection; parametersSection; compressionSection; ocrSection }
             case .keys: keysTab
             case .voice: tab { voiceSection; dictationSection }
             case .general: tab { behaviorSection; modelsSection; addonsSection; permissionsSection; hotkeysSection; panelSection; diagnosticsSection; aboutSection }
@@ -441,6 +441,12 @@ struct SettingsView: View {
     }
 
     // MARK: - Model parameters (capability-aware)
+
+    private var compressionSection: some View {
+        Section(L("compression.title")) {
+            ContextCompressionSettingsView()
+        }
+    }
 
     private var parametersSection: some View {
         Section {

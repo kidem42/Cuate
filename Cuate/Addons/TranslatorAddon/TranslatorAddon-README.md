@@ -39,8 +39,9 @@ leaves after the linger time (Settings, default 30 s; hovering holds the
 clock), on Esc, on a click anywhere else, or when the hotkey brings a new one.
 
 **Model.** By default the dictation cleanup choice (Settings → Voice), a
-small fast model; overridable per provider in the tab. Nothing is recorded
-in the spend ledger, like the dictation pass.
+small fast model; overridable per provider in the tab. Each chunk is recorded
+as a translation request in the spend ledger, grouped by one operation ID.
+Missing or partial provider usage remains explicitly marked.
 
 **Files.** `TranslatorAddon` (singleton, hotkey 903, the flow),
 `TranslatorSettings` (`translator.*` defaults), `TranslatorLocalization`

@@ -2,6 +2,11 @@ package com.aispotlight.android.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.room.ColumnInfo
+import androidx.room.OnConflictStrategy
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.delay
 import androidx.room.Dao
 import androidx.room.Entity
 import androidx.room.Index
@@ -60,8 +65,12 @@ data class SpendRecordEntity(
     val units: Double,
     /** null = tokens recorded but no price known for the model at write time. */
     val costUSD: Double?,
-    /** true when the stream ended without provider usage and tokens are estimated. */
+    /** Legacy estimate marker. New model receipts never invent missing token counts. */
     val isEstimate: Boolean,
+    @ColumnInfo(defaultValue = "NULL") val operationID: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val usageState: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val costBasis: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val completionState: String? = null,
 ) {
     val usage: TokenUsage
         get() = TokenUsage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens)
@@ -69,8 +78,8 @@ data class SpendRecordEntity(
 
 @Dao
 interface SpendDao {
-    @Insert
-    suspend fun insert(record: SpendRecordEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(record: SpendRecordEntity): Long
 
     @Query("SELECT * FROM spend_records WHERE timestamp >= :from AND timestamp < :to ORDER BY timestamp")
     suspend fun recordsBetween(from: Long, to: Long): List<SpendRecordEntity>
@@ -85,8 +94,8 @@ interface SpendDao {
 /**
  * Recording façade + live counters for the Costs screen (port of the macOS
  * `SpendStore`). Fire-and-forget [record] appends to the ledger, keeps the
- * session/month counters fresh, kicks the weekly price refresh, and returns
- * a budget-warning message when a threshold was crossed (80% / 100%, once
+ * session/month counters fresh after durable writes and kicks the weekly price
+ * refresh. [recordAwait] returns a budget warning when a threshold was crossed (80% / 100%, once
  * per month each — soft limit, never blocks).
  */
 object SpendTracker {
@@ -103,6 +112,14 @@ object SpendTracker {
 
     private val _monthlyBudgetUSD = MutableStateFlow(0.0)
     val monthlyBudgetUSD: StateFlow<Double> = _monthlyBudgetUSD
+
+    private val writeMutex = Mutex()
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision
+    private val _failedWrites = MutableStateFlow(0)
+    val failedWrites: StateFlow<Int> = _failedWrites
+    private val _budgetNotice = MutableStateFlow<String?>(null)
+    val budgetNotice: StateFlow<String?> = _budgetNotice
 
     private fun dao(): SpendDao = AppDatabase.get(appContext).spendDao()
 
@@ -122,26 +139,33 @@ object SpendTracker {
     /** Reloads the month/today counters from the ledger (call on screen open). */
     fun refreshTotals() {
         scope.launch {
-            val (monthStart, monthEnd) = monthBounds(System.currentTimeMillis())
-            _monthUSD.value = dao().costBetween(monthStart, monthEnd)
-            _todayUSD.value = dao().costBetween(dayStart(System.currentTimeMillis()), monthEnd)
+            try { writeMutex.withLock {
+                val (monthStart, monthEnd) = monthBounds(System.currentTimeMillis())
+                _monthUSD.value = dao().costBetween(monthStart, monthEnd)
+                _todayUSD.value = dao().costBetween(dayStart(System.currentTimeMillis()), monthEnd)
+            } } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+            } catch (_: Exception) { Diagnostics.log("spend", "totals.refresh.failed") }
         }
     }
 
     /**
-     * Appends one record. Safe from any thread; the insert is async, the
-     * counter/budget bookkeeping is immediate. Returns the localized budget
-     * warning to surface in the chat, or null.
+     * Service-call compatibility entry point. Durable insertion and live totals
+     * run on the ledger scope; budget notices are also exposed to Costs UI.
      */
     fun record(
-        kind: SpendKind,
-        provider: String,
-        model: String,
-        usage: TokenUsage = TokenUsage(),
-        units: Double = 0.0,
-        costUSD: Double?,
-        isEstimate: Boolean = false,
+        kind: SpendKind, provider: String, model: String, usage: TokenUsage = TokenUsage(),
+        units: Double = 0.0, costUSD: Double?, isEstimate: Boolean = false,
     ): String? {
+        scope.launch { recordAwait(kind, provider, model, usage, units, costUSD, isEstimate) }
+        return null
+    }
+
+    suspend fun recordAwait(
+        kind: SpendKind, provider: String, model: String, usage: TokenUsage = TokenUsage(),
+        units: Double = 0.0, costUSD: Double?, isEstimate: Boolean = false,
+        operationID: String? = null, usageState: String? = null,
+        costBasis: String? = null, completionState: String? = null,
+    ): String? = writeMutex.withLock {
         val entity = SpendRecordEntity(
             id = UUID.randomUUID().toString(),
             timestamp = System.currentTimeMillis(),
@@ -156,21 +180,38 @@ object SpendTracker {
             units = units,
             costUSD = costUSD,
             isEstimate = isEstimate,
+            operationID = operationID, usageState = usageState,
+            costBasis = costBasis, completionState = completionState,
         )
-        scope.launch { dao().insert(entity) }
-        PricingCatalog.refreshIfStale()
-        Diagnostics.log(
-            "spend",
-            "append kind=${kind.raw} provider=$provider model=$model " +
-                "cost=${costUSD?.let { String.format(Locale.US, "%.6f", it) } ?: "nil"} est=$isEstimate"
-        )
-
-        val cost = costUSD ?: 0.0
-        _sessionUSD.value += cost
-        _todayUSD.value += cost
-        val before = _monthUSD.value
-        _monthUSD.value = before + cost
-        return budgetWarning(before, _monthUSD.value)
+        var saved = false
+        for (attempt in 0..2) {
+            try {
+                dao().insert(entity) // Same UUID on retry: idempotent even after an ambiguous write.
+                saved = true
+                break
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+            } catch (_: Exception) { if (attempt < 2) delay(100L * (attempt + 1)) }
+        }
+        if (!saved) {
+            _failedWrites.value += 1
+            Diagnostics.log("spend", "write.failed kind=${kind.raw} provider=$provider")
+            return@withLock null
+        }
+        _revision.value += 1
+        _sessionUSD.value += costUSD ?: 0.0
+        try {
+            PricingCatalog.refreshIfStale()
+            val before = _monthUSD.value
+            val (start, end) = monthBounds(System.currentTimeMillis())
+            _monthUSD.value = dao().costBetween(start, end)
+            _todayUSD.value = dao().costBetween(dayStart(System.currentTimeMillis()), end)
+            budgetWarning(before, _monthUSD.value)?.also { _budgetNotice.value = it }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+        } catch (_: Exception) {
+            // The receipt is durable; a totals refresh must not fail the paid chat call.
+            Diagnostics.log("spend", "totals.refresh.failed")
+            null
+        }
     }
 
     /** One warning per threshold per month: 80% and 100% of the budget. */

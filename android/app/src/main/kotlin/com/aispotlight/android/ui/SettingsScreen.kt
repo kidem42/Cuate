@@ -563,6 +563,31 @@ private fun ChatTab(settings: AppSettings) {
         }
     }
 
+    val compressionThreshold by settings.compressionThreshold.collectAsState()
+    SettingsGroup(stringResource(R.string.compression_title)) {
+        item {
+            var thresholdText by remember(compressionThreshold) { mutableStateOf(compressionThreshold.toString()) }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = thresholdText,
+                    onValueChange = { thresholdText = it.filter(Char::isDigit).take(6) },
+                    label = { Text(stringResource(R.string.compression_threshold)) },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                androidx.compose.material3.TextButton(
+                    onClick = { thresholdText.toIntOrNull()?.let(settings::setCompressionThreshold) },
+                    enabled = thresholdText.toIntOrNull()?.let { it in 1_000..200_000 && it != compressionThreshold } == true,
+                ) { Text(stringResource(R.string.compression_apply)) }
+                Text(stringResource(R.string.compression_hint), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
     // Opt-in: photos from recent messages stay in the request as pixels
     // (see ChatService.RECENT_PIXEL_WINDOW). Off by default — recurring
     // vision-token cost must not appear silently for existing users.

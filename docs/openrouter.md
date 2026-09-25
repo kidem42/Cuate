@@ -45,11 +45,13 @@ routed with `provider.data_collection = "deny"`.
 
 OpenRouter returns `usage.cost` — the exact charge for the request, server
 tools included — and `usage.server_tool_use.web_search_requests`. The app
-books the chat turn at that exact cost minus the search share, and the search
-share as its own "Web search, queries" line (requests × $0.007, marked as an
-estimate because native search bills at the provider's rate), so the
-provider's total in Settings → Costs equals what OpenRouter charged. Token
-counts and cached-token splits are recorded as before.
+stores that exact amount once per request, including its server tools. It does
+not subtract or separately re-add an estimated search share. Missing charges
+remain unknown when server-tool costs cannot be determined. Where a token-based
+catalog estimate is available, it is distinguished from a provider charge;
+partial or missing token counters are explicitly marked. Cache reads
+and writes are separate input buckets. New request receipts are grouped by
+operation for average tokens per displayed chat answer.
 
 ## The model browser
 

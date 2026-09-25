@@ -40,6 +40,14 @@ enum Localization {
     static var currentLanguage: AppLanguage = .english
 
     static let strings: [String: [AppLanguage: String]] = [
+        // MARK: Context compression
+        "compression.title": [.english: "Context compression", .spanish: "Compresión del contexto", .russian: "Сжатие контекста"],
+        "compression.inherit": [.english: "Use app default", .spanish: "Usar el valor de la aplicación", .russian: "Использовать настройку приложения"],
+        "compression.inheritHelp": [.english: "Turn off to set a separate threshold for this conversation.", .spanish: "Desactiva para definir un umbral para esta conversación.", .russian: "Выключите, чтобы задать отдельный порог для этого разговора."],
+        "compression.threshold": [.english: "Threshold (tokens)", .spanish: "Umbral (tokens)", .russian: "Порог (токены)"],
+        "compression.thresholdHelp": [.english: "Estimated history tokens that trigger compression. Range: 1,000–200,000; default: 7,000. This is not a request size limit.", .spanish: "Tokens estimados del historial que activan la compresión. Rango: 1.000–200.000; predeterminado: 7.000. No limita el tamaño de cada solicitud.", .russian: "Порог сжатия по оценке токенов истории. Диапазон: 1 000–200 000; по умолчанию: 7 000. Это не лимит размера запроса."],
+        "compression.explanation": [.english: "Checked after each reply, counting history and previous notes. Recent complete turns stay within a token budget; the newest turn is always kept intact. Originals remain on this device. Summaries cost tokens and may lose details. Prompts, tools or a long latest turn can put a request above this threshold. Changes apply after the next reply.", .spanish: "Se comprueba después de cada respuesta, contando el historial y las notas anteriores. Se conservan los intercambios recientes según un presupuesto de tokens; el último se mantiene completo. Los originales permanecen en este dispositivo. Resumir consume tokens y puede perder detalles. Las instrucciones, herramientas o un último intercambio largo pueden superar el umbral. Los cambios se aplican después de la próxima respuesta.", .russian: "Проверяется после каждого ответа с учётом истории и предыдущей сводки. Последние полные обмены сохраняются в пределах бюджета токенов; самый свежий — всегда целиком. Оригиналы остаются на устройстве. Создание сводки стоит токенов и может потерять детали. Промпт, инструменты или длинный последний обмен могут увеличить запрос сверх порога. Изменения применятся после следующего ответа."],
+
         // MARK: Tabs
         "tab.chat": [.english: "Chat", .spanish: "Chat", .russian: "Чат"],
         "tab.keys": [.english: "API Keys", .spanish: "Claves API", .russian: "Ключи API"],
@@ -98,6 +106,16 @@ enum Localization {
         "menu.localStop": [.english: "Stop current model", .spanish: "Detener modelo actual", .russian: "Остановить текущую модель"],
 
         // MARK: Costs tab
+        "chat.toolBudgetExceeded": [.english: "The model kept requesting tools after the answer’s tool limit was reached.", .spanish: "El modelo siguió solicitando herramientas después de alcanzar el límite de la respuesta.", .russian: "Модель продолжила запрашивать инструменты после исчерпания лимита на ответ."],
+        "costs.byPurpose": [.english: "Model calls by feature", .spanish: "Llamadas a modelos por función", .russian: "Вызовы моделей по функциям"],
+        "costs.kind.chat": [.english: "Chat", .spanish: "Chat", .russian: "Чат"],
+        "costs.kind.summary": [.english: "Context summaries", .spanish: "Resúmenes de contexto", .russian: "Сжатие контекста"],
+        "costs.kind.dictation": [.english: "Dictation cleanup / translation", .spanish: "Limpieza / traducción del dictado", .russian: "Обработка / перевод диктовки"],
+        "costs.kind.translation": [.english: "Translator addon", .spanish: "Complemento Traductor", .russian: "Аддон «Переводчик»"],
+        "costs.kind.layoutFix": [.english: "LayoutFix AI", .spanish: "LayoutFix IA", .russian: "LayoutFix AI"],
+        "costs.coverage": [.english: "%d records · %d without price · %d with incomplete token counts", .spanish: "%d registros · %d sin precio · %d con tokens incompletos", .russian: "%d записей · %d без стоимости · %d с неполными счётчиками токенов"],
+        "costs.receiptHelp": [.english: "New records represent individual API requests, including failed attempts. Older chat records aggregate a turn. Totals include known costs only; missing usage is not zero. OpenRouter charges include its server tools. Other prices are catalog estimates.", .spanish: "Los registros nuevos representan solicitudes API, incluidos intentos fallidos. Los antiguos agrupan un turno. Los totales solo incluyen costes conocidos; uso ausente no significa cero. OpenRouter incluye sus herramientas. Otros precios son estimaciones de catálogo.", .russian: "Новые записи — отдельные API-запросы, включая неудачные попытки. Старые записи чата объединяют весь ход. Суммы включают только известные расходы; отсутствие данных не означает нулевой расход. OpenRouter включает серверные инструменты. Остальные цены рассчитаны по каталогу."],
+        "costs.failedWrites": [.english: "%d spend records could not be saved after retries. Totals are incomplete.", .spanish: "No se pudieron guardar %d registros tras reintentos. Los totales están incompletos.", .russian: "Не удалось сохранить %d записей расходов после повторных попыток. Итоги неполные."],
         "costs.header": [.english: "Spending", .spanish: "Gastos", .russian: "Расходы"],
         "costs.session": [.english: "This session", .spanish: "Esta sesión", .russian: "За сессию"],
         "costs.sessionHelp": [.english: "Spending since the app was launched.", .spanish: "Gastos desde que se inició la aplicación.", .russian: "Расходы с момента запуска приложения."],
@@ -107,7 +125,7 @@ enum Localization {
         "costs.monthHelp": [.english: "Spending in the current calendar month.", .spanish: "Gastos del mes natural en curso.", .russian: "Расходы за текущий календарный месяц."],
         "costs.progressHelp": [.english: "Progress toward the monthly limit.", .spanish: "Progreso hacia el límite mensual.", .russian: "Прогресс к месячному лимиту."],
         "costs.avgPerMessage": [.english: "Avg. tokens per message", .spanish: "Tokens promedio por mensaje", .russian: "Ø токенов на сообщение"],
-        "costs.avgHelp": [.english: "Average over %d chat messages in the selected month. Input includes the full sent context (with cache).", .spanish: "Promedio de %d mensajes de chat del mes seleccionado. La entrada incluye todo el contexto enviado (con caché).", .russian: "Среднее по %d сообщениям чата за выбранный месяц. Вход включает весь отправленный контекст (с кэшем)."],
+        "costs.avgHelp": [.english: "Average over %d chat answers in the current month. Includes all requests and continuations per answer, with cached input. Missing counters make this a lower bound.", .spanish: "Promedio de %d respuestas del mes actual. Incluye solicitudes y continuaciones, con entrada en caché. Los contadores ausentes reducen el valor.", .russian: "Среднее по %d ответам чата за текущий месяц. Включает все запросы и продолжения ответа, в том числе кэшированный вход. При неполных счётчиках это нижняя граница."],
         "costs.byProviders": [.english: "By provider", .spanish: "Por proveedor", .russian: "По провайдерам"],
         "costs.byModels": [.english: "By model", .spanish: "Por modelo", .russian: "По моделям"],
         "costs.dimensionHelp": [.english: "Slice the daily chart by provider or by model.", .spanish: "Divide el gráfico diario por proveedor o por modelo.", .russian: "Разбивка графика по провайдерам или по моделям."],

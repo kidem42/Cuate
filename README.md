@@ -58,7 +58,7 @@ All of them are configurable: the app hotkeys in Settings → General, the addon
 
 **Reach the live web.** Brave Search plus a keyless page reader, with inline citations and a configurable tool budget per reply.
 
-**Know what it costs.** Token usage is captured from every provider and priced from a bundled catalog: session/today/month totals, charts by provider or model, and a soft monthly budget.
+**Know what it costs.** Request-level accounting covers chat, context summaries, dictation cleanup, Translator and LayoutFix, including failed attempts. Costs shows feature breakdowns, incomplete usage, session/today/month totals and a soft monthly budget. Provider-reported charges take priority over catalog estimates; unknown costs stay marked as unknown. Automatic chat continuations retain tool results and share one client-tool budget. For GPT-5.6/6, one-shot background calls cache reusable instructions instead of paying to cache each unique payload; chat dates follow the reusable history prefix.
 
 <details>
 <summary><b>Addons</b> — image tools, calendar, world time, layout fixer, translator</summary>
@@ -79,6 +79,8 @@ Two addons are large enough to have their own sections: [Hermes Agent](#hermes-a
 - **Attachments** — up to 5 images per message by any route: paperclip, ⌘V, drag & drop, screenshot hotkeys; HEIC/TIFF converted automatically. Models without vision get each image OCR'd into text.
 - **Documents** — PDF, Word, PowerPoint, Excel and text files as attachments (up to 3 per message). OpenAI reads them natively through its Files API; every other provider gets the text extracted on the Mac (PDFKit, Apple Vision for scans). After the first turn the model opens a document on demand through a `read_document` tool instead of re-reading it every turn; identical files are recognized by content and never uploaded twice; everything expires with the chat's 15-day media window. Details: [docs/documents-in-chat.md](docs/documents-in-chat.md).
 - **OpenRouter, one key for everything** — with only an OpenRouter key the model searches the web and reads pages through OpenRouter's own server tools (no Brave key), takes documents, and is picked from the whole catalog in an in-app browser with search, filters, descriptions and prices; costs come from OpenRouter's exact per-request charge. Details: [docs/openrouter.md](docs/openrouter.md).
+- **Pinned-message navigation (macOS agent chats)** - formatted previews, nearest-pin selection while scrolling, repeated clicks through older pins, and jumps that reveal the target history page before scrolling.
+- **Context compression (macOS)** - configurable history threshold only in Settings > Chat (default: 7,000 tokens). Adjustable from 1,000 to 200,000 tokens. After replies, older history and previous notes are compacted while recent complete turns stay within a token budget. The newest turn and local originals are preserved. Incomplete, malformed, oversized or stale summaries are rejected. This is a compression trigger, not a hard request limit.
 - **Prompt presets** — built-in and custom system prompts, switchable per conversation; any preset can keep its own isolated chat with separate history and context.
 - **Artifacts** — a complete HTML page or Markdown document arrives as a compact card; the preview window gives a live WKWebView, a Code tab, copy, save and open-in-browser. Ask for changes and the revision arrives as a new card while earlier versions stay openable.
 - **Terminal commands** — shell commands in answers get a ▶ button: by default it opens Terminal with the command typed in and you press Enter; an opt-in mode runs it immediately.
@@ -102,6 +104,8 @@ The agent stays a black box with its own configuration — Cuate never injects p
 **Action approvals.** On macOS and Android, each pending action has its own Allow once / Deny card. Known runs restore pending requests after reconnecting; an unconfirmed decision is never resent automatically. Native sessions use the compatible Cuate gateway patch v6. Tool consent is separate from background continuation consent. See [the approval contract](docs/hermes-approvals.md).
 
 **The sidebar.** Sessions (create, rename, pin, color, delete, unread badges), the agent's skills and toolsets, and its runtime passport: which model it is on and which host actually executes its commands.
+
+**Pinned messages.** On macOS, the pinned-message bar preserves inline Markdown formatting in its compact preview; click it to jump to the message or cycle through pins.
 
 **Files both ways.** Anything you attach is couriered onto the agent's host, so a file you added on the phone is real for the agent too. Files it creates come back the same way: HTML and Markdown arrive as artifact cards with in-app preview, other files download on click, and paths in its replies are clickable. A folder button lists everything exchanged in the conversation.
 
@@ -131,7 +135,7 @@ A [Plaud](https://www.plaud.ai) recorder captures meetings and calls; its app tu
 
 ## Android
 
-A native Kotlin/Compose companion app shares the same multi-provider chat, voice, OCR, documents, image tools, artifacts and cost tracking, and connects to the same Hermes agent — see [`android/`](android/README.md).
+A native Kotlin/Compose companion app shares the same multi-provider chat, voice, OCR, documents, image tools, artifacts and cost tracking, and connects to the same Hermes agent — see [`android/`](android/README.md). It also supports the configurable 7,000-token compression trigger, guarded rolling summaries, per-call cost receipts with separate request/reply averages, shared continuation tool budgets, and formatted pins with nearest-message navigation.
 
 ## Build from source
 

@@ -5,7 +5,7 @@ import Foundation
 /// USD prices per ONE token (LiteLLM's unit — multiply by counts directly).
 /// nil fields mean "unknown"; `cost(for:)` falls back conservatively:
 /// unknown cache-read bills at the input rate, unknown cache-write at 1.25×
-/// input (the Anthropic premium — the only provider that bills writes today).
+/// input (the default cache-write premium; exact provider charges win).
 struct ModelPricing {
     var inputPerToken: Double?
     var outputPerToken: Double?
@@ -35,7 +35,7 @@ struct ModelPricing {
 /// 2. The bundled snapshot below (same LiteLLM field names, so one parser
 ///    serves both) — the floor that always works offline.
 /// 3. OpenRouter models are NOT here: the caller passes the live catalog
-///    price from `ModelInfo` (see `ChatService`), which is exact per-model.
+///    price from `ModelInfo` (see `AccountingProvider`), which is exact per-model.
 nonisolated enum PricingCatalog {
 
     // MARK: Lookup

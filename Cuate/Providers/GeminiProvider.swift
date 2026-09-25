@@ -120,10 +120,17 @@ struct GeminiProvider: LLMProvider {
             let task = Task {
                 var pendingCalls: [ToolCall] = []
                 var usage = TokenUsage()
+                var hasUsage = false
+                var terminal = false
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                        if let candidates = json["candidates"] as? [[String: Any]],
+                           let reason = candidates.first?["finishReason"] as? String {
+                            terminal = true
+                            if reason != "STOP" { options.reportOutcome?("incomplete") }
+                        }
                         // usageMetadata is cumulative and rides on stream chunks;
                         // the final one can be usage-only (no candidates/parts),
                         // so it must be read BEFORE the content guard skips it.
@@ -137,6 +144,8 @@ struct GeminiProvider: LLMProvider {
                             // reports it separately from candidatesTokenCount.
                             usage.outputTokens = (meta["candidatesTokenCount"] as? Int ?? 0) + thoughts
                             usage.reasoningTokens = thoughts
+                            hasUsage = true
+                            options.reportUsage?(usage, false)
                         }
                         guard let candidates = json["candidates"] as? [[String: Any]],
                               let content = candidates.first?["content"] as? [String: Any],
@@ -161,9 +170,11 @@ struct GeminiProvider: LLMProvider {
                     if !pendingCalls.isEmpty {
                         continuation.yield(.toolCalls(pendingCalls))
                     }
-                    if !usage.isEmpty {
+                    if hasUsage {
+                        options.reportUsage?(usage, terminal)
                         continuation.yield(.usage(usage))
                     }
+                    if !terminal { options.reportOutcome?("incomplete") }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

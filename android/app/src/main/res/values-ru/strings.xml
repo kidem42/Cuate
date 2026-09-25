@@ -240,7 +240,7 @@
     <string name="costs_session">За сессию</string>
     <string name="costs_today">Сегодня</string>
     <string name="costs_month">За месяц</string>
-    <string name="costs_avg_per_message">Ø токенов на сообщение</string>
+    <string name="costs_avg_per_message">Среднее токенов на ответ</string>
     <string name="costs_period">Период</string>
     <string name="costs_daily_chart">Расходы по дням</string>
     <string name="costs_by_providers">По провайдерам</string>
@@ -318,4 +318,11 @@
     <string name="hermes_approval_refresh">Проверить состояние запроса</string>
     <string name="hermes_approval_uncertain">Решение не подтверждено. Проверьте состояние перед повторным выбором. Автоматической повторной отправки нет.</string>
     <string name="hermes_approval_unavailable">Не удалось получить ожидающие согласования. Проверьте связь и совместимость патча Gateway Cuate.</string>
+    <string name="compression_title">Сжатие контекста</string>
+    <string name="compression_threshold">Порог (токены)</string>
+    <string name="compression_apply">Применить</string>
+    <string name="compression_hint">По умолчанию 7 000; диапазон 1 000–200 000. Проверяется после каждого ответа с учётом предыдущей сводки. Последние полные обмены сохраняются; самый свежий — всегда. Оригиналы остаются на устройстве. Сводка стоит токенов и может терять детали. Промпты, инструменты и большой последний обмен могут превышать порог.</string>
+    <string name="costs_receipt_quality">Без цены: %1$d · Неполные данные токенов: %2$d · Не сохранено за сеанс: %3$d. Среднее на ответ объединяет вызовы модели и исключает ответы с неполным учётом токенов. Старые оценки сохраняют пометку.</string>
+    <string name="costs_avg_request">На вызов модели за месяц: %1$d вход · %2$d выход (%3$d вызовов с полным учётом; старые агрегаты исключены).</string>
+    <string name="costs_purpose_totals">За выбранный период, учтённые расходы: чат %1$s · сжатие %2$s.</string>
 </resources>

@@ -13,8 +13,7 @@ import java.io.File
  * USD prices per ONE token (LiteLLM's unit — multiply by counts directly).
  * Port of the macOS `ModelPricing`. Null fields mean "unknown"; [cost] falls
  * back conservatively: unknown cache-read bills at the input rate, unknown
- * cache-write at 1.25× input (the Anthropic premium — the only provider that
- * bills writes today).
+ * cache-write at 1.25× input (the default cache-write premium; exact provider charges win).
  */
 data class ModelPricing(
     val inputPerToken: Double? = null,
@@ -44,7 +43,7 @@ data class ModelPricing(
  *    LiteLLM refresh; applies from the next launch.
  * 2. The bundled snapshot below (same LiteLLM field names, one parser).
  * 3. OpenRouter models are NOT here: callers use the live catalog price
- *    from `ModelInfo` (see ChatService), which is exact per-model.
+ *    from `ModelInfo` (see AccountingProvider), which is exact per-model.
  */
 object PricingCatalog {
 

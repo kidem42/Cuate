@@ -145,7 +145,7 @@ enum CalendarToolService {
     /// timestamp here would re-bill the whole conversation at cache-write
     /// rates every single turn. Date + timezone only; the exact clock rides
     /// in every tool RESULT (fresh per turn, cache-neutral) via `nowLine()`.
-    static func systemPromptHint() -> String {
+    static func systemPromptHint(includeDate: Bool = true) -> String {
         let now = Date()
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
@@ -153,8 +153,9 @@ enum CalendarToolService {
         let tz = TimeZone.current
         let offsetMinutes = tz.secondsFromGMT(for: now) / 60
         let offset = String(format: "UTC%+03d:%02d", offsetMinutes / 60, abs(offsetMinutes) % 60)
+        let dateContext = includeDate ? "Today is \(fmt.string(from: now)), timezone \(tz.identifier) (\(offset)). " : ""
         return """
-You have calendar and reminder tools backed by the user's own macOS Calendar. Today is \(fmt.string(from: now)), timezone \(tz.identifier) (\(offset)). Always call \(eventsToolName) before answering questions about the user's schedule — never answer from memory. Every tool result starts with the exact current time ("Now: …") — when the user says a relative time ("in an hour"), call \(eventsToolName) for today first and compute from that timestamp instead of guessing the clock. All times you send and receive are the user's local time; when creating events, send ISO 8601 without a UTC offset (e.g. 2026-07-24T15:00:00). Reminders: Apple reminder lists never sync to Google — if the user asks for a reminder and their main calendar is a Google one (see the calendar inventory), prefer \(createEventToolName) with alert_minutes_before: 0 in that calendar (it stays a short 15-minute event); use \(createReminderToolName) when they want the Apple Reminders app or no Google calendar is involved. After creating an event or reminder, confirm to the user exactly what was created and in which calendar or list.
+You have calendar and reminder tools backed by the user's own macOS Calendar. \(dateContext)Always call \(eventsToolName) before answering questions about the user's schedule — never answer from memory. Every tool result starts with the exact current time ("Now: …") — when the user says a relative time ("in an hour"), call \(eventsToolName) for today first and compute from that timestamp instead of guessing the clock. All times you send and receive are the user's local time; when creating events, send ISO 8601 without a UTC offset (e.g. 2026-07-24T15:00:00). Reminders: Apple reminder lists never sync to Google — if the user asks for a reminder and their main calendar is a Google one (see the calendar inventory), prefer \(createEventToolName) with alert_minutes_before: 0 in that calendar (it stays a short 15-minute event); use \(createReminderToolName) when they want the Apple Reminders app or no Google calendar is involved. After creating an event or reminder, confirm to the user exactly what was created and in which calendar or list.
 """
     }
 

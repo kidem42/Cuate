@@ -233,6 +233,15 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(localMaxTokens, forKey: "localMaxTokens") }
     }
 
+    // MARK: - Context compression
+
+    /// The lower default applies to existing and new installations.
+    @Published var compressionTokenThreshold: Int {
+        didSet { defaults.set(compressionTokenThreshold, forKey: "compressionTokenThreshold") }
+    }
+    // Legacy per-conversation threshold preferences are intentionally ignored:
+    // Settings > Chat is now the sole source of the compression threshold.
+
     // MARK: - Web search
 
     /// Rounds of tool calls (web search, page reads, calendar) the model may
@@ -702,6 +711,8 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
         // Default matches the previous hardcoded cap — existing setups keep
         // their behavior until the user touches the new control.
         maxToolIterations = defaults.object(forKey: "maxToolIterations") as? Int ?? 4
+        compressionTokenThreshold = ContextCompressionPolicy.normalized(
+            defaults.object(forKey: "compressionTokenThreshold") as? Int ?? ContextCompressionPolicy.defaultThreshold)
         appearanceMode = AppearanceMode(rawValue: defaults.string(forKey: "appearanceMode") ?? "") ?? .system
         theme = AppTheme(rawValue: defaults.string(forKey: "appTheme") ?? "") ?? .current
         holidayThemes = defaults.object(forKey: "holidayThemes") as? Bool ?? true
@@ -1330,6 +1341,11 @@ Do the work in THIS reply — the turn ends when you stop, and nothing runs afte
 /// Maps provider IDs to their implementations.
 enum ProviderRegistry {
     static func provider(for id: ProviderID) -> LLMProvider {
+        let base = unmeteredProvider(for: id)
+        return id.isAgent ? base : AccountingProvider(base: base)
+    }
+
+    private static func unmeteredProvider(for id: ProviderID) -> LLMProvider {
         switch id {
         case .anthropic: return AnthropicProvider()
         case .openai: return OpenAICompatibleProvider.openAI

@@ -157,7 +157,8 @@ when the field crosses devices.
 2. `ChatWindow.streamAssistantReply` — one code path for provider and agent
    turns. Owns `streamSlots` (one in-flight stream per conversation, so a
    switch mid-turn keeps streaming), the round loop for the `<continue/>`
-   marker (a hidden "Continue." user turn is appended to the REQUEST only),
+   marker (a hidden "Continue." user turn is appended to the REQUEST only;
+   ordinary providers reuse one `ChatService.TurnState` across continuations),
    `StreamingReplyModel` flushes at 30 Hz (8 Hz inside a long open fence),
    persistence checkpoints, delivery to the store, and finally
    `ChatService.compressHistoryIfNeeded`.
@@ -165,18 +166,23 @@ when the field crosses devices.
    - key from the warmed `APIKeyStore`; model from `AppSettings.selectedModel`;
    - system prompt = the active preset text + `AppSettings.mandatoryPromptRules`
      (copy formats, artifact/mermaid/markdown-document fences, the `<continue/>`
-     contract) + the rolling summary + today's date (date only, so the prefix
-     stays cacheable);
+     contract) + the rolling summary. GPT-5.6/6 Responses calls carry the date
+     and timezone in a trailing developer message, including when Calendar or
+     Plaud are enabled; other providers retain their existing dated hints;
    - tools, each behind `AppSettings.modelSupportsTools`: web (`BraveSearchService`
      when a Brave key exists, `WebFetchService` always), calendar, Plaud,
      `read_document` — specs and prompt hints under ONE condition each, so an
      unavailable tool costs zero prompt bytes (`docs/addon-tool-playbook.md`);
-   - the agent loop: up to `AppSettings.maxToolIterations` (default 4) tool
-     rounds; on exhaustion the model gets a budget notice and one final turn;
+   - the agent loop: up to `AppSettings.maxToolIterations` client tool rounds
+     per displayed answer, shared across auto-continues. Exhaustion removes
+     both client and server tool declarations; repeated unoffered calls stop
+     after one budget-notice retry. Provider-native tool caps remain per request;
      web results feed `toolDigest` → `.toolContext` (stored on the reply,
      re-attached to the request for the most recent reply only);
-   - `.usage` from the provider → `recordSpend` (estimate flagged when the
-     stream broke).
+   - prepared configuration and full working messages (including tool results)
+     survive auto-continues; attachments/history are not rebuilt each round;
+   - `AccountingProvider` records each individual API attempt, linked by the
+     answer’s operation ID; `ChatService` never re-adds an aggregate charge.
 4. `ChatService.buildMessages` turns `ChatMessage` history into `LLMMessage`s:
    images ride as pixels only on the last user message (downscaled copy,
    `LLMImage.forModel`); older images contribute their cached OCR text
@@ -185,13 +191,36 @@ when the field crosses devices.
    on the attach turn and as a one-line placeholder afterwards
    (`docs/documents-in-chat.md`); the last reply's `toolContext` is
    re-attached.
-5. **Rolling summary** (`compressHistoryIfNeeded`): when the verbatim history
-   exceeds `compressionTokenThreshold` (24,000 estimated tokens, script-aware
-   estimate: ASCII ÷ 4, other scripts × 2/5) and more than `keepRecentCount`
-   (12) + 4 messages are active, older turns are merged into running notes
-   (Facts / Decisions / User preferences / Open tasks) by the current chat
-   model and billed as `SpendKind.summary`. UI messages stay; only the API
-   context shrinks (`summaryCoversCount` is an absolute index).
+5. **Rolling summary** (`compressHistoryIfNeeded`): the trigger counts the
+   active history plus the previous summary (default 7,000 estimated tokens;
+   script-aware ASCII /4 and other scripts *2/5). Complete recent user turns
+   are retained within half the threshold; the latest user turn always stays
+   intact even if oversized. There is no fixed 12-message or >16-message gate.
+   Older turns, their cached image OCR and tool context merge with previous
+   notes via the selected provider/model, billed as `SpendKind.summary`.
+   The provider must not report incomplete/failed/cancelled completion. JSON
+   notes must contain the four string-array categories, nonempty content, fit
+   the summary budget (threshold/3, clamped 256...2048), and reduce the replaced
+   context by at least 10%. Invalid results keep the existing context intact.
+   Notes are rendered as text and replace the previous summary, never stack.
+   These checks validate structure and size, not factual completeness.
+   Original messages remain in storage; no automatic raw-history retrieval is
+   implemented. Earlier notes are explicitly treated as fallible context.
+   A per-conversation single-flight guard prevents overlapping summarizers.
+   `ChatStore.setSummary` atomically validates the original message IDs/text,
+   window offset, previous summary/boundary and conversation before applying.
+   Appended messages remain active. Reset/edit/switch/paging invalidations
+   discard the result; no late summary writes into a dormant conversation.
+   On macOS, Settings > Chat is the sole threshold control. There is no chat
+   header control; legacy per-conversation threshold overrides are ignored.
+   Conversation histories and summaries remain isolated. Values are
+   1,000-200,000. The 7,000 default
+   applies to existing/new installations without a saved preference.
+   This is an after-reply trigger, not a full-request limit: prompts, tools,
+   new attachments or an oversized latest turn can exceed it. Raising the
+   threshold does not restore previously summarized raw context. Hermes
+   compaction remains gateway-owned.
+
 
 **`ChatService.ChatEvent`** (service → window): `.text`, `.status` (the
 thinking pill), `.toolContext`, `.attachments` (tool-produced chips),
@@ -339,7 +368,15 @@ General).
 - **Chat panel** (`Views/ChatWindow.swift`, ~3.6k lines; its root body is at
   the type-checker limit — hang new listeners on inner views): header with
   the preset/role switcher and the files popover, the transcript, a pinned-
-  messages bar (agent chats), the retry button, the attachment card,
+  messages bar (agent chats; single-line `MarkdownText` previews, with inline
+  link hit-testing disabled so clicks navigate to the pin). Loaded pins are
+  ordered by message chronology, newest first; manual scrolling selects the
+  nearest pin to the first visible message. Repeated clicks visit older pins
+  and wrap. `TranscriptNavigationWindow` reveals a bounded page containing an
+  off-window pin; `TranscriptController` consumes the conversation-scoped jump
+  only after `ChatTranscriptView` applies that page. A chat switch or jump to
+  latest cancels stale navigation. The pin inventory remains loaded-history only.
+  The panel also owns the retry button, the attachment card,
   the composer (`CustomTextEditor` with a
   styled quote region, `EnhancedVoiceButton`, agent model/effort control,
   slash autocomplete of agent skills), the thinking pill, drop zone,
@@ -646,9 +683,40 @@ with mocked SSH, launchctl and networking; it does not certify a live VPS or UI.
   notif, plaud, pricing, spend, store, tcc, terminal, transcript, ui,
   watchdog, worldtime. Rule: events and metadata only, never chat text,
   prompts, transcripts or keys.
-- **Spend:** every provider emits `.usage`; `SpendStore.record` prices it
-  through `PricingCatalog` (OpenRouter live prices win); OCR, STT, search and
-  image operations write their own records; the Costs tab reads the ledger.
+- **Spend:** `ProviderRegistry` wraps ordinary providers in `AccountingProvider`;
+  Hermes remains separate. Chat, summary, dictation cleanup/translation,
+  Translator chunks and LayoutFix each produce one receipt per request/attempt.
+  Provider callbacks preserve cumulative usage before failures/cancellation;
+  `usageState` distinguishes complete, partial and missing counters. No token
+  estimate is fabricated when usage is absent. Optional operation/provenance/
+  outcome columns preserve legacy ledger rows. Chat averages group new request
+  rows by operation, with legacy rows retaining their original denominator.
+  `ProviderUsage` normalizes cached input, cache writes and reasoning subsets.
+  OpenRouter's exact charge is stored once, including its server tools; other
+  complete receipts use a catalog quote captured at request start. Unknown
+  prices remain unknown; Costs never silently reprices historical rows.
+  Saves retry twice with the same UUID; live totals refresh after save success,
+  and exhausted retries are visible in Costs. OCR, STT, Brave and image
+  operations retain their own receipt paths. Prices are estimates except where
+  the provider supplies an exact charge; this ledger is not an invoice.
+- **Provider caching/options:** Mistral receives a stable non-secret cache key;
+  OpenRouter Anthropic models receive block-level ephemeral breakpoints, not a
+  top-level cache directive that narrows routing. Native Anthropic caching is
+  retained. Background calls resolve reasoning capability for the actual model.
+  `OpenAIPromptCache` applies GPT-5.6/6 explicit-only caching to stateless
+  dictation/Translator/summary/LayoutFix requests: only reusable instructions
+  get a breakpoint, so unique payloads are not charged as cache writes. These
+  categories come from application call sites, never user prompt semantics.
+  Ordinary chat retains implicit growing-prefix caching. Earlier OpenAI models
+  use a stable routing key without changing the organization's retention policy.
+  No 24h TTL is sent to GPT-5.6/6; their documented TTL is 30 minutes, and this
+  change cannot guarantee hits after long pauses. Cache-write savings apply
+  only to payloads that would otherwise meet the cache minimum and be written.
+  User prompts and chosen models are unchanged; compression settings are described above.
+  `scripts/test-provider-accounting.py` exercises actual serializers, parsers,
+  accounting and the continuation loop with synthetic HTTP/host seams;
+  `scripts/test-spend-ledger.py` tests a legacy synthetic store migration and
+  durable aggregates. Neither builds or launches the application.
 - **Notifications:** `App/NotificationService.swift` — built for agent
   turns; permission requested when the addon is enabled, never at launch.
 - **Permissions (TCC):** Microphone, Screen Recording, Accessibility,
@@ -698,6 +766,41 @@ Cross-platform text contracts are tested on both sides (`shared/fixtures/`);
 twins to keep in sync are named in the code (`HermesSteer.swift` ↔
 `hermes/HermesSteer.kt`, pinned by `steer-frame.json`).
 
+Android cost/context parity uses `providers/AccountingProvider.kt` around every
+ordinary registry provider call. Cumulative usage callbacks survive cancellation;
+Room ledger schema 6 adds nullable operation/usage/cost/completion metadata with
+an explicit 5→6 migration. A receipt is retried with the same UUID, live counters
+advance only after durable insertion, and failed writes are visible in Costs.
+`SpendAnalytics` groups calls by operation for per-answer averages; per-request
+averages exclude legacy aggregate rows and both omit incomplete usage groups.
+Missing historical prices are never re-quoted. Hermes gateway turns do not pass
+through this wrapper.
+
+`ChatService.TurnState` freezes a displayed answer's provider/model/key/options,
+retains full tool messages across hidden continuations, and shares the client
+round budget. Once exhausted, client and server declarations are removed. Native
+server-tool caps remain per HTTP request. `PromptCache` mirrors desktop cache
+policy without assigning meaning or hardcoded roles to user prompts.
+
+Android's global compression trigger is only in application Settings → Chat:
+7,000 tokens by default, adjustable 1,000–200,000. `ContextCompressionPolicy`
+counts prior notes and active history, preserves complete recent user turns,
+validates structured notes and rejects incomplete, oversized or nonshrinking
+summaries. `ChatViewModel.runCompression` reads the full database snapshot and
+applies results in a Room transaction only if the summary boundary and original
+rows/attachments remain unchanged; appends are allowed. A single-flight guard is
+keyed by conversation ID. A result can safely persist to a background conversation
+without touching the current chat; Hermes conversations are excluded. Original
+messages remain untouched; summarization is lossy and not a full-request cap.
+
+Android pins remain available in all chats. The preview renders inline Markdown
+without interactive links. `PinNavigationPolicy` chooses the nearest pin and
+cycles backward chronologically. Loading and deferred scrolling are separate
+conversation-scoped Compose effects; manual dragging or jumping to latest cancels
+a pending pin jump. Pagination uses timestamp + rowid so equal-time messages are
+not skipped. Attachment joins are batched below SQLite's bind-parameter limit.
+Isolated validation: `scripts/test-android-costs.py` (no application build).
+
 ## 14. Extension seams — what a change touches
 
 | Adding… | Touch | Reference |
@@ -720,8 +823,9 @@ twins to keep in sync are named in the code (`HermesSteer.swift` ↔
   chat store never holds large inline blobs.
 - Every tool is offered only behind `modelSupportsTools`, and its prompt hint
   ships only together with its spec.
-- Every provider emits `.usage` before finishing, and every paid call is
-  recorded in the spend ledger.
+- Ordinary model calls pass through `AccountingProvider`; missing usage is
+  explicitly unknown. Hermes owns its accounting. Service calls record their
+  own units; a recorded price is not proof of provider-invoice reconciliation.
 - API keys and tokens live in the Keychain; diagnostics never log content.
 - A new setting migrates existing users instead of changing their behavior.
 - The transport of an external service is written against captured fixtures

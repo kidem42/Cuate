@@ -384,21 +384,26 @@ class ChatStore: ObservableObject {
         return Array(messages[start...])
     }
 
-    /// Applies a freshly generated rolling summary — but only to the
-    /// conversation it was generated FOR. Summarization is an LLM call that
-    /// takes seconds; if the user switched conversations meanwhile, applying
-    /// it to the store would stamp chat A's summary onto chat B. In that case
-    /// it is written straight to the dormant conversation's rows instead.
-    func setSummary(_ summary: String, coversCount: Int, for target: ConversationID) {
-        DispatchQueue.main.async {
-            guard self.conversation == target else {
-                ChatPersistence.updateSummary(summary, coversCount: coversCount, forKey: target.storageKey)
-                return
-            }
-            self.conversationSummary = summary
-            self.summaryCoversCount = min(coversCount, self.totalMessageCount)
-            self.scheduleSave()
-        }
+    /// Commit only against the snapshot that was summarized. Appends are safe;
+    /// resets, edits, paging, switches and another summary invalidate the result.
+    /// Synchronous on MainActor: validation and mutation cannot be interleaved.
+    @discardableResult
+    func setSummary(_ summary: String, coversCount: Int, for target: ConversationID,
+                    expectedMessages: [ChatMessage], expectedWindowStart: Int,
+                    previousSummary: String?, previousCoversCount: Int) -> Bool {
+        guard conversation == target, windowStart == expectedWindowStart,
+              conversationSummary == previousSummary, summaryCoversCount == previousCoversCount,
+              coversCount >= previousCoversCount, coversCount <= totalMessageCount,
+              messages.count >= expectedMessages.count,
+              zip(messages, expectedMessages).allSatisfy({
+                  $0.id == $1.id && $0.text == $1.text && $0.toolContext == $1.toolContext
+                      && $0.attachments.map(\.ocrText) == $1.attachments.map(\.ocrText)
+              })
+        else { return false }
+        conversationSummary = summary
+        summaryCoversCount = coversCount
+        scheduleSave()
+        return true
     }
 
     // MARK: Persistence

@@ -153,6 +153,10 @@ class AnthropicProvider : LLMProvider {
         // Tool call deltas arrive fragmented — accumulate by block index.
         val pendingCalls = sortedMapOf<Int, Triple<String, String, StringBuilder>>()
         var usage = TokenUsage()
+        var completed = false
+        var normalStop = false
+        var sawInput = false
+        var sawOutput = false
         HttpClient.sseStream(request).collect { payload ->
             val json = try { JSONObject(payload) } catch (_: Exception) { return@collect }
             when (json.optString("type")) {
@@ -160,18 +164,24 @@ class AnthropicProvider : LLMProvider {
                     // Input-side usage (incl. cache split) rides on the opening
                     // frame; output arrives via message_delta.
                     json.optJSONObject("message")?.optJSONObject("usage")?.let { u ->
+                        sawInput = u.has("input_tokens")
                         usage = usage.copy(
                             inputTokens = u.optInt("input_tokens"),
                             cacheWriteTokens = u.optInt("cache_creation_input_tokens"),
                             cacheReadTokens = u.optInt("cache_read_input_tokens"),
+                            outputTokens = u.optInt("output_tokens"),
                         )
+                        options.reportUsage?.invoke(usage, false)
                     }
                 }
+                "message_stop" -> { completed = normalStop }
                 "message_delta" -> {
+                    normalStop = json.optJSONObject("delta")?.optString("stop_reason") in listOf("end_turn", "tool_use", "stop_sequence")
                     // Cumulative output count — keep the latest value.
                     json.optJSONObject("usage")?.let { u ->
                         val output = u.optInt("output_tokens", -1)
-                        if (output >= 0) usage = usage.copy(outputTokens = output)
+                        if (output >= 0) { usage = usage.copy(outputTokens = output); sawOutput = true }
+                        options.reportUsage?.invoke(usage, sawInput && sawOutput)
                     }
                 }
                 "content_block_start" -> {
@@ -204,6 +214,8 @@ class AnthropicProvider : LLMProvider {
                 }
             }
         }
+        options.reportOutcome?.invoke(completed)
+        if (sawInput || sawOutput) options.reportUsage?.invoke(usage, sawInput && sawOutput)
         if (pendingCalls.isNotEmpty()) {
             emit(LLMStreamEvent.ToolCalls(pendingCalls.values.map { (id, name, args) ->
                 ToolCall(id = id, name = name, argumentsJSON = args.toString().ifEmpty { "{}" })

@@ -83,7 +83,7 @@ data class MessageEntity(
     @ColumnInfo(defaultValue = "NULL") val agentSteps: String? = null,
     /** Pinned by the user (the Telegram-style pin bar above the transcript). */
     @ColumnInfo(defaultValue = "0") val pinned: Boolean = false,
-    /** When it was pinned — the bar cycles in PIN order (desktop semantics). */
+    /** When it was pinned — retained for compatibility; navigation follows message chronology. */
     @ColumnInfo(defaultValue = "0") val pinnedAt: Long = 0,
 )
 
@@ -153,6 +153,10 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND timestamp < :beforeTimestamp ORDER BY timestamp DESC, rowid DESC LIMIT :limit")
     suspend fun olderMessages(conversationId: String, beforeTimestamp: Long, limit: Int): List<MessageEntity>
 
+    /** Stable cursor includes rowid: imported messages can share a timestamp. */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND (timestamp < (SELECT timestamp FROM messages WHERE id = :beforeId) OR (timestamp = (SELECT timestamp FROM messages WHERE id = :beforeId) AND rowid < (SELECT rowid FROM messages WHERE id = :beforeId))) ORDER BY timestamp DESC, rowid DESC LIMIT :limit")
+    suspend fun messagesBefore(conversationId: String, beforeId: String, limit: Int): List<MessageEntity>
+
     @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
     suspend fun messageCount(conversationId: String): Int
 
@@ -165,8 +169,8 @@ interface ChatDao {
     @Query("UPDATE messages SET pinned = :pinned, pinnedAt = :pinnedAt WHERE id = :id")
     suspend fun setPinned(id: String, pinned: Boolean, pinnedAt: Long)
 
-    /** Pinned messages of a conversation in PIN order (the bar's cycle order). */
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND pinned = 1 ORDER BY pinnedAt ASC, rowid ASC")
+    /** Pinned messages in reverse message chronology (newest first). */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND pinned = 1 ORDER BY timestamp DESC, rowid DESC")
     suspend fun pinnedMessages(conversationId: String): List<MessageEntity>
 
     /** Conversation mirroring a Hermes session, if any. */
@@ -220,7 +224,7 @@ interface ChatDao {
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, AttachmentEntity::class, SpendRecordEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -276,6 +280,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                for (column in listOf("operationID", "usageState", "costBasis", "completionState")) {
+                    db.execSQL("ALTER TABLE `spend_records` ADD COLUMN `$column` TEXT DEFAULT NULL")
+                }
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -283,7 +295,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // stay, or existing installs open an empty database.
                     context.applicationContext, AppDatabase::class.java, "aispotlight.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     // Pre-1.0 schema churn: rebuild rather than hand-written
                     // migrations — EXCEPT hops covered by explicit migrations
                     // above, which preserve user data.

@@ -242,7 +242,7 @@
     <string name="costs_session">This session</string>
     <string name="costs_today">Today</string>
     <string name="costs_month">This month</string>
-    <string name="costs_avg_per_message">Avg. tokens per message</string>
+    <string name="costs_avg_per_message">Avg. tokens per reply</string>
     <string name="costs_period">Period</string>
     <string name="costs_daily_chart">Daily spend</string>
     <string name="costs_by_providers">By provider</string>
@@ -320,4 +320,11 @@
     <string name="hermes_approval_refresh">Check request status</string>
     <string name="hermes_approval_uncertain">Decision not confirmed. Check status before choosing again. Nothing is retried automatically.</string>
     <string name="hermes_approval_unavailable">Cannot retrieve pending approvals. Check the connection and Cuate gateway patch compatibility.</string>
+    <string name="compression_title">Context compression</string>
+    <string name="compression_threshold">Threshold (tokens)</string>
+    <string name="compression_apply">Apply</string>
+    <string name="compression_hint">Default: 7,000; range: 1,000–200,000. Checked after each reply, including the previous summary. Recent complete exchanges stay intact; the newest always stays. Originals remain on this device. Summarization costs tokens and can lose details. Prompts, tools and a large recent exchange can exceed this threshold.</string>
+    <string name="costs_receipt_quality">Unknown prices: %1$d · Incomplete token data: %2$d · Unsaved records this session: %3$d. Average per reply combines its model calls and excludes replies with missing or partial usage. Legacy estimates remain marked.</string>
+    <string name="costs_avg_request">Per model request this month: %1$d input · %2$d output (%3$d complete requests; legacy aggregates excluded).</string>
+    <string name="costs_purpose_totals">Selected period, recorded costs: chat %1$s · summarization %2$s.</string>
 </resources>

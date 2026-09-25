@@ -1,6 +1,7 @@
 package com.aispotlight.android.core
 
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -322,8 +323,8 @@ data class TokenUsage(
         cacheReadTokens = cacheReadTokens + other.cacheReadTokens,
         cacheWriteTokens = cacheWriteTokens + other.cacheWriteTokens,
         reasoningTokens = reasoningTokens + other.reasoningTokens,
-        exactCostUSD = if (exactCostUSD == null && other.exactCostUSD == null) null
-            else (exactCostUSD ?: 0.0) + (other.exactCostUSD ?: 0.0),
+        exactCostUSD = if (exactCostUSD == null || other.exactCostUSD == null) null
+            else exactCostUSD + other.exactCostUSD,
         serverSearchRequests = serverSearchRequests + other.serverSearchRequests,
     )
 }
@@ -349,8 +350,8 @@ sealed class LLMStreamEvent {
     data class Citations(val citations: List<WebCitation>) : LLMStreamEvent()
     /**
      * Emitted once per model call, right before the stream finishes, when the
-     * provider reported token usage. Absent on interrupted streams — callers
-     * fall back to an estimate.
+     * provider reported token usage. Interrupted streams retain cumulative
+     * callback snapshots; missing usage remains unknown, never estimated.
      */
     data class Usage(val usage: TokenUsage) : LLMStreamEvent()
 }
@@ -379,6 +380,14 @@ data class ChatRequestOptions(
     val denyDataCollection: Boolean = false,
     /** OpenRouter: only zero-data-retention endpoints (`provider.zdr = true`), independent of the account. */
     val zdrOnly: Boolean = false,
+    val spendKind: com.aispotlight.android.data.SpendKind = com.aispotlight.android.data.SpendKind.CHAT,
+    val operationID: String? = null,
+    val cacheKey: String? = null,
+    val requestContext: String? = null,
+    /** Cumulative usage snapshots, safe to capture before a cancelled flow emits. */
+    val reportUsage: ((TokenUsage, Boolean) -> Unit)? = null,
+    val reportOutcome: ((Boolean) -> Unit)? = null,
+    val reportBudgetWarning: ((String) -> Unit)? = null,
 )
 
 // MARK: - Provider interface
@@ -565,7 +574,7 @@ object HttpClient {
                         val payload = line.removePrefix("data:").trim()
                         if (payload == "[DONE]") break
                         if (payload.isNotEmpty()) {
-                            trySend(payload)
+                            if (trySendBlocking(payload).isFailure) break
                         }
                     }
                 }

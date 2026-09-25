@@ -136,6 +136,14 @@ struct OpenAICompatibleProvider: LLMProvider {
             "messages": apiMessages,
             "stream": true
         ]
+        if providerID == .mistral, let key = options.cacheKey {
+            body["prompt_cache_key"] = key
+        }
+        if providerID == .openrouter, model.hasPrefix("anthropic/") {
+            // Block markers preserve routing to Anthropic/Bedrock/Vertex;
+            // top-level cache_control would unnecessarily restrict endpoints.
+            body["messages"] = ProviderPromptCache.anthropicMessages(apiMessages)
+        }
         // 0 = uncapped (local models): omit the parameter, the model generates
         // until it stops on its own or hits its context window.
         if options.maxTokens > 0 {
@@ -227,12 +235,21 @@ struct OpenAICompatibleProvider: LLMProvider {
                 // Tool call deltas arrive fragmented — accumulate by index.
                 var pendingCalls: [Int: (id: String, name: String, args: String)] = [:]
                 var usage = TokenUsage()
+                var hasUsage = false
+                var terminal = false
                 var servedLogged = false
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
+                        // Usage rides on the final chunk, whose `choices` is
+                        // empty — must be read BEFORE the guard below skips it.
+                        if let u = json["usage"] as? [String: Any] {
+                            usage = Self.parseChatCompletionsUsage(u)
+                            hasUsage = true
+                            options.reportUsage?(usage, false)
+                        }
                         // OpenRouter (and some gateways) can surface a mid-stream
                         // error inside a data frame instead of a non-2xx status.
                         if let error = json["error"] as? [String: Any],
@@ -240,11 +257,6 @@ struct OpenAICompatibleProvider: LLMProvider {
                             throw ProviderError.http(status: (error["code"] as? Int) ?? 200, message: message)
                         }
 
-                        // Usage rides on the final chunk, whose `choices` is
-                        // empty — must be read BEFORE the guard below skips it.
-                        if let u = json["usage"] as? [String: Any] {
-                            usage = Self.parseChatCompletionsUsage(u)
-                        }
                         // OpenRouter names the upstream that served the request
                         // — the answer to "where did my document go".
                         if !servedLogged, let served = json["provider"] as? String, !served.isEmpty {
@@ -255,6 +267,10 @@ struct OpenAICompatibleProvider: LLMProvider {
                         guard let choices = json["choices"] as? [[String: Any]],
                               let choice = choices.first else { continue }
 
+                        if let reason = choice["finish_reason"] as? String {
+                            terminal = true
+                            if reason == "length" { options.reportOutcome?("incomplete") }
+                        }
                         if let delta = choice["delta"] as? [String: Any] {
                             if let content = delta["content"] as? String, !content.isEmpty {
                                 continuation.yield(.text(content))
@@ -304,9 +320,11 @@ struct OpenAICompatibleProvider: LLMProvider {
                         }
                         continuation.yield(.toolCalls(calls))
                     }
-                    if !usage.isEmpty {
+                    if hasUsage {
+                        options.reportUsage?(usage, terminal)
                         continuation.yield(.usage(usage))
                     }
+                    if !terminal { options.reportOutcome?("incomplete") }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -323,30 +341,7 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// `prompt_tokens_details.cached_tokens`; the cached share is subtracted
     /// so `inputTokens` stays "uncached input" across all providers.
     private static func parseChatCompletionsUsage(_ u: [String: Any]) -> TokenUsage {
-        var usage = TokenUsage()
-        let prompt = u["prompt_tokens"] as? Int ?? 0
-        let completion = u["completion_tokens"] as? Int ?? 0
-        usage.outputTokens = completion
-        if let hit = u["prompt_cache_hit_tokens"] as? Int,
-           let miss = u["prompt_cache_miss_tokens"] as? Int {
-            usage.cacheReadTokens = hit
-            usage.inputTokens = miss
-        } else {
-            let cached = (u["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int ?? 0
-            usage.cacheReadTokens = cached
-            usage.inputTokens = max(0, prompt - cached)
-        }
-        if let details = u["completion_tokens_details"] as? [String: Any],
-           let reasoning = details["reasoning_tokens"] as? Int {
-            usage.reasoningTokens = reasoning
-        }
-        // OpenRouter: the exact charge and the server-tool counters.
-        if let cost = (u["cost"] as? NSNumber)?.doubleValue { usage.exactCostUSD = cost }
-        if let tools = u["server_tool_use"] as? [String: Any],
-           let searches = tools["web_search_requests"] as? Int {
-            usage.serverSearchRequests = searches
-        }
-        return usage
+        ProviderUsage.chatCompletions(u)
     }
 
     // MARK: - OpenAI Responses API
@@ -454,6 +449,8 @@ struct OpenAICompatibleProvider: LLMProvider {
             }
         }
 
+        OpenAIPromptCache.apply(to: &body, options: options)
+
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         } catch {
@@ -465,6 +462,8 @@ struct OpenAICompatibleProvider: LLMProvider {
             let task = Task {
                 var pendingCalls: [ToolCall] = []
                 var usage = TokenUsage()
+                var hasUsage = false
+                var terminal = false
                 do {
                     for try await payload in sse {
                         guard let data = payload.data(using: .utf8),
@@ -472,16 +471,20 @@ struct OpenAICompatibleProvider: LLMProvider {
                               let type = json["type"] as? String else { continue }
 
                         switch type {
-                        case "response.completed":
-                            // Whole-response usage arrives on the terminal event.
-                            if let response = json["response"] as? [String: Any],
-                               let u = response["usage"] as? [String: Any] {
-                                let input = u["input_tokens"] as? Int ?? 0
-                                let cached = (u["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int ?? 0
-                                usage.inputTokens = max(0, input - cached)
-                                usage.cacheReadTokens = cached
-                                usage.outputTokens = u["output_tokens"] as? Int ?? 0
-                                usage.reasoningTokens = (u["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int ?? 0
+                        case "response.completed", "response.failed", "response.incomplete":
+                            terminal = true
+                            if let response = json["response"] as? [String: Any] {
+                                if let u = response["usage"] as? [String: Any] {
+                                    usage = ProviderUsage.responses(u)
+                                    hasUsage = true
+                                    options.reportUsage?(usage, true)
+                                }
+                                if type != "response.completed" {
+                                    options.reportOutcome?(type == "response.failed" ? "failed" : "incomplete")
+                                    let message = (response["error"] as? [String: Any])?["message"] as? String
+                                        ?? "The model response ended before completion."
+                                    throw ProviderError.http(status: 200, message: message)
+                                }
                             }
                         case "response.output_text.delta":
                             if let delta = json["delta"] as? String, !delta.isEmpty {
@@ -498,12 +501,6 @@ struct OpenAICompatibleProvider: LLMProvider {
                                     argumentsJSON: item["arguments"] as? String ?? "{}"
                                 ))
                             }
-                        case "response.failed", "response.incomplete":
-                            if let response = json["response"] as? [String: Any],
-                               let error = response["error"] as? [String: Any],
-                               let message = error["message"] as? String {
-                                throw ProviderError.http(status: 200, message: message)
-                            }
                         case "error":
                             let message = json["message"] as? String ?? "Unknown streaming error"
                             throw ProviderError.http(status: 200, message: message)
@@ -514,9 +511,8 @@ struct OpenAICompatibleProvider: LLMProvider {
                     if !pendingCalls.isEmpty {
                         continuation.yield(.toolCalls(pendingCalls))
                     }
-                    if !usage.isEmpty {
-                        continuation.yield(.usage(usage))
-                    }
+                    if hasUsage { continuation.yield(.usage(usage)) }
+                    if !terminal { options.reportOutcome?("incomplete") }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

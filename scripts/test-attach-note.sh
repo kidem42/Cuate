@@ -15,6 +15,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+echo "== Swift contracts: model accounting and spend migration =="
+python3 scripts/test-pin-navigation.py
+python3 scripts/test-context-compression.py
+python3 scripts/test-provider-accounting.py
+python3 scripts/test-spend-ledger.py
+
 echo "== Swift contract: attach note =="
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

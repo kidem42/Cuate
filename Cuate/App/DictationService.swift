@@ -856,7 +856,7 @@ final class DictationService: NSObject, ObservableObject {
             messages: [LLMMessage(role: .user, text: DictationTextShaping.userMessage(transcript))],
             model: model,
             systemPrompt: DictationTextShaping.systemPrompt(for: pass),
-            options: ChatRequestOptions(maxTokens: 4096, reasoning: .fast, preferNoReasoning: true),
+            options: ChatRequestOptions(spendKind: .dictation, maxTokens: 4096, reasoning: .fast, preferNoReasoning: true),
             apiKey: apiKey
         )
         do {
