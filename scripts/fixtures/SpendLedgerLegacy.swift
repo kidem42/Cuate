@@ -39,4 +39,3 @@ final class SDSpendRecord {
         self.isEstimate = isEstimate
     }
 }
-
