@@ -365,6 +365,13 @@ object HermesChatService {
             ) {
                 dao.deleteMessage(message.id)
                 purged++
+            } else if (message.isUser && message.id.contains("#") &&
+                HermesServiceNotice.isNotice(message.text)
+            ) {
+                // Service notices older builds imported as OUR bubbles move
+                // to the agent's side (the desktop merge pre-pass).
+                dao.upsertMessage(message.copy(isUser = false))
+                purged++
             }
         }
         // Turns whose watermark bump never ran (a turn that died with the
@@ -451,7 +458,24 @@ object HermesChatService {
                         }
                     }
                 }
-                "user" -> {
+                "user" -> if (HermesServiceNotice.isNotice(row.content)) {
+                    // Gateway service notices (delegation results, process
+                    // reports) are user-role only formally: they import
+                    // assistant-side and render as a collapsed card. Like a
+                    // user row they close the previous step trail.
+                    pendingSteps = mutableListOf()
+                    val id = row.externalID(sessionID)
+                    if (id !in known) {
+                        dao.upsertMessage(MessageEntity(
+                            id = id, conversationId = conversation.id,
+                            text = row.content, isUser = false,
+                            timestamp = row.timestampMs ?: System.currentTimeMillis(),
+                            messageType = "text", audioPath = null,
+                            toolContext = null,
+                        ))
+                        added++
+                    }
+                } else {
                     // Compaction summaries ride the transcript as user rows
                     // and mirrored verbatim they render as OUR message
                     // (2026-08-01). Null = fully synthetic — skip WITHOUT

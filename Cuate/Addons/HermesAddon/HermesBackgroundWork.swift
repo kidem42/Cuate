@@ -13,15 +13,22 @@ nonisolated struct HermesBackgroundWork: Equatable, Identifiable {
     }
 
     /// Wire contracts: delegate_tool_dispatch.py and
-    /// process_registry_notifications.py (v2026.9.7 and 14efb46089).
+    /// process_registry_notifications.py (v2026.9.7 through v2026.9.24).
+    /// A unit is delivered by its COMPLETE / BATCH COMPLETE report, which
+    /// since 0.21.5 may sit inside the gateway's consolidated row; the early
+    /// `TASK FAILED` warning delivers nothing — its siblings still run.
     @MainActor static func detect(rows: [HermesTranscriptMessage]) -> [Self] {
         var pending: [String: Self] = [:]
         var delivered: Set<String> = []
         for row in rows {
-            if row.role == "user", row.content.hasPrefix("[ASYNC DELEGATION"),
-               let header = row.content.split(separator: "\n").first,
-               let match = header.range(of: #"deleg_[A-Za-z0-9_-]+"#, options: .regularExpression) {
-                delivered.insert(String(header[match]))
+            if row.role == "user", HermesServiceNotice.isNotice(row.content) {
+                for line in row.content.split(separator: "\n")
+                where line.hasPrefix("[ASYNC DELEGATION COMPLETE")
+                    || line.hasPrefix("[ASYNC DELEGATION BATCH COMPLETE") {
+                    if let match = line.range(of: #"deleg_[A-Za-z0-9_-]+"#, options: .regularExpression) {
+                        delivered.insert(String(line[match]))
+                    }
+                }
             }
             guard row.role == "tool", row.toolName == "delegate_task",
                   let data = row.content.data(using: .utf8),

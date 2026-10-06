@@ -571,12 +571,29 @@ same `ChatEvent` stream; the window's loop is unchanged. What differs:
   `HermesModelContext` drives the context gauge, `HermesBriefing` and
   `HermesServiceNotice` render service messages, `HermesLocalGateway` is the
   one-click local install, `GatewayProbe` gives structured connection errors;
+- gateway service notices are user-role rows that belong to the agent's side:
+  async-delegation reports (`COMPLETE`, `BATCH COMPLETE`, the early `TASK
+  FAILED` warning), background-process reports, and the gateway's consolidated
+  `[IMPORTANT: N background … completed …]` batches (Hermes 0.21.5). All three
+  clients detect them by content markers and show a collapsed card; the card
+  never drops content. The texts in `shared/fixtures/service-notices.json` are
+  rendered by Hermes' own formatters, and `HermesServiceNotice` (Swift,
+  Kotlin) is tested against them on both platforms;
+- Cuate's consented continuation turn travels as `HermesContinuationFrame.wire`
+  (`<cuate-continuation>` and an English instruction, pinned by the same
+  fixture). Clients render it as a compact marker on the user side, and the
+  unframed prompts of older builds are recognized by their exact text. It is
+  display-only: the row stays a user row for mirror sync and is never a
+  service notice, because a notice would re-offer continuation;
 - the transport is written against `Hermes-API-Fixtures.md`, never against
   prose; capability flags from `/v1/capabilities` gate UI sections.
 
 **Background delegation visibility (macOS).** `HermesBackgroundWork` matches
 persisted `delegate_task` background dispatch IDs to async delivery headers,
-including independent completion units in newer Hermes. This state survives the
+including independent completion units in newer Hermes. A unit is delivered by
+its own `COMPLETE` or `BATCH COMPLETE` header line, which can sit inside a
+consolidated notice. An early `TASK FAILED` warning delivers nothing, because
+its siblings are still running. This state survives the
 parent's final acknowledgement and is restored from transcript reads. A separate
 service row shows the unresolved child count with the shared `ThinkingEqualizer`;
 it does not turn composer sends into steering or claim a parent run is active.
@@ -737,10 +754,14 @@ with mocked SSH, launchctl and networking; it does not certify a live VPS or UI.
 
 - `scripts/test-attach-note.sh` runs every contract test: the attach note
   (Swift + Kotlin against `shared/fixtures/attach-note.json`), the Plaud
-  marker (`shared/fixtures/plaud-note.json`), markdown lists, the document
+  marker (`shared/fixtures/plaud-note.json`), gateway service notices and the
+  continuation frame (Swift + Kotlin against
+  `shared/fixtures/service-notices.json`), markdown lists, the document
   pre-flight and `read_document` queries, the Hermes Plaud plugin
   (Python, stdlib only) and the Hermes gateway patch (`HermesGatewayPatch`
-  against the `api_server.py` layouts of Hermes 0.20–0.21.0 and 0.21.1). The Swift suites compile standalone with `swiftc`
+  against the `api_server.py` layouts of Hermes 0.20–0.21.0 and 0.21.1–0.21.5).
+  The approval bridge suite reads Hermes queue and wait code from an external
+  checkout pinned to 0.21.3 or 0.21.5 (`CUATE_HERMES_TEST_SOURCE`). The Swift suites compile standalone with `swiftc`
   from pure files — a file under test must stay free of AppKit/SwiftUI/app
   types.
 - `scripts/make-dmg.sh` — the only way to build a distributable (universal
@@ -764,7 +785,10 @@ discards the clip — nothing is transcribed before the window closes, so
 the length of the recording never shortens the chance to cancel.
 Cross-platform text contracts are tested on both sides (`shared/fixtures/`);
 twins to keep in sync are named in the code (`HermesSteer.swift` ↔
-`hermes/HermesSteer.kt`, pinned by `steer-frame.json`).
+`hermes/HermesSteer.kt`, pinned by `steer-frame.json`; `HermesServiceNotice`
+and `HermesContinuationFrame` on both sides, pinned by `service-notices.json`).
+The mirror imports service notices assistant-side and moves older user-side
+copies there, as the desktop merge pre-pass does.
 
 Android cost/context parity uses `providers/AccountingProvider.kt` around every
 ordinary registry provider call. Cumulative usage callbacks survive cancellation;

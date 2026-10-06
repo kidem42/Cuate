@@ -1,0 +1,133 @@
+{
+  "_comment": "Executable contract for gateway service notices (user-role transcript rows that are the agent's side: delegation results, background-process reports, the gateway's consolidated batches) and for Cuate's continuation turn. Every `text` was rendered by the real formatters of Hermes 0.21.5 (v2026.9.24): tools/process_registry_notifications.py, and the consolidation header of gateway/run_notifications.py. Consumed by BOTH platforms' tests (Swift: scripts/ServiceNoticeContractTest.swift via scripts/test-attach-note.sh; Kotlin: android unit test HermesServiceNoticeTest). Any change to HermesServiceNotice / HermesContinuationFrame on either side must keep every case green on both.",
+  "notices": [
+    {
+      "name": "single_ok",
+      "text": "[ASYNC DELEGATION COMPLETE — deleg_one]\nA background subagent you dispatched earlier has finished. You may have moved on since dispatching it; the full task source is below so you can act on the result or re-dispatch if things have changed.\n\nDispatched: 2026-09-21 14:13:20 (4s ago)\nOriginal goal: Run uname -r and report the kernel version\nRole: leaf   Model: hermes-4\nStatus: completed   API calls: 2   Duration: 3.39s\n--- RESULT ---\n6.12.111+deb13-amd64",
+      "kind": "delegation",
+      "tasks": 1,
+      "ok": 1,
+      "fail": 0,
+      "duration": "3s",
+      "exit": null,
+      "firstGoal": "Run uname -r and report the kernel version"
+    },
+    {
+      "name": "single_fail",
+      "text": "[ASYNC DELEGATION COMPLETE — deleg_two]\nA background subagent you dispatched earlier has finished. You may have moved on since dispatching it; the full task source is below so you can act on the result or re-dispatch if things have changed.\n\nDispatched: 2026-09-21 14:13:20 (12s ago)\nOriginal goal: Fetch the release notes\nRole: leaf   Model: hermes-4\nStatus: error   API calls: 1   Duration: 12s\n--- RESULT ---\nThe subagent did not complete successfully (status=error).\nnetwork unreachable",
+      "kind": "delegation",
+      "tasks": 1,
+      "ok": 0,
+      "fail": 1,
+      "duration": "12s",
+      "exit": null,
+      "firstGoal": "Fetch the release notes"
+    },
+    {
+      "name": "batch",
+      "text": "[ASYNC DELEGATION BATCH COMPLETE — deleg_d5e4ba69]\nA background fan-out unit you dispatched earlier — 3 subagent(s) — has finished; its consolidated results are below. Any other units from the same delegate_task call report separately as they finish. You may have moved on since dispatching — act on these or re-dispatch if things have changed. If you are still waiting on siblings, end your turn after acting on this one.\n\nDispatched: 2026-09-21 14:13:20 (2m8s ago)\nRole: leaf   Model: hermes-4   Total duration: 127.26s\n\n--- ✓ TASK 1/3: Run the command `uname -r`  (status=completed, api_calls=2, 3.39s) ---\n6.12.111+deb13-amd64\nFull live transcript (complete tool/assistant trace): /root/.hermes/cache/delegation/live/deleg_d5e4ba69/task-0.log\n\n--- ✗ TASK 2/3: Count files in /etc  (status=failed, 1.2s) ---\n(no summary — status=failed: permission denied)\n\n--- ⚠ TASK 3/3: Summarize the syslog  (status=completed, api_calls=30, 127.26s, TRUNCATED: hit max_iterations — work may be incomplete) ---\n[TRUNCATED — subagent hit its iteration cap; the summary below may be incomplete. Verify before relying on it, or re-dispatch the unfinished part.]\nPartial summary",
+      "kind": "delegation",
+      "tasks": 3,
+      "ok": 1,
+      "fail": 2,
+      "duration": "2m07s",
+      "exit": null,
+      "firstLabel": "1/3",
+      "firstGoal": "Run the command `uname -r`"
+    },
+    {
+      "name": "task_failed",
+      "text": "[ASYNC DELEGATION TASK FAILED — deleg_fan, task 2/2]\nOne subagent in a background fan-out you dispatched has failed while its siblings are still running. The batch's consolidated results will still arrive when the last sibling finishes; this is an early warning so you can re-dispatch or investigate now instead of then.\nTask: Compile the report\nStatus: failed   Duration: 5.5s\nError: tool crashed",
+      "kind": "delegation",
+      "tasks": 1,
+      "ok": 0,
+      "fail": 1,
+      "duration": "6s",
+      "exit": null,
+      "firstLabel": "2/2",
+      "firstGoal": "Compile the report"
+    },
+    {
+      "name": "proc_ok",
+      "text": "[IMPORTANT: Background process proc_42 completed normally (exit code 0).\nCommand: make test\nOutput:\nall green]",
+      "kind": "process",
+      "tasks": 0,
+      "ok": 1,
+      "fail": 0,
+      "duration": null,
+      "exit": "exit 0"
+    },
+    {
+      "name": "proc_fail",
+      "text": "[IMPORTANT: Background process proc_43 exited (exit code 2).\nCommand: pytest\nOutput:\n2 failed]",
+      "kind": "process",
+      "tasks": 0,
+      "ok": 0,
+      "fail": 1,
+      "duration": null,
+      "exit": "exit 2"
+    },
+    {
+      "name": "watch",
+      "text": "[IMPORTANT: Background process proc_44 matched watch pattern \"ERROR\".\nCommand: tail -f log\nMatched output:\nERROR disk full]",
+      "kind": "process",
+      "tasks": 0,
+      "ok": 1,
+      "fail": 0,
+      "duration": null,
+      "exit": null
+    },
+    {
+      "name": "heartbeat",
+      "text": "[Background process proc_45 heartbeat #3 — still running after 10m (next in 300s; you will also be told when it exits).\nCommand: sleep 600\nOutput since last heartbeat:\nstill sleeping]",
+      "kind": "process",
+      "tasks": 0,
+      "ok": 1,
+      "fail": 0,
+      "duration": null,
+      "exit": null
+    },
+    {
+      "name": "procs",
+      "text": "[IMPORTANT: 2 background processes completed. Treat these results as one batch and give one consolidated response; preserve failures and actionable results.]\n\n[IMPORTANT: Background process proc_42 completed normally (exit code 0).\nCommand: make test\nOutput:\nall green]\n\n[IMPORTANT: Background process proc_43 exited (exit code 2).\nCommand: pytest\nOutput:\n2 failed]",
+      "kind": "process",
+      "tasks": 2,
+      "ok": 1,
+      "fail": 1,
+      "duration": null,
+      "exit": null
+    },
+    {
+      "name": "multi",
+      "text": "[IMPORTANT: 2 background subagent delegations completed for this session. Treat these results as one completion batch and send at most one consolidated user-facing response. If a result does not change the current conclusion, absorb it silently.]\n\n[ASYNC DELEGATION COMPLETE — deleg_one]\nA background subagent you dispatched earlier has finished. You may have moved on since dispatching it; the full task source is below so you can act on the result or re-dispatch if things have changed.\n\nDispatched: 2026-09-21 14:13:20 (4s ago)\nOriginal goal: Run uname -r and report the kernel version\nRole: leaf   Model: hermes-4\nStatus: completed   API calls: 2   Duration: 3.39s\n--- RESULT ---\n6.12.111+deb13-amd64\n\n[ASYNC DELEGATION COMPLETE — deleg_two]\nA background subagent you dispatched earlier has finished. You may have moved on since dispatching it; the full task source is below so you can act on the result or re-dispatch if things have changed.\n\nDispatched: 2026-09-21 14:13:20 (12s ago)\nOriginal goal: Fetch the release notes\nRole: leaf   Model: hermes-4\nStatus: error   API calls: 1   Duration: 12s\n--- RESULT ---\nThe subagent did not complete successfully (status=error).\nnetwork unreachable",
+      "kind": "delegation",
+      "tasks": 2,
+      "ok": 1,
+      "fail": 1,
+      "duration": null,
+      "exit": null,
+      "firstGoal": "Run uname -r and report the kernel version"
+    }
+  ],
+  "notNotices": [
+    "Hello there",
+    "[IMPORTANT: remember the milk]",
+    "[IMPORTANT: 3 apples]",
+    "see [ASYNC DELEGATION COMPLETE — deleg_x] above",
+    "Background process finished?"
+  ],
+  "continuation": {
+    "wire": "<cuate-continuation>\nContinue the original task using the background results already received in this session and prepare the answer. Do not repeat completed work.\n</cuate-continuation>",
+    "matches": [
+      "<cuate-continuation>\nContinue the original task using the background results already received in this session and prepare the answer. Do not repeat completed work.\n</cuate-continuation>",
+      "Continue the original task using the background results already received in this session and prepare the answer. Do not repeat completed work.",
+      "Continúa la tarea original con los resultados en segundo plano ya recibidos en esta sesión y prepara la respuesta. No repitas el trabajo completado.",
+      "  Продолжи исходную задачу с учётом фоновых результатов, уже полученных в этой сессии, и подготовь ответ. Не повторяй завершённую работу.\n"
+    ],
+    "others": [
+      "Continue",
+      "Continue the original task, please",
+      "<cuate-addendum>\nThe user is adding to the request you are working on right now: take the addition below into account in the current cycle.\n</cuate-addendum>\n\nignore"
+    ]
+  }
+}

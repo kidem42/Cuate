@@ -6,6 +6,8 @@
 #   - the Plaud marker (plaud://<id>), against shared/fixtures/plaud-note.json;
 #   - the mid-turn follow-up frame (steer), Swift + Kotlin, against
 #     shared/fixtures/steer-frame.json;
+#   - gateway service notices and the continuation turn, Swift + Kotlin,
+#     against shared/fixtures/service-notices.json;
 #   - markdown lists (numbering, nesting, continuations);
 #   - the conference link of a calendar event (which hosts, which field wins);
 #   - the Hermes Plaud plugin, including the seam with the Hermes runtime;
@@ -44,6 +46,15 @@ xcrun swiftc -o "$tmp/steer-test" \
     Cuate/Addons/HermesAddon/HermesSteer.swift \
     scripts/SteerContractTest.swift
 "$tmp/steer-test" shared/fixtures/steer-frame.json
+
+echo "== Swift contract: service notices =="
+# Delegation results and process reports the gateway writes as user rows
+# (cards on the agent's side), and Cuate's continuation turn (a marker).
+xcrun swiftc -o "$tmp/service-notice-test" \
+    Cuate/Addons/HermesAddon/HermesServiceNotice.swift \
+    Cuate/Addons/HermesAddon/HermesContinuationFrame.swift \
+    scripts/ServiceNoticeContractTest.swift
+"$tmp/service-notice-test" shared/fixtures/service-notices.json
 
 echo "== Swift contract: markdown lists =="
 # Numbering, nesting and continuation lines — the shapes a sub-list used to
@@ -97,6 +108,17 @@ xcrun swiftc -o "$tmp/gateway-patch-test" \
     scripts/HermesGatewayPatchContractTest.swift
 "$tmp/gateway-patch-test"
 python3 scripts/HermesCatalogPatchContractTest.py "$tmp/gateway-patch-test" .
+# The update block in docs/hermes-vps-setup.md embeds the whole patch script;
+# it must stay byte-identical to the canonical copy the generator maintains.
+python3 - <<'PY'
+from pathlib import Path
+doc = Path("docs/hermes-vps-setup.md").read_text()
+update = doc.split("## Updating an existing server to Hermes", 1)[1]
+embedded = update.split('say "5. Cuate gateway patch v6"\n', 1)[1].split('\ngrep -q "Cuate native approvals v6"', 1)[0]
+canonical = Path("android/app/src/main/assets/hermes_gateway_patch.sh").read_text().rstrip("\n")
+assert embedded.rstrip("\n") == canonical, "docs update block: embedded gateway patch differs from hermes_gateway_patch.sh"
+print("docs update block: gateway patch matches the canonical script")
+PY
 
 echo "== Standalone contracts: Hermes approvals =="
 python3 -B scripts/test-hermes-approvals.py
@@ -143,5 +165,6 @@ echo "== Kotlin contract =="
 export JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 (cd android && ./gradlew --console=plain -q :app:testDebugUnitTest \
     --tests 'com.aispotlight.android.hermes.AgentAttachNoteTest' \
-    --tests 'com.aispotlight.android.hermes.HermesSteerTest')
+    --tests 'com.aispotlight.android.hermes.HermesSteerTest' \
+    --tests 'com.aispotlight.android.hermes.HermesServiceNoticeTest')
 echo "kotlin: all green"

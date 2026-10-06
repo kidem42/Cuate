@@ -62,19 +62,40 @@ nonisolated struct HermesServiceNotice {
 
     // MARK: Detection
 
+    /// Every async-delegation report opens with this (COMPLETE, BATCH
+    /// COMPLETE, and the early TASK FAILED warning since Hermes 0.21.5).
+    private static let delegationMarker = "[ASYNC DELEGATION "
     private static let batchMarker = "[ASYNC DELEGATION BATCH COMPLETE"
     private static let singleMarker = "[ASYNC DELEGATION COMPLETE"
+    private static let taskFailedMarker = "[ASYNC DELEGATION TASK FAILED"
     private static let processMarkers = [
         "[IMPORTANT: Background process",
         "[Background process",
     ]
 
+    /// The gateway's consolidation header (Hermes 0.21.5): several reports
+    /// delivered as one row, `[IMPORTANT: N background subagent delegations
+    /// completed…]` or `[IMPORTANT: N background processes completed…]`,
+    /// followed by the individual reports.
+    private static func consolidatedKind(_ head: Substring) -> Kind? {
+        let prefix = "[IMPORTANT: "
+        guard head.hasPrefix(prefix) else { return nil }
+        let rest = head.dropFirst(prefix.count)
+        let digits = rest.prefix(while: \.isNumber)
+        guard !digits.isEmpty else { return nil }
+        let tail = rest.dropFirst(digits.count)
+        if tail.hasPrefix(" background subagent delegations completed") { return .delegation }
+        if tail.hasPrefix(" background processes completed") { return .process }
+        return nil
+    }
+
     /// Whether a transcript row's content is a gateway service notification.
     /// Cheap prefix check — safe to call per row per sync.
     static func isNotice(_ text: String) -> Bool {
         let head = text.drop(while: \.isWhitespace)
-        return head.hasPrefix(batchMarker) || head.hasPrefix(singleMarker)
+        return head.hasPrefix(delegationMarker)
             || processMarkers.contains(where: { head.hasPrefix($0) })
+            || consolidatedKind(head) != nil
     }
 
     // MARK: Parse (memoized — MessageRow bodies re-evaluate on hover etc.)
@@ -99,12 +120,97 @@ nonisolated struct HermesServiceNotice {
 
     static func parse(_ text: String) -> HermesServiceNotice? {
         let trimmed = String(text.drop(while: \.isWhitespace))
-        if trimmed.hasPrefix(batchMarker) { return parseBatch(trimmed) }
-        if trimmed.hasPrefix(singleMarker) { return parseSingle(trimmed) }
+        switch consolidatedKind(trimmed[...]) {
+        case .delegation?: return parseConsolidated(trimmed, kind: .delegation)
+        case .process?: return parseConsolidated(trimmed, kind: .process)
+        case nil: break
+        }
+        if trimmed.hasPrefix(delegationMarker) { return parseDelegation(trimmed) }
         if processMarkers.contains(where: { trimmed.hasPrefix($0) }) {
             return parseProcess(trimmed)
         }
         return nil
+    }
+
+    private static func parseDelegation(_ text: String) -> HermesServiceNotice {
+        if text.hasPrefix(batchMarker) { return parseBatch(text) }
+        if text.hasPrefix(taskFailedMarker) { return parseTaskFailed(text) }
+        if text.hasPrefix(singleMarker) { return parseSingle(text) }
+        // A delegation report this build does not know: whole text, no tally.
+        let body = text.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return HermesServiceNotice(kind: .delegation, metaLines: [], tasks: [],
+                                   body: body.isEmpty ? text : body, okCount: 0, failCount: 0,
+                                   durationText: nil, exitText: nil)
+    }
+
+    /// The consolidation header plus its reports: each report starts on a
+    /// line with its own marker. Every report becomes task rows of one card
+    /// (a process report is one row: headline as the goal, exit as stats).
+    private static func parseConsolidated(_ text: String, kind: Kind) -> HermesServiceNotice {
+        let starts = kind == .delegation ? [delegationMarker] : processMarkers
+        var blocks: [[String]] = []
+        for line in text.components(separatedBy: "\n").dropFirst() {
+            if starts.contains(where: { line.hasPrefix($0) }) {
+                blocks.append([line])
+            } else if !blocks.isEmpty {
+                blocks[blocks.count - 1].append(line)
+            }
+        }
+        var tasks: [TaskItem] = []
+        var bodies: [String] = []
+        var ok = 0
+        var failed = 0
+        for block in blocks {
+            let report = block.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            let notice = kind == .delegation ? parseDelegation(report) : parseProcess(report)
+            ok += notice.okCount
+            failed += notice.failCount
+            if kind == .process {
+                tasks.append(TaskItem(id: tasks.count, ok: notice.failCount == 0, label: "",
+                                      goal: notice.metaLines.first ?? "", stats: notice.exitText,
+                                      body: notice.body ?? ""))
+                continue
+            }
+            for task in notice.tasks {
+                tasks.append(TaskItem(id: tasks.count, ok: task.ok, label: task.label, goal: task.goal,
+                                      stats: task.stats, body: task.body))
+            }
+            if let body = notice.body, !body.isEmpty { bodies.append(body) }
+        }
+        return HermesServiceNotice(
+            kind: kind, metaLines: [], tasks: tasks,
+            body: bodies.isEmpty ? nil : bodies.joined(separator: "\n\n"),
+            okCount: ok, failCount: failed, durationText: nil, exitText: nil
+        )
+    }
+
+    /// Early warning from a fan-out still running (Hermes 0.21.5):
+    /// `[ASYNC DELEGATION TASK FAILED — deleg_…, task 2/3]`, then `Task:`,
+    /// `Status:`, `Error:` and transcript lines.
+    private static func parseTaskFailed(_ text: String) -> HermesServiceNotice {
+        let lines = text.components(separatedBy: "\n")
+        var label = ""
+        if let title = lines.first, let range = title.range(of: ", task ", options: .backwards) {
+            label = String(title[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "] "))
+        }
+        var goal = ""
+        var metaLines: [String] = []
+        var body: [String] = []
+        for line in lines.dropFirst(2) {
+            if line.hasPrefix("Task:") {
+                goal = String(line.dropFirst("Task:".count)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Status:") {
+                metaLines.append(line)
+            } else {
+                body.append(line)
+            }
+        }
+        let task = TaskItem(id: 0, ok: false, label: label, goal: goal, stats: metaLines.first,
+                            body: body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
+        return HermesServiceNotice(kind: .delegation, metaLines: metaLines, tasks: [task], body: nil,
+                                   okCount: 0, failCount: 1,
+                                   durationText: duration(inMetaLines: metaLines), exitText: nil)
     }
 
     /// Header lines worth surfacing in the expanded meta block. The fixed
@@ -118,10 +224,12 @@ nonisolated struct HermesServiceNotice {
     private static func parseBatch(_ text: String) -> HermesServiceNotice {
         let lines = text.components(separatedBy: "\n")
 
-        // Task headers: `--- ✓ TASK 1/3: goal  (status=…) ---`
+        // Task headers: `--- ✓ TASK 1/3: goal  (status=…) ---`; ⚠ marks a
+        // task cut off at max_iterations — its work may be incomplete.
         func taskHeader(_ line: String) -> (ok: Bool, rest: String)? {
             if line.hasPrefix("--- ✓ TASK ") { return (true, String(line.dropFirst("--- ✓ TASK ".count))) }
             if line.hasPrefix("--- ✗ TASK ") { return (false, String(line.dropFirst("--- ✗ TASK ".count))) }
+            if line.hasPrefix("--- ⚠ TASK ") { return (false, String(line.dropFirst("--- ⚠ TASK ".count))) }
             return nil
         }
 

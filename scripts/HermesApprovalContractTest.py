@@ -21,7 +21,7 @@ import unittest
 import uuid
 from typing import Optional
 from hermes.approval_fixture import make_install, SERVER
-from hermes.external_approval_source import external_source
+from hermes.external_approval_source import external_source, external_revision
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("patch", ROOT / "scripts/hermes/native_approval_patch.py")
@@ -42,7 +42,7 @@ class Contracts(unittest.TestCase):
         core = types.ModuleType("tools.approval")
         core.__dict__.update(threading=threading, Optional=Optional, _lock=threading.Lock(),
                              _gateway_queues={}, _gateway_notify_cbs={})
-        exec(external_source("approval.py"), core.__dict__)
+        exec(external_source("tools/approval.py"), core.__dict__)
         tools.approval = core
         self.core = core
         key = contextvars.ContextVar("approval_key", default="original")
@@ -56,8 +56,9 @@ class Contracts(unittest.TestCase):
         ctx.env_var_enabled = lambda name: bool(self.env.get(name))
         ctx._UNATTENDED_APPROVAL_PLATFORMS = {"api_server", "webhook", "msgraph_webhook"}
         self.env = {"HERMES_SESSION_PLATFORM": "api_server"}
-        exec(external_source("approval_context.py"), ctx.__dict__)
+        exec(external_source("tools/approval_context.py"), ctx.__dict__)
         core._is_gateway_approval_context = ctx._is_gateway_approval_context
+        core._is_cron_approval_context = ctx._is_cron_approval_context
         core._resolve_cli_approval_callback = lambda callback: callback
         core._is_interactive_cli = lambda: False
         core._is_single_query_approval_context = lambda: False
@@ -67,13 +68,23 @@ class Contracts(unittest.TestCase):
         ctx._get_approval_timeout = lambda: 0.8
         self.wait = dict(threading=threading, time=time, uuid=uuid, _ctx=ctx,
                          logger=logging.getLogger("test"), is_interrupted=lambda: False,
+                         get_interrupt_reason=lambda: None,
                          activity_heartbeat=lambda _: lambda: None,
                          human_wait_window=lambda _: contextlib.nullcontext())
-        exec("from __future__ import annotations\n" + external_source("approval_gateway_wait.py"), self.wait)
+        exec("from __future__ import annotations\n" + external_source("tools/approval_gateway_wait.py"), self.wait)
+        # 0.21.5+: the wait consults the terminal approval batch; with no batch slot
+        # bound (every API run here) its real hooks are no-ops.
+        agent = types.ModuleType("agent")
+        batch = types.ModuleType("agent.terminal_approval_batch")
+        batch.__dict__.update(_slot=contextvars.ContextVar("terminal_approval_slot", default=None))
+        batch_source = external_source("agent/terminal_approval_batch.py")
+        if batch_source:
+            exec(batch_source, batch.__dict__)
+        agent.terminal_approval_batch = batch
         gateway_run = types.ModuleType("gateway.run")
         gateway_run._redact_approval_command = lambda text: text.replace("SECRET", "[redacted]")
         sys.modules.update({"tools": tools, "tools.approval": core, "tools.approval_context": ctx,
-                            "gateway.run": gateway_run,
+                            "gateway.run": gateway_run, "agent": agent, "agent.terminal_approval_batch": batch,
                             "aiohttp": types.SimpleNamespace(web=types.SimpleNamespace(json_response=Response))})
 
         class Adapter:
@@ -118,7 +129,8 @@ class Contracts(unittest.TestCase):
         for thread in self.threads:
             thread.join(2)
             self.assertFalse(thread.is_alive())
-        for name in ("tools", "tools.approval", "tools.approval_context", "gateway.run", "aiohttp"):
+        for name in ("tools", "tools.approval", "tools.approval_context", "gateway.run", "aiohttp",
+                     "agent", "agent.terminal_approval_batch"):
             if name in self.modules:
                 sys.modules[name] = self.modules[name]
             else:
@@ -188,6 +200,9 @@ class Contracts(unittest.TestCase):
             for result, thread in results:
                 thread.join(1)
                 self.assertNotEqual(result[0]["choice"], "once")
+                if "_cancel_cause" in self.wait:
+                    # 0.21.5+: a withdrawn prompt is reported as cancelled, never as a user deny.
+                    self.assertTrue(result[0].get("cancelled"))
             self.assertEqual(self.status()["status"], "stopping")
             self.assertEqual(self.status()["approvals"], [])
 
@@ -301,4 +316,5 @@ class Contracts(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    print("Hermes subjects:", external_revision())
     unittest.main()

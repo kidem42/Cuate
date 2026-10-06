@@ -60,8 +60,8 @@ Hermes notifier/context, forwards `approval.changed` through the existing native
 SSE queue, and uses the existing status, approval and Stop endpoints. The clients
 consume changes through their stream and existing recovery/polling paths.
 
-Hermes revision `1ab32b212b` also classifies `api_server` as unattended in its
-approval presence gate. The bridge enables human presence only for an API run
+Hermes 0.21.3 (`1ab32b212b`) and 0.21.5 (`v2026.9.24`) also classify `api_server`
+as unattended in their approval presence gate. The bridge enables human presence only for an API run
 with its own live `cuate-native:` notifier, never cron or an unrelated API run.
 It does not change `HERMES_SESSION_PLATFORM`, global approval settings, configured
 allowlists, hard-deny rules, or the policy for background continuation. Context
@@ -83,9 +83,13 @@ or cached compiler/dependency jars and does not run Gradle or download packages.
 Tests include exact allow/deny bodies, multiple/stale requests, connection loss,
 reopening, unconfirmed decisions, Stop, timeout/exception cleanup, native presence
 isolation, authentication and generated installer parity. Python exercises
-queue/wait functions read in memory from an external Hermes `1ab32b212b` checkout;
-no Hermes sources or license files are vendored in the test fixtures. Set
+queue/wait functions read in memory from an external Hermes checkout at 0.21.3
+(`1ab32b212b`) or 0.21.5 (`v2026.9.24`); the loader names the revision it
+matched. No Hermes sources or license files are vendored in the test fixtures. Set
 `CUATE_HERMES_TEST_SOURCE` to that checkout (default: `~/.hermes/hermes-agent`).
+On 0.21.5 the wait also consults the terminal approval batch, whose hooks are
+read from `agent/terminal_approval_batch.py` and are no-ops for API runs. A
+waiter released by Stop now reports `cancelled`, a withdrawal, never a user deny.
 The loader requires it to be outside Cuate and verifies source SHA-256 hashes;
 missing or changed sources fail the test with an explanation, without downloads
 or changes to the checkout. Swift compiles the actual

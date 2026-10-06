@@ -406,3 +406,29 @@ from the actual queue and `cuate_approval_version: 1`. `approval.changed` on the
 existing native SSE stream triggers a fresh snapshot. Multiple unresolved
 requests each carry their own `request_id`; a single saved last event is not a
 complete recovery snapshot. See `docs/hermes-approvals.md`.
+
+## Hermes 0.21.5 (`v2026.9.24`, `f97608f178`) — source receipt, 2026-10-06
+
+Checked against the tagged source; not a live VPS probe.
+
+- HTTP routes are identical to 0.21.3. Gateway patch v6 (Python installer and
+  `HermesGatewayPatch`) applies cleanly and idempotently, and the approval bridge
+  suite passes against the 0.21.5 queue and wait code.
+- New session SSE events: `assistant.commentary` (`{message_id, text,
+  already_streamed}`, mid-turn text beside tool calls, on by default via
+  `display.interim_assistant_messages`) and `run.queued` / HTTP 202
+  `hermes.session.chat.queued` (only when a Desktop holds the canonical Bot Chat
+  live). `/v1/runs` adds `message.interim`. All clients ignore these events, as
+  0.21.3 never sent them.
+- Service rows (`tools/process_registry_notifications.py`,
+  `gateway/run_notifications.py`): `[ASYNC DELEGATION TASK FAILED — deleg_…, task
+  i/n]` is an early warning while siblings run. A `⚠` task header marks a task cut
+  off at max_iterations. The gateway may consolidate reports into one row headed
+  `[IMPORTANT: N background subagent delegations completed …]` or
+  `[IMPORTANT: N background processes completed …]`. Samples rendered by these
+  formatters are in `shared/fixtures/service-notices.json`.
+- Approval waits released without an answer (Stop, session end) return
+  `cancelled` with a cause instead of a user deny; `pending_gateway_approval_count`
+  and `withdraw_gateway_approval` are new and unused by Cuate.
+- `hermes update` follows `main`, not the release tag; a pinned install moves
+  with the installer's `--commit` (see `docs/hermes-vps-setup.md`).

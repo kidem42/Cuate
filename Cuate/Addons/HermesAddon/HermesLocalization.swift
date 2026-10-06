@@ -121,10 +121,16 @@ enum HermesAddonStrings {
             .spanish: "No se ha enviado la continuación. La sesión puede estar ocupada o no disponible; puedes intentarlo de nuevo.",
             .russian: "Продолжение не отправлено. Сессия может быть занята или недоступна; можно повторить попытку."
         ],
-        "hermes.continuation.prompt": [
-            .english: "Continue the original task using the background results already received in this session and prepare the answer. Do not repeat completed work.",
-            .spanish: "Continúa la tarea original con los resultados en segundo plano ya recibidos en esta sesión y prepara la respuesta. No repitas el trabajo completado.",
-            .russian: "Продолжи исходную задачу с учётом фоновых результатов, уже полученных в этой сессии, и подготовь ответ. Не повторяй завершённую работу."
+        // The continuation turn itself (HermesContinuationFrame) renders as this marker.
+        "hermes.continuation.sent": [
+            .english: "Continued with background results",
+            .spanish: "Continuado con los resultados en segundo plano",
+            .russian: "Продолжено с учётом фоновых результатов"
+        ],
+        "hermes.continuation.sentHelp": [
+            .english: "Cuate asked the agent to finish the task using the background results it received.",
+            .spanish: "Cuate pidió al agente terminar la tarea con los resultados en segundo plano recibidos.",
+            .russian: "Cuate попросил агента завершить задачу с учётом полученных фоновых результатов."
         ],
         // MARK: Compact connection guide
         "hermes.guide.prepare.configure": [

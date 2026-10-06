@@ -438,7 +438,19 @@ fun ChatScreen(
                 item(key = "welcome") { WelcomeCard() }
             }
             items(messages, key = { it.id }) { message ->
-                MessageBubble(
+                // Gateway service reports (mirror rows, agent side) render as a
+                // collapsed card; the desktop's consented continuation turn as
+                // a compact marker on the user side.
+                val notice = if (isHermes && !message.isUser && message.id.contains("#")) {
+                    remember(message.text) { com.aispotlight.android.hermes.HermesServiceNotice.parse(message.text) }
+                } else null
+                if (notice != null) {
+                    HermesServiceNoticeCard(message, notice, Modifier.animateItem())
+                } else if (isHermes && message.isUser &&
+                    com.aispotlight.android.hermes.HermesContinuationFrame.isContinuation(message.text)
+                ) {
+                    HermesContinuationMarker(message, Modifier.animateItem())
+                } else MessageBubble(
                     message,
                     // The reply still streaming in is always the last message;
                     // artifact cards use this to tell "fence still coming"
@@ -2059,6 +2071,149 @@ private fun ThemedSendButton(palette: ChatPalette, onClick: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+/** Timestamp under a service card or marker, in the theme's signature style. */
+@Composable
+private fun ServiceTimestamp(timestamp: Long) {
+    val palette = LocalChatPalette.current
+    Text(
+        formatTimestamp(timestamp, palette.timestampStyle),
+        style = MaterialTheme.typography.labelSmall.let {
+            if (palette.timestampMono || palette.monospace) {
+                it.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            } else it
+        },
+        color = if (!palette.isDynamic) palette.timestampColor else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 3.dp, start = 2.dp, end = 2.dp),
+    )
+}
+
+/**
+ * Gateway service notice (delegation results, process reports) on the
+ * agent's side: one summary line closed (kind, ✓/✗ tally, duration or exit
+ * code), the structured report on demand, per-task disclosure for a fan-out.
+ * Desktop twin: `HermesServiceNoticeView`.
+ */
+@Composable
+private fun HermesServiceNoticeCard(
+    message: ChatMessage,
+    notice: com.aispotlight.android.hermes.HermesServiceNotice,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    var expandedTasks by remember(message.id) { mutableStateOf(setOf<Int>()) }
+    val chrome = MaterialTheme.colorScheme.onSurfaceVariant
+    val failure = MaterialTheme.colorScheme.error
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    val maxWidth = (LocalChatContentWidth.current * 0.82f).coerceAtMost(500.dp)
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+        Column(
+            Modifier
+                .widthIn(max = maxWidth)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Row(Modifier.clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null, tint = chrome, modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    stringResource(
+                        if (notice.kind == com.aispotlight.android.hermes.HermesServiceNotice.Kind.DELEGATION) {
+                            R.string.hermes_notice_delegation
+                        } else R.string.hermes_notice_process
+                    ),
+                    style = MaterialTheme.typography.labelMedium, color = chrome,
+                )
+                if (notice.okCount > 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Text("✓ ${notice.okCount}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary)
+                }
+                if (notice.failCount > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("✗ ${notice.failCount}", style = MaterialTheme.typography.labelSmall, color = failure)
+                }
+                notice.durationText?.let {
+                    Spacer(Modifier.width(6.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = mono, color = chrome)
+                }
+                notice.exitText?.let {
+                    Spacer(Modifier.width(6.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = mono,
+                        color = if (it == "exit 0") chrome else failure)
+                }
+            }
+            if (expanded) {
+                Column(
+                    Modifier.padding(start = 14.dp, top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    for (line in notice.metaLines) {
+                        Text(line, fontFamily = mono, fontSize = 11.sp, color = chrome)
+                    }
+                    for (task in notice.tasks) {
+                        val open = task.id in expandedTasks
+                        Column(
+                            Modifier.fillMaxWidth().clickable {
+                                expandedTasks = if (open) expandedTasks - task.id else expandedTasks + task.id
+                            },
+                        ) {
+                            Row(verticalAlignment = Alignment.Top) {
+                                Text(if (task.ok) "✓" else "✗", style = MaterialTheme.typography.labelSmall,
+                                    color = if (task.ok) MaterialTheme.colorScheme.primary else failure)
+                                Spacer(Modifier.width(6.dp))
+                                if (task.label.isNotEmpty()) {
+                                    Text(stringResource(R.string.hermes_notice_task, task.label),
+                                        style = MaterialTheme.typography.labelSmall, fontFamily = mono)
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(task.goal, style = MaterialTheme.typography.bodySmall, color = chrome,
+                                    maxLines = if (open) Int.MAX_VALUE else 2,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            }
+                            if (open) {
+                                Column(Modifier.padding(start = 16.dp, top = 2.dp)) {
+                                    task.stats?.let {
+                                        Text(it, fontFamily = mono, fontSize = 11.sp, color = chrome)
+                                    }
+                                    if (task.body.isNotEmpty()) {
+                                        MarkdownText(task.body, baseStyle = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    notice.body?.takeIf { it.isNotEmpty() }?.let {
+                        MarkdownText(it, baseStyle = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+        ServiceTimestamp(message.timestamp)
+    }
+}
+
+/** The desktop's consented continuation turn, as a compact marker on the user side. */
+@Composable
+private fun HermesContinuationMarker(message: ChatMessage, modifier: Modifier = Modifier) {
+    val chrome = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        Text(
+            "↪ " + stringResource(R.string.hermes_continuation_sent),
+            style = MaterialTheme.typography.labelMedium,
+            color = chrome,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+        ServiceTimestamp(message.timestamp)
     }
 }
 

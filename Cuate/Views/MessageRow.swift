@@ -55,6 +55,11 @@ struct MessageRow: View {
                 Spacer()
                 systemMessageBubble
                 Spacer()
+            } else if message.isUser, HermesContinuationFrame.isContinuation(message.text) {
+                // Cuate's own consented continuation turn — a marker on the
+                // user side, not prose the user typed.
+                Spacer()
+                continuationMarker
             } else if message.isUser {
                 Spacer()
                 userMessageBubble
@@ -89,6 +94,27 @@ struct MessageRow: View {
         }
     }
     
+    /// Compact service chrome for a continuation turn, with its timestamp.
+    private var continuationMarker: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.forward.circle")
+                    .font(.system(size: 10))
+                    .foregroundColor(palette.ink)
+                Text(HL("hermes.continuation.sent"))
+                    .font(.system(size: 11, weight: .medium, design: palette.fontDesign))
+                    .foregroundColor(palette.secondaryText)
+            }
+            .modifier(HermesServiceCardSurface())
+            .help(HL("hermes.continuation.sentHelp"))
+            Text(formatTime(message.timestamp))
+                .font(palette.timestampMono ? .system(.caption2, design: .monospaced) : .caption2)
+                .tracking(palette.timestamp == .uppercaseMeridiem ? 1.5 : 0)
+                .foregroundColor(palette.isGlass ? .secondary : palette.timestampColor)
+        }
+        .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
+    }
+
     private var userMessageBubble: some View {
         // Agent file note ("Attached files…\n- path") renders as PILLS, not
         // raw paths — the text block stays in the stored message for the

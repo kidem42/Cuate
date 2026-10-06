@@ -207,6 +207,10 @@
     <string name="hermes_files_empty">Файлов пока нет.</string>
     <string name="hermes_files_sent">Отправленные вами</string>
     <string name="hermes_steps">Шагов: %1$d</string>
+    <string name="hermes_notice_delegation">Результаты субагентов</string>
+    <string name="hermes_notice_process">Фоновый процесс</string>
+    <string name="hermes_notice_task">Задача %1$s</string>
+    <string name="hermes_continuation_sent">Продолжено с учётом фоновых результатов</string>
     <string name="hermes_section">Hermes-агент</string>
     <string name="hermes_not_configured">не подключён — укажите адрес гейтвея</string>
     <string name="hermes_endpoint">Адрес гейтвея</string>

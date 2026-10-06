@@ -130,6 +130,11 @@ struct Contracts {
         let lastDelivery = row(24, "user", "[ASYNC DELEGATION COMPLETE — deleg_b]\nResult")
         check(HermesBackgroundWork.detect(rows: [grouped, firstDelivery]).map(\.id) == ["deleg_b"], "partial completion keeps remaining unit visible")
         check(HermesBackgroundWork.detect(rows: [grouped, firstDelivery, lastDelivery]).isEmpty, "all unit deliveries finish background work without root delivery")
+        let earlyFailure = row(25, "user", "[ASYNC DELEGATION TASK FAILED — deleg_a, task 2/2]\nOne subagent in a background fan-out you dispatched has failed while its siblings are still running.\nTask: x\nStatus: failed   Duration: 1s")
+        check(HermesBackgroundWork.detect(rows: [grouped, earlyFailure]).map(\.id) == ["deleg_a", "deleg_b"], "early task failure does not finish its unit")
+        let consolidated = row(26, "user", "[IMPORTANT: 2 background subagent delegations completed for this session. Treat these results as one completion batch and send at most one consolidated user-facing response. If a result does not change the current conclusion, absorb it silently.]\n\n" + firstDelivery.content + "\n\n" + lastDelivery.content)
+        check(HermesBackgroundWork.detect(rows: [grouped, consolidated]).isEmpty, "consolidated delivery finishes every unit it carries")
+        check(HermesContinuationRequest.detect(rows: [grouped, consolidated], endpoint: "one", sessionID: "a") != nil, "consolidated delivery requests continuation consent")
         print("\(count) Hermes transcript contracts passed")
     }
 }

@@ -209,6 +209,10 @@
     <string name="hermes_files_empty">No files yet.</string>
     <string name="hermes_files_sent">Sent by you</string>
     <string name="hermes_steps">%1$d steps</string>
+    <string name="hermes_notice_delegation">Subagent results</string>
+    <string name="hermes_notice_process">Background process</string>
+    <string name="hermes_notice_task">Task %1$s</string>
+    <string name="hermes_continuation_sent">Continued with background results</string>
     <string name="hermes_section">Hermes Agent</string>
     <string name="hermes_not_configured">not connected — set the gateway address</string>
     <string name="hermes_endpoint">Gateway address</string>

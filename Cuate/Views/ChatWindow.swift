@@ -2431,7 +2431,7 @@ struct ChatWindow: View {
             // Record before opening the socket. A lost response is never
             // permission to issue another paid turn on the next poll/relaunch.
             hermesAddon.dismissContinuation(request)
-            post(ChatMessage(text: HL("hermes.continuation.prompt"), isUser: true), in: origin)
+            post(ChatMessage(text: HermesContinuationFrame.wire, isUser: true), in: origin)
         }
     }
 

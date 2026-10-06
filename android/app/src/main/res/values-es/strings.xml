@@ -207,6 +207,10 @@
     <string name="hermes_files_empty">Aún no hay archivos.</string>
     <string name="hermes_files_sent">Enviados por ti</string>
     <string name="hermes_steps">%1$d pasos</string>
+    <string name="hermes_notice_delegation">Resultados de subagentes</string>
+    <string name="hermes_notice_process">Proceso en segundo plano</string>
+    <string name="hermes_notice_task">Tarea %1$s</string>
+    <string name="hermes_continuation_sent">Continuado con los resultados en segundo plano</string>
     <string name="hermes_section">Agente Hermes</string>
     <string name="hermes_not_configured">sin conectar — indica la dirección del gateway</string>
     <string name="hermes_endpoint">Dirección del gateway</string>
