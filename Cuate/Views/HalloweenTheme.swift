@@ -2,8 +2,8 @@ import SwiftUI
 
 // Halloween ("Spooky season") ornaments, ported verbatim from the design
 // tool's inline SVG (viewBox coords + hex are 1:1 with `Cuate
-// Themes.html`, §2a/§3a). Rendered natively (Shapes/Canvas) and animated with
-// native SwiftUI loops — no WebView at runtime. Dark/light chosen by the
+// Themes.html`, §2a/§3a). Rendered natively (Shapes/Canvas) and animated on
+// `MotionTimeline` loops — no WebView at runtime. Dark/light chosen by the
 // environment color scheme.
 
 private func hrgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> Color {
@@ -55,9 +55,9 @@ struct SpiderWebShape: Shape {
 
 /// Dangling spider: thread, body + head, six curved legs, two amber eyes.
 /// Design SVG is 16×34; the thread runs off the top edge.
-private struct HalloweenSpider: View {
+/// The spider itself — static, so the loop above only moves it.
+private struct SpiderGlyph: View {
     let dark: Bool
-    @State private var dropped = false
 
     private var bodyColor: Color { dark ? hhex(0x3b2154) : hhex(0x4A2B6B) }
     private var threadColor: Color { dark ? hrgba(255, 200, 140, 0.5) : hrgba(130, 65, 15, 0.5) }
@@ -93,12 +93,6 @@ private struct HalloweenSpider: View {
             ctx.fill(circle(9.2, 21.2, 0.7), with: .color(eyeColor))
         }
         .frame(width: 16, height: 34)
-        .offset(y: dropped ? 9 : 0)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 2.25).repeatForever(autoreverses: true)) {
-                dropped = true
-            }
-        }
     }
 }
 
@@ -125,15 +119,10 @@ struct BatShape: Shape {
     }
 }
 
-private struct FloatingBat: View {
+private struct BatGlyph: View {
     let dark: Bool
     let width: CGFloat
-    let duration: Double
-    let opacity: Double
-    var sways: Bool = false
-    var stroked: Bool = false
-    @State private var up = false
-    @State private var swayed = false
+    let stroked: Bool
 
     private var fill: Color { dark ? hhex(0x3b2154) : hhex(0x4A2B6B) }
 
@@ -145,24 +134,14 @@ private struct FloatingBat: View {
             }
         }
         .frame(width: width, height: width / 2)
-        .rotationEffect(.degrees(sways ? (swayed ? 2 : -2) : 0))
-        .opacity(opacity)
-        .offset(y: up ? -6 : 0)
-        .onAppear {
-            withAnimation(.easeInOut(duration: duration / 2).repeatForever(autoreverses: true)) { up = true }
-            if sways {
-                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { swayed = true }
-            }
-        }
     }
 }
 
 // MARK: - Ghost (floaty loop)
 
 /// Ghost silhouette in the design's 20×24 space: dome top, wavy hem, two eyes.
-private struct HalloweenGhost: View {
+private struct GhostGlyph: View {
     let dark: Bool
-    @State private var up = false
 
     var body: some View {
         Canvas { ctx, size in
@@ -193,10 +172,6 @@ private struct HalloweenGhost: View {
             }
         }
         .frame(width: 22, height: 26)
-        .offset(y: up ? -6 : 0)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 3.25).repeatForever(autoreverses: true)) { up = true }
-        }
     }
 }
 
@@ -275,47 +250,61 @@ struct JackOLantern: View {
 
 // MARK: - Full decoration overlay
 
-/// Spiderwebs in the top corners, dangling spider, two bats, a ghost.
-/// Non-interactive — placed over the glass, under the chat content's
-/// hit-testing. Positions are verbatim from the design spec (§2a).
+/// Spiderwebs in the top corners, dangling spider, two bats, a ghost —
+/// one ornament scene. Positions are the design spec's (§2a), measured from
+/// the panel's top corners exactly as the original stack placed them; the
+/// loops are the original ease-in-out ones (spider 2.25 s dangle, bats
+/// duration/2 floats with a 1.1 s sway, ghost 3.25 s float).
 struct HalloweenDecorations: View {
     @Environment(\.colorScheme) private var colorScheme
     private var dark: Bool { colorScheme == .dark }
 
-    private var webColor: Color { dark ? hrgba(255, 200, 140, 0.55) : hrgba(130, 65, 15, 0.5) }
-
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            // Big web, top-left
-            SpiderWebShape(rings: 3)
-                .stroke(webColor, lineWidth: 1)
-                .frame(width: 90, height: 90)
-                .opacity(dark ? 0.5 : 0.55)
+        OrnamentLayer(scene: Self.scene(dark: dark), spriteKey: "halloween.\(dark)")
+    }
 
-            // Small mirrored web, top-right
-            SpiderWebShape(rings: 2)
-                .stroke(webColor, lineWidth: 1.2)
-                .frame(width: 64, height: 64)
-                .scaleEffect(x: -1, y: 1)
-                .opacity(dark ? 0.4 : 0.45)
-                .frame(maxWidth: .infinity, alignment: .topTrailing)
-
-            // Spider on a thread (near the small web)
-            HalloweenSpider(dark: dark)
-                .frame(maxWidth: .infinity, alignment: .topTrailing)
-                .padding(.trailing, 34).padding(.top, 38)
-
-            // Bats
-            FloatingBat(dark: dark, width: 30, duration: 5, opacity: 1, sways: true, stroked: true)
-                .padding(.leading, 120).padding(.top, 52)
-            FloatingBat(dark: dark, width: 20, duration: 7, opacity: dark ? 0.75 : 0.7)
-                .padding(.leading, 210).padding(.top, 96)
-
-            // Ghost
-            HalloweenGhost(dark: dark)
-                .padding(.leading, 32).padding(.top, 150)
+    static func scene(dark: Bool) -> OrnamentScene {
+        let web = dark ? hrgba(255, 200, 140, 0.55) : hrgba(130, 65, 15, 0.5)
+        func float(_ half: Double) -> (Double) -> MotionPose {
+            { t in MotionPose(offset: CGSize(width: 0, height: -6 * MotionCurve.pingPong(t, half: half))) }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .allowsHitTesting(false)
+        return OrnamentScene(fps: 60, ornaments: [
+            // Big web, top-left.
+            .symbol(at: .topLeading(0, 0), anchor: .topLeading) {
+                SpiderWebShape(rings: 3).stroke(web, lineWidth: 1)
+                    .frame(width: 90, height: 90)
+                    .opacity(dark ? 0.5 : 0.55)
+            },
+            // Small mirrored web, top-right.
+            .symbol(at: .topTrailing(0, 0), anchor: .topTrailing) {
+                SpiderWebShape(rings: 2).stroke(web, lineWidth: 1.2)
+                    .frame(width: 64, height: 64)
+                    .scaleEffect(x: -1, y: 1)
+                    .opacity(dark ? 0.4 : 0.45)
+            },
+            // Spider on a thread near the small web: 16×34, right edge 34 pt
+            // in, top 38 pt down; dangles 9 pt.
+            .symbol(at: .topTrailing(34 + 8, 38 + 17), pose: { t in
+                MotionPose(offset: CGSize(width: 0, height: 9 * MotionCurve.pingPong(t, half: 2.25)))
+            }) {
+                SpiderGlyph(dark: dark)
+            },
+            // Big bat (30×15 at 120, 52): float + sway.
+            .symbol(at: .topLeading(120 + 15, 52 + 7.5), pose: { t in
+                MotionPose(offset: CGSize(width: 0, height: -6 * MotionCurve.pingPong(t, half: 2.5)),
+                           rotation: .degrees(MotionCurve.lerp(-2, 2, MotionCurve.pingPong(t, half: 1.1))))
+            }) {
+                BatGlyph(dark: dark, width: 30, stroked: true)
+            },
+            // Small bat (20×10 at 210, 96).
+            .symbol(at: .topLeading(210 + 10, 96 + 5), pose: float(3.5)) {
+                BatGlyph(dark: dark, width: 20, stroked: false)
+                    .opacity(dark ? 0.75 : 0.7)
+            },
+            // Ghost (22×26 at 32, 150).
+            .symbol(at: .topLeading(32 + 11, 150 + 13), pose: float(3.25)) {
+                GhostGlyph(dark: dark)
+            },
+        ])
     }
 }

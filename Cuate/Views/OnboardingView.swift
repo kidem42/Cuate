@@ -65,7 +65,7 @@ struct OnboardingView: View {
         let page = pages[index]
 
         VStack(spacing: 0) {
-            TimelineView(.animation(paused: frozen)) { timeline in
+            MotionTimeline(paused: frozen) { timeline in
                 let elapsed = timeline.date.timeIntervalSince(runStart)
                 // One pass, then freeze on the result frame.
                 let phase = frozen
@@ -194,7 +194,7 @@ struct OnboardingView: View {
 
     /// Step rail: one bar per scene, the current one filling as it plays.
     private func stepRail(pages: [Page], index: Int) -> some View {
-        TimelineView(.animation(paused: frozen)) { timeline in
+        MotionTimeline(paused: frozen) { timeline in
             let elapsed = timeline.date.timeIntervalSince(runStart)
             let progress = frozen ? 1 : min(elapsed / pages[index].scene.cycle, 1)
             HStack(spacing: 6) {

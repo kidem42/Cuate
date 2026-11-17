@@ -78,6 +78,10 @@ struct WorldTimeView: View {
     /// calendar-change refreshes. Every summon rebuilds state from scratch,
     /// so nothing is lost by standing still while hidden.
     @State private var isOnScreen = false
+    /// `slotCreationAvailable`, refreshed with the busy lane. The live
+    /// check walks and sorts EventKit calendars; read per hour cell it ran
+    /// on every hover and theme switch (~1.5 s per switch, 2026-11-17).
+    @State private var slotsAvailable = false
 
     /// Width of the row-header column; keeps hour columns aligned across rows.
     private static let headerWidth: CGFloat = 250
@@ -476,6 +480,8 @@ struct WorldTimeView: View {
     /// is missing, or the day is free. All-day events are skipped — they'd
     /// paint the whole lane and say nothing about meeting slots.
     private func refreshBusy() {
+        let slots = slotCreationAvailable
+        if slotsAvailable != slots { slotsAvailable = slots }
         guard CalendarSettings.shared.enabled, CalendarAddon.shared.hasEventAccess else {
             if !busyBlocks.isEmpty { busyBlocks = [] }
             if selectedBusyID != nil { selectedBusyID = nil }
@@ -1204,7 +1210,7 @@ struct WorldTimeView: View {
         // each hour offers its :00 and :30 halves; clicking a half opens the
         // slot composer right there.
         .overlay {
-            if slotCreationAvailable && selectedColumn == index {
+            if selectedColumn == index && slotsAvailable {
                 slotSplitOverlay(zoneID: zone.identifier, column: index)
             }
         }

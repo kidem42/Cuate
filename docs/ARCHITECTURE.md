@@ -406,6 +406,31 @@ General).
   for the grid, `ThemeGridPicker`, `AdaptiveGlass` (macOS 26 glass with a
   material fallback on 14+). `App/HolidayThemeManager.swift` auto-switches for
   Halloween, Día de Muertos and Yule. Checklist: `docs/THEMING-CHECKLIST.md`.
+- **Motion** (`Views/MotionGate.swift`): endless animations run on
+  `MotionTimeline`, a `TimelineView(.animation)` that pauses while its window
+  is off screen (occlusion), the screens sleep or the session is switched
+  away. Since macOS 27 the system keeps ticking animations in ordered-out
+  windows, so nothing else stops them. `.motionGate()` shares one visibility
+  probe across a subtree (theme decorations); a `MotionTimeline` with no gate
+  above installs its own (transcript rows are separate hosting views).
+  `repeatForever` loops are expressed as `MotionCurve.pingPong` — the exact
+  `.easeInOut` autoreverse curve as a function of absolute time, so a resumed
+  loop is where it would have been. The dictation island is never gated
+  (`motionLive = true`): it is only populated on screen.
+- **Theme ornaments** (`Views/OrnamentEngine.swift`): every theme's panel
+  decorations are an `OrnamentScene` — data, not views. Each ornament is a
+  vector symbol or a free `draw` closure, a placement relative to the live
+  panel size (corner/edge offsets, fractions, a spread row), and a pose as a
+  function of time. One `OrnamentLayer` per panel draws the scene in one
+  Canvas on one motion clock. Two traps it exists to avoid: a timeline-fed
+  `.offset` (and any `Text`) snaps to whole pixels, so slow floats turn into
+  ~5 fps staircases — everything moves at fractional coordinates inside the
+  Canvas, text glyphs as their font outlines; and an animated `.blur`
+  re-runs the Gaussian every frame — blurred art is a `BlurSprite`, rendered
+  once (panel-sized sprites are stretched during a live resize and
+  re-rendered once the size settles). Cost while a panel with an animated
+  theme is on screen is ~11–15 % CPU (SwiftUI re-renders the window's
+  display list per frame); hidden panels and static themes cost ~0.
 - **Voice UI:** `AudioRecorder`, `VoiceMessagePlayer` (real waveform),
   `RecordingStatusView`; system-wide dictation is `App/DictationService.swift`
   (the island: a black tab at the housing's width whose black runs from the
@@ -694,10 +719,13 @@ with mocked SSH, launchctl and networking; it does not certify a live VPS or UI.
   `AppSettings.language`.
 - **Diagnostics** (`Diagnostics/`): opt-in in Settings → General; rotating
   `app.log`; breadcrumbs; `HangWatchdog` (main-thread ping, 2 s threshold,
-  plus a CPU-spin detector; reports with `/usr/bin/sample`); "Export Logs"
+  plus a CPU-spin detector; reports with `/usr/bin/sample`); energy
+  breadcrumbs from `PowerTelemetry` every 10 min (CPU duty, visible motion
+  gates, mic state), a `burn` report at 25 % duty outside recording and a
+  `mic.idle_open` line for a mic open past its warm window; "Export Logs"
   zips to Downloads. Categories in use: app, agent, artifact, calendar, chat,
   dictation, files, hermes, imageaddon, keys, layoutfix, mermaid, migration,
-  notif, plaud, pricing, spend, store, tcc, terminal, transcript, ui,
+  notif, plaud, power, pricing, spend, store, tcc, terminal, transcript, ui,
   watchdog, worldtime. Rule: events and metadata only, never chat text,
   prompts, transcripts or keys.
 - **Spend:** `ProviderRegistry` wraps ordinary providers in `AccountingProvider`;
@@ -856,6 +884,11 @@ Isolated validation: `scripts/test-android-costs.py` (no application build).
   or the service's sources, never against remembered API shapes.
 - Panels are created at launch; a `glassEffect` node is never re-created
   inside a conditional branch.
+- An endless animation runs on `MotionTimeline` (never a bare
+  `TimelineView(.animation)` or `repeatForever` outside the dictation island);
+  theme decorations are an `OrnamentScene`, never views with clocks of their
+  own; an animated blur is a `BlurSprite`. A warm mic unit always has a
+  release deadline, kept across device re-binds.
 - Docs and code comments are English; only UI strings and test data are
   localized. `docs/` describes what is implemented; `private/` is gitignored
   and never referenced from public files.

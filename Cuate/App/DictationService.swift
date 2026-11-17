@@ -1166,6 +1166,9 @@ private struct DictationWidgetView: View {
         }
         .frame(width: panel.width, height: panel.height, alignment: .top)
         .clipped()
+        // The island's loops exist only while it is on screen, and its reveal
+        // must not wait a frame for an occlusion notice: never gated.
+        .environment(\.motionLive, true)
         // Outside the animated tree on purpose: on macOS a context menu
         // hosts its view in AppKit, which does not follow SwiftUI's
         // animations — inside, the bars would jump to their final place
@@ -1613,6 +1616,11 @@ nonisolated final class MicCapture: @unchecked Sendable {
     private let state = State()
     /// Queue-confined: pending warm-window expiry.
     private var cooldown: DispatchWorkItem?
+    /// Queue-confined: when the warm window ends — survives an idle
+    /// re-bind, so a device change inside the window can't leave the mic
+    /// open indefinitely (field log 2026-11-17: open for hours after a
+    /// headset switched profiles 9 s into the one-minute window).
+    private var cooldownDeadline: DispatchTime?
     /// Queue-confined: keeps a Bluetooth headset's hands-free link up across
     /// unit restarts (see `BluetoothInputHold` for the field diagnosis).
     private let hold = BluetoothInputHold()
@@ -1785,6 +1793,7 @@ nonisolated final class MicCapture: @unchecked Sendable {
                 state.awaitingFirstBuffer = true
                 state.rawPeakDB = -160
                 state.lock.unlock()
+                PowerTelemetry.micRecording(true)
             } catch {
                 Diagnostics.log("dictation", "capture.start.error \(String(error.localizedDescription.prefix(120)))")
                 shutdownEngine()
@@ -1821,6 +1830,7 @@ nonisolated final class MicCapture: @unchecked Sendable {
             state.file = nil
             state.awaitingFirstBuffer = false
             state.lock.unlock()
+            PowerTelemetry.micRecording(false)
             if keepWarmSeconds > 0 {
                 scheduleCooldown(after: keepWarmSeconds)
             } else {
@@ -1887,6 +1897,7 @@ nonisolated final class MicCapture: @unchecked Sendable {
         state.lock.lock()
         state.engineRunning = true
         state.lock.unlock()
+        PowerTelemetry.micUnit(open: true)
         Diagnostics.log("dictation", "capture.engine.start device=\(deviceUID.isEmpty ? "auto" : "custom") rate=\(Int(format.sampleRate)) ch=\(format.channelCount) frames=\(AudioInputDevices.bufferFrameSize(device))")
     }
 
@@ -2061,9 +2072,19 @@ nonisolated final class MicCapture: @unchecked Sendable {
             DispatchQueue.main.async { self.onEngineDied?() }
             return
         }
-        shutdownEngine(releaseHold: false)
+        // A warm idle unit only lives for what is left of its window: the
+        // re-bind keeps that deadline, and a window already over just
+        // releases the mic instead of re-arming it.
+        let deadline = cooldownDeadline
+        shutdownEngine(releaseHold: false, rebinding: true)
+        guard let deadline, deadline > .now() else {
+            shutdownEngine()
+            Diagnostics.log("dictation", "capture.engine.released warm window over")
+            return
+        }
         do {
             try ensureRunning(deviceUID: lastDeviceUID)
+            scheduleCooldown(at: deadline)
             Diagnostics.log("dictation", "capture.engine.recovered")
         } catch {
             Diagnostics.log("dictation", "capture.engine.died \(String(error.localizedDescription.prefix(120)))")
@@ -2150,6 +2171,10 @@ nonisolated final class MicCapture: @unchecked Sendable {
     }
 
     private func scheduleCooldown(after seconds: TimeInterval) {
+        scheduleCooldown(at: .now() + seconds)
+    }
+
+    private func scheduleCooldown(at deadline: DispatchTime) {
         cooldown?.cancel()
         let item = DispatchWorkItem { [self] in
             state.lock.lock()
@@ -2158,12 +2183,18 @@ nonisolated final class MicCapture: @unchecked Sendable {
             if !recording { shutdownEngine() }
         }
         cooldown = item
-        queue.asyncAfter(deadline: .now() + seconds, execute: item)
+        cooldownDeadline = deadline
+        queue.asyncAfter(deadline: deadline, execute: item)
     }
 
-    private func shutdownEngine(releaseHold: Bool = true) {
+    /// `rebinding`: the unit is closed only to reopen on the current input at
+    /// once — the energy telemetry keeps counting the open time across it.
+    private func shutdownEngine(releaseHold: Bool = true, rebinding: Bool = false) {
         cooldown?.cancel()
         cooldown = nil
+        cooldownDeadline = nil
+        PowerTelemetry.micRecording(false)
+        if !rebinding { PowerTelemetry.micUnit(open: false) }
         if releaseHold, hold.deviceID != nil {
             hold.stop()
             Diagnostics.log("dictation", "capture.hold.stop")
@@ -2202,6 +2233,10 @@ nonisolated final class MicCapture: @unchecked Sendable {
         if let file = state.file {
             try? file.write(from: buffer)
         }
+        // A warm idle unit (no file) still tracks the noise floors below, so
+        // the next session starts calibrated — but nothing is on screen and
+        // no VAD is listening, so the main thread is not woken for it.
+        let recording = state.file != nil || isFirst
         let now = CFAbsoluteTimeGetCurrent()
         let due = isFirst || now - state.lastEmit >= 0.045
         if due { state.lastEmit = now }
@@ -2265,7 +2300,7 @@ nonisolated final class MicCapture: @unchecked Sendable {
             dbExcess = max(0, db - updated)
         }
         state.lock.unlock()
-        emit(dbExcess, bands, isFirst)
+        if recording { emit(dbExcess, bands, isFirst) }
     }
 
     /// Channel 0 as 16-bit signed little-endian PCM (Deepgram `linear16`).

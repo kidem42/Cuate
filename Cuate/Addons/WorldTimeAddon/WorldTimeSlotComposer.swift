@@ -123,11 +123,14 @@ struct WorldTimeSlotComposer: View {
     private var voiceInput: some View {
         HStack(spacing: 10) {
             ZStack {
-                Circle()
-                    .fill(Color.red.opacity(0.18))
-                    .frame(width: 34, height: 34)
-                    .scaleEffect(pulse ? 1.25 : 0.95)
-                    .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                // 0.9 s ease-in-out breath once the mic is live.
+                MotionTimeline(minimumInterval: 1.0 / 30.0, paused: !pulse) { context in
+                    let p = pulse ? MotionCurve.pingPong(context.date.timeIntervalSinceReferenceDate, half: 0.9) : 0
+                    Circle()
+                        .fill(Color.red.opacity(0.18))
+                        .frame(width: 34, height: 34)
+                        .scaleEffect(MotionCurve.lerp(0.95, 1.25, p))
+                }
                 Image(systemName: "mic.fill")
                     .font(.system(size: 14))
                     .foregroundStyle(.red)

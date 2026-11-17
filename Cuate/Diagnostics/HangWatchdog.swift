@@ -39,6 +39,15 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
     private let spinStreakNeeded = 6
     private let spinReportCooldown: TimeInterval = 600
 
+    /// Energy breadcrumbs: every `powerWindow` the average CPU duty, how many
+    /// animation gates are on screen and the mic state go to the log (state
+    /// only). A quiet app should sit near zero; a sustained `burnDuty` outside
+    /// recording, or a mic open well past its warm window, is flagged and
+    /// sampled — the slow burns the spin detector's 80 % bar never sees.
+    private let powerWindow: TimeInterval = 600
+    private let burnDuty = 0.25
+    private let burnReportCooldown: TimeInterval = 3600
+
     private let queue = DispatchQueue(label: "com.getcuate.Cuate.watchdog", qos: .userInitiated)
 
     // Accessed only on `queue`.
@@ -52,6 +61,10 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
     private var highDutyStreak = 0
     private var spinActive = false
     private var lastSpinReportAt: TimeInterval = -.infinity
+    private var powerWindowStart: TimeInterval?
+    private var powerWindowCPU: TimeInterval = 0
+    private var lastBurnReportAt: TimeInterval = -.infinity
+    private var micIdleFlagged = false
 
     func start() {
         queue.async {
@@ -78,6 +91,7 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime
         checkSpin(now: now)
+        checkPower(now: now)
         if let sent = pingSentAt {
             if !hangActive, now - sent > threshold {
                 hangActive = true
@@ -147,6 +161,49 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
             reportsWritten += 1
             DispatchQueue.global(qos: .userInitiated).async {
                 Self.writeReport(kind: "spin")
+            }
+        }
+    }
+
+    // MARK: Energy
+
+    private func checkPower(now: TimeInterval) {
+        let power = PowerTelemetry.snapshot()
+        // A mic left open long past its warm window is a leak whatever the
+        // CPU says (it also pins a Bluetooth headset in hands-free mode).
+        let warm = TimeInterval(UserDefaults.standard.integer(forKey: "dictationWarmMinutes")) * 60
+        if let idle = power.micIdleOpenFor, idle > warm + 120 {
+            if !micIdleFlagged {
+                micIdleFlagged = true
+                Diagnostics.log("power", String(format: "mic.idle_open seconds=%.0f warm=%.0f", idle, warm))
+            }
+        } else {
+            micIdleFlagged = false
+        }
+
+        guard let start = powerWindowStart else {
+            powerWindowStart = now
+            powerWindowCPU = Self.processCPUTime()
+            return
+        }
+        let elapsed = now - start
+        guard elapsed >= powerWindow else { return }
+        let cpu = Self.processCPUTime()
+        let duty = (cpu - powerWindowCPU) / elapsed
+        powerWindowStart = now
+        powerWindowCPU = cpu
+
+        let mic = power.recording ? "recording"
+            : power.micIdleOpenFor.map { String(format: "open-idle %.0fs", $0) } ?? "closed"
+        Diagnostics.log("power", String(format: "window duty=%.2f motionVisible=%d mic=%@",
+                                        duty, power.visibleMotionGates, mic))
+        guard duty >= burnDuty, !power.recording, !spinActive else { return }
+        Diagnostics.log("power", String(format: "burn duty=%.2f motionVisible=%d", duty, power.visibleMotionGates))
+        if now - lastBurnReportAt > burnReportCooldown, reportsWritten < maxReportsPerSession {
+            lastBurnReportAt = now
+            reportsWritten += 1
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.writeReport(kind: "burn")
             }
         }
     }

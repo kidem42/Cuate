@@ -58,15 +58,17 @@ struct EnhancedVoiceButton: View {
             ZStack {
                 // Pulsing background when recording
                 if isRecording {
-                    Circle()
-                        .fill(Color.red.opacity(0.3))
-                        .frame(width: 40, height: 40)
-                        .scaleEffect(isPulsing ? 1.2 : 0.9)
-                        .opacity(isPulsing ? 0.6 : 0.2)
-                        .animation(
-                            Animation.easeInOut(duration: 1.0).repeatForever(autoreverses: true),
-                            value: isPulsing
-                        )
+                    // 1 s ease-in-out breath on the shared motion clock.
+                    MotionTimeline(minimumInterval: 1.0 / 30.0) { context in
+                        let p = isPulsing
+                            ? MotionCurve.pingPong(context.date.timeIntervalSinceReferenceDate, half: 1.0)
+                            : 0
+                        Circle()
+                            .fill(Color.red.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                            .scaleEffect(MotionCurve.lerp(0.9, 1.2, p))
+                            .opacity(MotionCurve.lerp(0.2, 0.6, p))
+                    }
                 }
 
                 buttonChrome

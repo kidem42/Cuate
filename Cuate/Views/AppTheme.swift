@@ -901,7 +901,10 @@ private struct PanelBackdrop: View {
                 }
                 pattern
                 if decorations {
+                    // One visibility probe for every ornament loop below:
+                    // they stop while the panel is off screen.
                     ThemeDecorations(themeID: palette.themeID, context: context)
+                        .motionGate()
                 }
             }
         }
@@ -1059,19 +1062,48 @@ private struct ComposerRuleShape: Shape {
 
 /// Terminal's signature blinking block caret, shown after the composer
 /// placeholder («$ type your message▮»). A hard on/off blink (step-end) every
-/// 0.55s, matching the design spec's `blink 1.1s step-end`.
+/// 0.55s, matching the design spec's `blink 1.1s step-end`. Ticks on a
+/// periodic schedule that stops while the panel is off screen (a free-running
+/// `Timer` woke the main thread twice a second for a hidden caret).
 struct BlinkingCaret: View {
     var color: Color
     var width: CGFloat = 7
     var height: CGFloat = 14
-    @State private var visible = true
-    private let timer = Timer.publish(every: 0.55, on: .main, in: .common).autoconnect()
+    @Environment(\.motionLive) private var live
+
     var body: some View {
+        if live == nil {
+            BlinkingCaretCore(color: color, width: width, height: height).motionGate()
+        } else {
+            BlinkingCaretCore(color: color, width: width, height: height)
+        }
+    }
+}
+
+private struct BlinkingCaretCore: View {
+    let color: Color
+    let width: CGFloat
+    let height: CGFloat
+    @Environment(\.motionLive) private var live
+    @State private var epoch = Date()
+
+    var body: some View {
+        if live == false {
+            caret(visible: true)
+        } else {
+            // Entries land exactly on epoch + n × 0.55 s: even n = on.
+            TimelineView(.periodic(from: epoch, by: 0.55)) { context in
+                let n = Int((context.date.timeIntervalSince(epoch) / 0.55).rounded())
+                caret(visible: n % 2 == 0)
+            }
+        }
+    }
+
+    private func caret(visible: Bool) -> some View {
         RoundedRectangle(cornerRadius: 1)
             .fill(color)
             .frame(width: width, height: height)
             .opacity(visible ? 1 : 0)
-            .onReceive(timer) { _ in visible.toggle() }
     }
 }
 

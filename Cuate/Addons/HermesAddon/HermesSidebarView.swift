@@ -640,7 +640,7 @@ private struct MiniActivityWave: View {
     private let cascade = 0.18
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 20.0) { context in
             let now = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 1.5) {
                 ForEach(0..<3, id: \.self) { index in

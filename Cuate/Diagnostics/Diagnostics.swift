@@ -66,7 +66,11 @@ nonisolated enum Diagnostics {
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         let models = (d.dictionary(forKey: "selectedModels") as? [String: String]) ?? [:]
+        let power = PowerTelemetry.snapshot()
+        let mic = power.recording ? "recording"
+            : power.micIdleOpenFor.map { "open-idle \(Int($0))s" } ?? "closed"
         return [
+            "theme=\(d.string(forKey: "appTheme") ?? "?") motionVisible=\(power.visibleMotionGates) mic=\(mic)",
             "app=\(version) (\(build))",
             "macOS=\(ProcessInfo.processInfo.operatingSystemVersionString)",
             "uptime=\(Int(ProcessInfo.processInfo.systemUptime))s",

@@ -4,7 +4,7 @@ import SwiftUI
 /// five equalizer bars waving — the same visual language as the dictation
 /// window, so "listening" and "thinking" speak in one style.
 ///
-/// Driven by `TimelineView` with a per-bar phase-shifted sine (period 1.1s,
+/// Driven by `MotionTimeline` with a per-bar phase-shifted sine (period 1.1s,
 /// 0.15s cascade between neighbors, height 4→15 with the opacity dimming on
 /// the low end) — a deterministic port of the approved CSS keyframe. A
 /// state-toggled `repeatForever` animation was tried first and drifts: the
@@ -36,7 +36,7 @@ struct ThinkingEqualizer: View {
     }
 
     private var equalizer: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 30.0, paused: paused) { context in
             let now = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 3) {
                 ForEach(0..<barCount, id: \.self) { index in
@@ -83,7 +83,7 @@ struct CandyCaneSpinner: View {
     private let cream = Color(rgb: 0xFFF6EC)
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: paused)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 60.0, paused: paused) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let phase = CGFloat(t.truncatingRemainder(dividingBy: turnPeriod) / turnPeriod) * travel
             Canvas { ctx, canvasSize in

@@ -189,7 +189,7 @@ struct TranslatorBubbleView: View {
 /// The island's warm-up rhythm: three dots breathing in turn.
 struct ThinkingDots: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 20.0) { context in
             let time = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in

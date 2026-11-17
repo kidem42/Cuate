@@ -25,7 +25,7 @@ struct RecordingStatusView: View {
                 // small and large states instead of breathing in place
                 // (and only sometimes, depending on what else was animating
                 // at insertion). Same approach as the dictation pill's dots.
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                MotionTimeline(minimumInterval: 1.0 / 30.0) { context in
                     let time = context.date.timeIntervalSinceReferenceDate
                     // 0.8 s up, 0.8 s down, sine-shaped like the old ease-in-out.
                     let pulse = 0.5 + 0.5 * sin(time * (.pi / 0.8))

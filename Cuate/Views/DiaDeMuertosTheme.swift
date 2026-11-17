@@ -2,7 +2,7 @@ import SwiftUI
 
 // Día de Muertos ("Ofrenda") ornaments, ported verbatim from the design tool's
 // inline SVG (viewBox coords + hex are 1:1 with `Cuate Themes.html`).
-// Rendered natively (Shapes/Canvas) and animated with native SwiftUI loops —
+// Rendered natively (Shapes/Canvas) and animated by the ornament engine —
 // no WebView at runtime. Dark/light chosen by the environment color scheme.
 
 private func drgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> Color {
@@ -47,47 +47,6 @@ struct PapelPicadoPennant: Shape {
         path.move(to: p(first.0, first.1))
         for pt in pts.dropFirst() { path.addLine(to: p(pt.0, pt.1)) }
         path.closeSubpath()
-    }
-}
-
-private struct SwayingPennant: View {
-    let color: Color
-    let delay: Double
-    @State private var swayed = false
-
-    var body: some View {
-        PapelPicadoPennant()
-            .fill(color, style: FillStyle(eoFill: true))
-            .frame(width: 40, height: 27)
-            .rotationEffect(.degrees(swayed ? 2 : -2), anchor: .top)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true).delay(delay)) {
-                    swayed = true
-                }
-            }
-    }
-}
-
-struct PapelPicadoBanner: View {
-    let dark: Bool
-    private var colors: [Color] {
-        dark
-            ? [0xEC407A, 0xFFB300, 0x26A69A, 0xAB47BC, 0xFF7043, 0xEC407A, 0xFFB300, 0x26A69A].map(dhex)
-            : [0xD81B60, 0xF59E00, 0x00897B, 0x8E24AA, 0xF4511E, 0xD81B60, 0xF59E00, 0x00897B].map(dhex)
-    }
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(colors.enumerated()), id: \.offset) { i, c in
-                SwayingPennant(color: c, delay: Double(i) * 0.5)
-                if i < colors.count - 1 { Spacer(minLength: 0) }
-            }
-        }
-        .padding(.horizontal, 10)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(dark ? drgba(255, 235, 190, 0.55) : drgba(120, 60, 10, 0.45))
-                .frame(height: 1.5)
-        }
     }
 }
 
@@ -202,10 +161,9 @@ struct MarigoldFlower: View {
 
 // MARK: - Candle
 
-struct DiaCandle: View {
+/// The candle itself — static, so the flicker only fades and scales it.
+private struct CandleGlyph: View {
     let dark: Bool
-    let delay: Double
-    @State private var flickering = false
 
     var body: some View {
         Canvas { ctx, size in
@@ -223,35 +181,6 @@ struct DiaCandle: View {
             ctx.fill(flame, with: .color(dark ? dhex(0xFFB300) : dhex(0xF59E00)))
             ctx.fill(Path(ellipseIn: CGRect(x: 5 * sx, y: 3.6 * sy, width: 2 * sx, height: 2 * sy)), with: .color(dhex(0xFFF3C4)))
         }
-        .opacity(flickering ? 0.55 : 1)
-        .scaleEffect(flickering ? 0.9 : 1, anchor: .bottom)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true).delay(delay)) {
-                flickering = true
-            }
-        }
-    }
-}
-
-// MARK: - Floating marigold (floaty loop)
-
-private struct FloatingMarigold: View {
-    let dark: Bool
-    let size: CGFloat
-    let withInner: Bool
-    let duration: Double
-    let opacity: Double
-    @State private var up = false
-
-    var body: some View {
-        MarigoldFlower(dark: dark, withInner: withInner, withSparkle: false, centerRadius: 3,
-                       centerColor: dark ? dhex(0xE65100) : dhex(0xBF360C))
-            .frame(width: size, height: size)
-            .opacity(opacity)
-            .offset(y: up ? -6 : 0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: duration / 2).repeatForever(autoreverses: true)) { up = true }
-            }
     }
 }
 
@@ -268,7 +197,7 @@ struct DiaIslandPennants: View {
     private static let colors: [UInt] = [0xEC407A, 0xFFB300, 0x26A69A, 0xAB47BC, 0xFF7043]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !swaying)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 30.0, paused: !swaying) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 0) {
                 ForEach(0..<Self.colors.count, id: \.self) { i in
@@ -295,7 +224,7 @@ struct DiaIslandMarigolds: View {
     let blooming: Bool
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !blooming)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 30.0, paused: !blooming) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { i in
@@ -324,7 +253,7 @@ struct DiaIslandPetals: View {
     ]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+        MotionTimeline(minimumInterval: 1.0 / 30.0) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             ZStack(alignment: .bottomLeading) {
                 ForEach(0..<Self.petals.count, id: \.self) { i in
@@ -348,38 +277,79 @@ struct DiaIslandPetals: View {
 // MARK: - Full decoration overlay
 
 /// Papel picado banner (top), two floating marigolds, two candles (bottom-
-/// right). Non-interactive — placed over the glass, under the chat content's
-/// hit-testing.
+/// right) — one ornament scene. Placement is the original stack's, measured
+/// from the panel edges, with one deliberate change: the big marigold rests
+/// 24 pt in from the TRAILING edge as designed (the old stack's stray
+/// `.position(0, 0)` parked it half outside the leading edge).
 struct DiaDecorations: View {
     @Environment(\.colorScheme) private var colorScheme
     private var dark: Bool { colorScheme == .dark }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            PapelPicadoBanner(dark: dark)
-                .frame(height: 27)
-                .frame(maxWidth: .infinity, alignment: .top)
-                .frame(maxHeight: .infinity, alignment: .top)
+        OrnamentLayer(scene: Self.scene(dark: dark), spriteKey: "dia.\(dark)")
+    }
 
-            // Floating marigold (top-right) + cross marigold (upper-left)
-            FloatingMarigold(dark: dark, size: 18, withInner: true, duration: 6, opacity: 1)
-                .position(x: 0, y: 0)
-                .offset(x: 0, y: 0)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(.trailing, 24).padding(.top, 70)
+    static func scene(dark: Bool) -> OrnamentScene {
+        let pennantColors = (dark
+            ? [0xEC407A, 0xFFB300, 0x26A69A, 0xAB47BC, 0xFF7043, 0xEC407A, 0xFFB300, 0x26A69A]
+            : [0xD81B60, 0xF59E00, 0x00897B, 0x8E24AA, 0xF4511E, 0xD81B60, 0xF59E00, 0x00897B]).map(dhex)
+        let stringColor = dark ? drgba(255, 235, 190, 0.55) : drgba(120, 60, 10, 0.45)
+        var ornaments: [Ornament] = []
 
-            FloatingMarigold(dark: dark, size: 12, withInner: false, duration: 8, opacity: dark ? 0.8 : 0.85)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.leading, 30).padding(.top, 130)
-
-            // Candles bottom-right
-            HStack(alignment: .bottom, spacing: 6) {
-                DiaCandle(dark: dark, delay: 0.7).frame(width: 10, height: 18)
-                DiaCandle(dark: dark, delay: 0).frame(width: 12, height: 22)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            .padding(.trailing, 20).padding(.bottom, 66)
+        // Banner: eight 40×27 pennants spread over the width (10 pt side
+        // margins, equal gaps), each swaying ±2° from its top on a 2 s
+        // ease-in-out, half a second after its neighbor.
+        let count = pennantColors.count
+        for (i, color) in pennantColors.enumerated() {
+            ornaments.append(.symbol(at: .custom { size in
+                let gap = max(0, (size.width - 20 - CGFloat(count) * 40) / CGFloat(count - 1))
+                return CGPoint(x: 10 + CGFloat(i) * (40 + gap) + 20, y: 0)
+            }, anchor: .top, pose: { t in
+                MotionPose(rotation: .degrees(MotionCurve.lerp(-2, 2,
+                    MotionCurve.pingPong(t, half: 2, delay: Double(i) * 0.5))))
+            }) {
+                PapelPicadoPennant()
+                    .fill(color, style: FillStyle(eoFill: true))
+                    .frame(width: 40, height: 27)
+            })
         }
-        .allowsHitTesting(false)
+        // The string, over the pennants' tops.
+        ornaments.append(.draw { ctx, frame in
+            ctx.fill(Path(CGRect(x: 0, y: 0, width: frame.size.width, height: 1.5)), with: .color(stringColor))
+        })
+
+        // Floating marigolds: up 6 pt and back on duration/2.
+        func marigold(size: CGFloat, inner: Bool, duration: Double, opacity: Double,
+                      at: OrnamentPlacement) -> Ornament {
+            .symbol(at: at, pose: { t in
+                MotionPose(offset: CGSize(width: 0, height: -6 * MotionCurve.pingPong(t, half: duration / 2)))
+            }) {
+                MarigoldFlower(dark: dark, withInner: inner, withSparkle: false, centerRadius: 3,
+                               centerColor: dark ? dhex(0xE65100) : dhex(0xBF360C))
+                    .frame(width: size, height: size)
+                    .opacity(opacity)
+            }
+        }
+        ornaments.append(marigold(size: 18, inner: true, duration: 6, opacity: 1,
+                                  at: .topTrailing(24 + 9, 70 + 9)))
+        ornaments.append(marigold(size: 12, inner: false, duration: 8, opacity: dark ? 0.8 : 0.85,
+                                  at: .topLeading(30 + 6, 130 + 6)))
+
+        // Candles, bottom-right (20 pt in, 66 pt up), bottoms aligned, 6 pt
+        // apart: a 1.2 s flicker — fading to 0.55 and dipping to 0.9 from
+        // the base.
+        func candle(width: CGFloat, height: CGFloat, delay: Double, at: OrnamentPlacement) -> Ornament {
+            .symbol(at: at, anchor: .bottom, pose: { t in
+                let flicker = MotionCurve.pingPong(t, half: 1.2, delay: delay)
+                return MotionPose(scale: MotionCurve.lerp(1, 0.9, flicker),
+                                  opacity: MotionCurve.lerp(1, 0.55, flicker))
+            }) {
+                CandleGlyph(dark: dark).frame(width: width, height: height)
+            }
+        }
+        ornaments.append(candle(width: 10, height: 18, delay: 0.7, at: .bottomTrailing(20 + 12 + 6 + 5, 66)))
+        ornaments.append(candle(width: 12, height: 22, delay: 0, at: .bottomTrailing(20 + 6, 66)))
+
+        return OrnamentScene(fps: 60, ornaments: ornaments)
     }
 }

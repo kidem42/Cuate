@@ -1178,6 +1178,13 @@ struct ChatWindow: View {
 
     /// Conversation-routing handlers (presets, agent roles, mirror sync).
     private func applyConversationHandlers<V: View>(_ view: V) -> some View {
+        // Two chains, applied in order: one expression with all of them
+        // exceeds the Xcode 27.2 type-checker's budget.
+        applyAgentRoleHandlers(applyPresetHandlers(view))
+    }
+
+    /// Budget warnings, provider list, preset and role switches.
+    private func applyPresetHandlers<V: View>(_ view: V) -> some View {
         view
         .onReceive(SpendStore.shared.$latestBudgetWarning.dropFirst().compactMap { $0 }.removeDuplicates()) { warning in
             chatStore.addMessage(text: warning, isUser: false, messageType: .system)
@@ -1203,6 +1210,11 @@ struct ChatWindow: View {
         .onChange(of: settings.activeAgentRoleID) {
             syncConversation()
         }
+    }
+
+    /// Hermes role lifecycle, session continuation and remote commands.
+    private func applyAgentRoleHandlers<V: View>(_ view: V) -> some View {
+        view
         .onReceive(NotificationCenter.default.publisher(for: .hermesAddonDidChange)) { _ in
             // Role list changed (addon toggled, profiles refreshed). If the
             // active role vanished, fall back to conventional chat.

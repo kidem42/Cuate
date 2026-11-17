@@ -13,7 +13,7 @@ this file too.
 | 2 | Two presets, `<theme>Dark` / `<theme>Light` (~40 tokens) | AppTheme.swift (ThemePalette) |
 | 3 | A `case` in `resolve()` + panelTint in `tinted(...)` | AppTheme.swift |
 | 4 | World Time tokens, dark+light (~25) | `Cuate/Addons/WorldTimeAddon/WorldTimeTheme.swift` (a switch with no default — the compiler will remind you) |
-| 5 | Decorations: a `<Theme>Theme.swift` file + a `case` in `ThemeDecorations` — both variants: `.chat` and `.worldTime` (the calm one, along the edges) | AppTheme.swift ~L1000 ⚠️ there is a `default: Color.clear` there — the compiler will NOT catch a forgotten theme |
+| 5 | Decorations: a `<Theme>Theme.swift` file + a `case` in `ThemeDecorations` — both variants: `.chat` and `.worldTime` (the calm one, along the edges) | AppTheme.swift ~L1000 ⚠️ there is a `default: Color.clear` there — the compiler will NOT catch a forgotten theme. Decorations are an `OrnamentScene` drawn by `OrnamentLayer` (see `HalloweenTheme`, `YuleTheme`): placements measured from the panel edges, poses from `MotionCurve`, blurs as sprites, text glyphs as outlines (`Text` snaps to pixels). No views with their own timelines, no `repeatForever`, no `.offset` animation |
 | 6 | Signature branches on `themeID` (see §4) — decide for each: the default or something bespoke | per the §4 list |
 | 7 | Holiday auto-activation (if the theme is seasonal) | `Cuate/App/HolidayThemeManager.swift` (the Holiday enum, occurrence, userPicked) + the `appearance.holidayThemes.caption` caption in `Localization.swift` |
 | 8 | The theme picker — automatic (CaseIterable), just check the thumbnail | `Cuate/Views/ThemeGridPicker.swift` |
